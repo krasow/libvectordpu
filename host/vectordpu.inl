@@ -32,11 +32,11 @@ dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
     runtime.init(NR_DPUS);
   }
 
-  data_ = runtime.get_allocator().allocate_upmem_vector(n, sizeof(T));
-
 #if ENABLE_DPU_LOGGING >= 1
   log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
 #endif
+
+  data_ = runtime.get_allocator().allocate_upmem_vector(n, sizeof(T));
 }
 
 template <typename T>
@@ -83,11 +83,12 @@ dpu_vector<T>::~dpu_vector() {
     return;
   }
   auto& runtime = DpuRuntime::get();
-  runtime.get_allocator().deallocate_upmem_vector(data_);
 
 #if ENABLE_DPU_LOGGING >= 1
   log_deallocation(typeid(T), size_, debug_name, debug_file, debug_line);
 #endif
+
+  runtime.get_allocator().deallocate_upmem_vector(data_);
 }
 
 template <typename T>

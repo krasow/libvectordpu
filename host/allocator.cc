@@ -97,23 +97,21 @@ void allocator::deallocate(std::size_t dpu_id, uint32_t addr, size_t size) {
 
   // Merge with previous block if adjacent
   if (inserted != flist.begin()) {
-    auto prev = inserted - 1;
+    auto prev = std::prev(inserted);
     if (prev->addr + prev->size == inserted->addr) {
       prev->size += inserted->size;
-      inserted = flist.erase(inserted);
+      inserted =
+          flist.erase(inserted);  // erase returns iterator to next element
+      inserted = prev;            // keep prev as the merged block
     }
   }
-
   // Merge with next block if adjacent
-  if (inserted + 1 != flist.end()) {
-    auto next = inserted + 1;
-    if (inserted->addr + inserted->size == next->addr) {
-      inserted->size += next->size;
-      flist.erase(next);
-    }
+  auto next = std::next(inserted);
+  if (next != flist.end() && inserted->addr + inserted->size == next->addr) {
+    inserted->size += next->size;
+    flist.erase(next);
   }
 }
-
 vector_desc allocator::get_vector_desc() const {
   return std::make_pair(ptrs_, sizes_);
 }

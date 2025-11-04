@@ -56,8 +56,6 @@ test_error compare_cpu_binary(vector<T>& a, vector<T>& b, dpu_vector<T>& res,
     if (cpu_res[i] == func(a[i], b[i]))
       continue;
     else {
-      std::cerr << "[error] mismatch at index " << i << ": " << cpu_res[i]
-                << " != " << func(a[i], b[i]) << std::endl;
       return TEST_ERROR;
     }
   }

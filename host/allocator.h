@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <list>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -27,10 +28,10 @@ class allocator {
   std::size_t total_size_;
   std::size_t num_dpus_;
 
-  vector<uint32_t> ptrs_;                // base addresses per DPU
-  vector<uint32_t> sizes_;               // total size per DPU
-  vector<uint32_t> offsets_;             // bump pointer per DPU
-  vector<vector<FreeBlock>> free_list_;  // free blocks per DPU
+  vector<uint32_t> ptrs_;                        // base addresses per DPU
+  vector<uint32_t> sizes_;                       // total size per DPU
+  vector<uint32_t> offsets_;                     // bump pointer per DPU
+  std::vector<std::list<FreeBlock>> free_list_;  // free blocks per DPU
 
   // Allocate 'n' units on a specific DPU
   uint32_t allocate(std::size_t dpu_id, std::size_t n);
