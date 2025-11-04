@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <thread>
 
 #include "allocator.h"
 #include "logger.h"

@@ -51,7 +51,7 @@ void DpuRuntime::shutdown() {
   while (event_queue_->has_pending()) {
     logger_->lock() << "[runtime] Waiting for pending events to complete..."
                     << std::endl;
-    sleep(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   // if (initialized_) {

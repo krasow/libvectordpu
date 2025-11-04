@@ -3,10 +3,25 @@
 #include <common.h>
 
 #include <iostream>
-#include <source_location>
 #include <string_view>
 #include <type_traits>
 #include <vector>
+
+#if __cplusplus < 202002L
+// Fake source_location for pre-C++20
+// debian upmem machine has outdated compiler that doesn't support C++20 yet
+namespace std {
+    struct source_location {
+        static source_location current() { return {}; }
+        constexpr const char* file_name() const { return "unknown"; }
+        constexpr int line() const { return 0; }
+        constexpr int column() const { return 0; }
+        constexpr const char* function_name() const { return "unknown"; }
+    };
+};
+#else
+#include <source_location>
+#endif
 
 using std::vector;
 using vector_desc =
