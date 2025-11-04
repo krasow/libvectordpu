@@ -7,6 +7,7 @@
 #include <memory>
 #include <queue>
 #include <variant>
+#include <mutex>
 
 #include "vectordpu.h"  // for dpu_vector
 
