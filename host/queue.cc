@@ -1,10 +1,10 @@
 #include "queue.h"
 
+#include <thread>
+
 #include "logger.h"
 #include "runtime.h"
 #include "vectordpu.h"
-
-#include <thread>
 
 #ifndef DPURT
 #define DPURT
@@ -86,12 +86,12 @@ bool EventQueue::process_next() {
   }
   std::shared_ptr<Event> e = operations_.front();
 
-  #if ENABLE_DPU_LOGGING >= 1
+#if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  #endif
+#endif
 
   debug_active_events();
-  
+
   // defer processing if parents are not finished
   if (e->has_parents) {
     for (const auto& parent : e->parents) {
@@ -106,7 +106,7 @@ bool EventQueue::process_next() {
   }
 
   debug_print_queue();
-  
+
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[EventQueue] Processing id " << e->id << ": "
                 << operationtype_to_string(e->op) << " event." << std::endl;
@@ -134,17 +134,25 @@ bool EventQueue::process_next() {
     default:
       assert(false && "Unknown event type");
   }
+
+  current_event_ = e;
   running_events_.push_back(e);
   operations_.pop_front();
   return true;
 }
 
-void EventQueue::process_events() {
+void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
     bool made_progress = this->process_next();
 
-    if (operations_.empty() && running_events_.empty())
+    // check if wait_for_id event has completed
+    if (this->get_curr_event_id() == wait_for_id &&
+        this->get_curr_event() != nullptr && this->get_curr_event()->finished) {
       break;
+    }
+
+    // exit if no more events to process
+    if (operations_.empty() && running_events_.empty()) break;
 
     if (!made_progress)
       std::this_thread::sleep_for(std::chrono::milliseconds(10));

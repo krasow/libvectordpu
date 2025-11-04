@@ -25,7 +25,7 @@ class Event {
   template <typename Callable>
   Event(OperationType t, Callable&& c)
       : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
-  
+
   size_t id = 0;
   bool finished = false;
   bool started = false;
@@ -53,12 +53,21 @@ class EventQueue {
 
   void wait();
   bool process_next();
-  void process_events();
+  void process_events(size_t wait_for_id);
   void debug_print_queue();
   void debug_active_events();
 
   bool has_pending() const { return !operations_.empty(); }
   std::size_t pending_count() const { return operations_.size(); }
+
+  std::shared_ptr<Event> get_curr_event() const { return current_event_; }
+  size_t get_curr_event_id() const {
+    if (current_event_ != nullptr) {
+      return current_event_->id;
+    } else {
+      return SIZE_MAX;
+    }
+  }
 
   std::deque<std::shared_ptr<Event>>::iterator begin() {
     return operations_.begin();
@@ -74,6 +83,7 @@ class EventQueue {
 
  private:
   size_t counter_ = 0;
+  std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;
 };

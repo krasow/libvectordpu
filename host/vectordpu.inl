@@ -166,7 +166,7 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   auto& event_queue = runtime.get_event_queue();
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::DPU_TRANSFER, bound_cb);
-  
+
   if (event_queue.size() >= 1) {
     e->has_parents = true;
     auto it = std::prev(event_queue.end(), 1);
@@ -199,8 +199,6 @@ vector<T> dpu_vector<T>::to_cpu() {
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
-  event_queue.process_events();
-
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
 
@@ -211,7 +209,7 @@ vector<T> dpu_vector<T>::to_cpu() {
   }
   event_queue.submit(e);
 
-  event_queue.process_events();
+  event_queue.process_events(e->id);
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
