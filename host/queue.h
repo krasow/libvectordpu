@@ -29,7 +29,6 @@ class Event {
   size_t id = 0;
   bool finished = false;
   bool started = false;
-
   // bool has_parents = false;
   // std::list<std::shared_ptr<Event>> parents;
 
@@ -80,7 +79,10 @@ class EventQueue {
     return running_events_;
   }
 
+  std::mutex& get_mutex() { return mtx_; }
+
  private:
+  std::mutex mtx_;
   size_t counter_ = 0;
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;

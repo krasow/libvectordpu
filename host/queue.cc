@@ -36,7 +36,12 @@ std::string operationtype_to_string(Event::OperationType op) {
   me->mark_finished(/* true */);
 
   auto& runtime = DpuRuntime::get();
-  runtime.get_event_queue().get_active_events().remove(me);
+  auto& events = runtime.get_event_queue().get_active_events();
+  std::mutex& events_mutex = runtime.get_event_queue().get_mutex();
+  {
+    std::lock_guard<std::mutex> lock(events_mutex);
+    events.remove(me);
+  }
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
