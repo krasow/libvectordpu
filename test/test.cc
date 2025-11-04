@@ -24,6 +24,18 @@ using test_error = uint32_t;
 #define TEST_ERROR 1
 #define TEST_SUCCESS 0
 
+#define RUN_TEST(fn)                                              \
+  do {                                                            \
+    auto result = fn();                                           \
+    if (result == TEST_SUCCESS) {                                 \
+      std::cout << "[PASS] " << #fn << std::endl;                 \
+    } else {                                                      \
+      std::cerr << "[FAIL] " << #fn << " (code " << result << ")" \
+                << std::endl;                                     \
+      all_passed = false;                                         \
+    }                                                             \
+  } while (0)
+
 template <typename T, typename F>
 test_error compare_cpu_unary(vector<T>& a, dpu_vector<T>& res, F func) {
   vector<T> cpu_res = res.to_cpu();
@@ -43,8 +55,11 @@ test_error compare_cpu_binary(vector<T>& a, vector<T>& b, dpu_vector<T>& res,
   for (uint32_t i = 0; i < a.size(); i++) {
     if (cpu_res[i] == func(a[i], b[i]))
       continue;
-    else
+    else {
+      std::cerr << "[error] mismatch at index " << i << ": " << cpu_res[i]
+                << " != " << func(a[i], b[i]) << std::endl;
       return TEST_ERROR;
+    }
   }
   return TEST_SUCCESS;
 }
@@ -178,8 +193,6 @@ test_error test_chained_operations() {
   vector<int> final_res = res.to_cpu();
   for (uint32_t i = 0; i < N; i++) {
     if (final_res[i] != cpu_res[i]) {
-      std::cout << "[error] mismatch at index " << i << ": " << final_res[i]
-                << " != " << cpu_res[i] << std::endl;
       return TEST_ERROR;
     }
   }
@@ -188,15 +201,21 @@ test_error test_chained_operations() {
 }
 
 int main(void) {
-  assert(test_int_add() == TEST_SUCCESS);
-  assert(test_int_sub() == TEST_SUCCESS);
-  assert(test_float_add() == TEST_SUCCESS);
-  assert(test_float_sub() == TEST_SUCCESS);
-  assert(test_int_negate() == TEST_SUCCESS);
-  assert(test_int_abs() == TEST_SUCCESS);
-  assert(test_float_negate() == TEST_SUCCESS);
-  assert(test_float_abs() == TEST_SUCCESS);
-  assert(test_chained_operations() == TEST_SUCCESS);
+  bool all_passed = true;
+  RUN_TEST(test_int_add);
+  RUN_TEST(test_int_sub);
+  RUN_TEST(test_float_add);
+  RUN_TEST(test_float_sub);
+  RUN_TEST(test_int_negate);
+  RUN_TEST(test_int_abs);
+  RUN_TEST(test_float_negate);
+  RUN_TEST(test_float_abs);
+  RUN_TEST(test_chained_operations);
+
+  if (!all_passed) {
+    std::cerr << "Some tests failed.\n";
+    return 1;
+  }
 
   DpuRuntime::get().shutdown();
   std::cout << "All DPU vector tests passed successfully." << std::endl;

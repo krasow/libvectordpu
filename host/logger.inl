@@ -41,11 +41,11 @@ inline void print_vector_desc(vector_desc desc) {
 
 inline void log_allocation(const std::type_info& type, uint32_t n,
                            std::string_view debug_name, const char* debug_file,
-                           int debug_line) {
+                           int debug_line, bool is_allocation) {
   Logger& logger = DpuRuntime::get().get_logger();
   auto log = logger.lock();
-  log << "[mem-logger] Allocated dpu_vector<" << type.name() << "> of size "
-      << n;
+  log << "[mem-logger] " << (is_allocation ? "Allocated" : "Deallocated")
+      << " dpu_vector<" << type.name() << "> of size " << n;
   if (!debug_name.empty()) {
     log << " (name=\"" << debug_name << "\")";
   }
@@ -55,7 +55,7 @@ inline void log_allocation(const std::type_info& type, uint32_t n,
   log << std::endl;
 }
 
-#ifdef ENABLE_DPU_LOGGING
+#if ENABLE_DPU_LOGGING >= 1
 inline void log_dpu_launch_args(const DPU_LAUNCH_ARGS* args,
                                 uint32_t nr_of_dpus) {
   Logger& logger = DpuRuntime::get().get_logger();

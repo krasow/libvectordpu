@@ -46,7 +46,10 @@ inline void print_vector_desc(vector_desc desc);
 
 inline void log_allocation(const std::type_info& type, uint32_t n,
                            std::string_view debug_name, const char* debug_file,
-                           int debug_line);
+                           int debug_line, bool is_allocation = true);
+
+#define log_deallocation(type, n, debug_name, debug_file, debug_line) \
+  log_allocation(type, n, debug_name, debug_file, debug_line, false)
 
 inline void log_dpu_launch_args(const DPU_LAUNCH_ARGS* args,
                                 uint32_t nr_of_dpus);

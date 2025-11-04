@@ -31,10 +31,7 @@ dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
     // throw std::runtime_error("DPU runtime not initialized!");
     runtime.init(NR_DPUS);
   }
-  Logger& logger = runtime.get_logger();
-  logger.lock() << "[dpu_vector] ALLOCATING DPU VECTOR " << debug_name
-                << " OF SIZE " << n << " FROM " << debug_file << ":"
-                << debug_line << std::endl;
+
   data_ = runtime.get_allocator().allocate_upmem_vector(n, sizeof(T));
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -86,12 +83,11 @@ dpu_vector<T>::~dpu_vector() {
     return;
   }
   auto& runtime = DpuRuntime::get();
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = runtime.get_logger();
-  logger.lock() << "[dpu_vector] DEALLOCATING DPU VECTOR " << debug_name
-                << " FROM " << debug_file << ":" << debug_line << std::endl;
-#endif
   runtime.get_allocator().deallocate_upmem_vector(data_);
+
+#if ENABLE_DPU_LOGGING >= 1
+  log_deallocation(typeid(T), size_, debug_name, debug_file, debug_line);
+#endif
 }
 
 template <typename T>
@@ -107,7 +103,7 @@ uint32_t dpu_vector<T>::size() const {
   return size_;
 }
 
-void vec_xfer_to_dpu(char* cpu_vec, vector_desc& desc) {
+void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -128,7 +124,7 @@ void vec_xfer_to_dpu(char* cpu_vec, vector_desc& desc) {
                             xfer_size, DPU_XFER_ASYNC));
 }
 
-void vec_xfer_from_dpu(char* cpu_vec, vector_desc& desc) {
+void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -164,18 +160,20 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 #endif
 
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, std::ref(desc));
+  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::DPU_TRANSFER, bound_cb);
-  event_queue.submit(e);
-
-  // TODO have some sort of dependency analysis
-  while (e->finished == false) {
-    event_queue.process_next();
+  
+  if (event_queue.size() >= 1) {
+    e->has_parents = true;
+    auto it = std::prev(event_queue.end(), 1);
+    e->parents.insert(e->parents.end(), it, event_queue.end());
   }
+
+  event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
@@ -196,19 +194,24 @@ vector<T> dpu_vector<T>::to_cpu() {
   // Allocate CPU buffer large enough to hold all data
   vector<T> cpu_vec(this->size());
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, std::ref(desc));
+  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
+  event_queue.process_events();
+
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
+
+  e->has_parents = true;
+  if (event_queue.size() >= 1) {
+    auto it = std::prev(event_queue.end(), 1);
+    e->parents.insert(e->parents.end(), it, event_queue.end());
+  }
   event_queue.submit(e);
 
-  // TODO have some sort of dependency analysis
-  while (e->finished == false) {
-    event_queue.process_next();
-  }
+  event_queue.process_events();
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
@@ -236,7 +239,7 @@ void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
     args[i].binary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
   }
 
-#ifdef ENABLE_DPU_LOGGING
+#if ENABLE_DPU_LOGGING >= 1
   log_dpu_launch_args(args, nr_of_dpus);
 #endif
 
@@ -265,12 +268,14 @@ dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
-  event_queue.submit(e);
 
-  // TODO have some sort of dependency analysis
-  while (e->finished == false) {
-    event_queue.process_next();
+  e->has_parents = true;
+  if (event_queue.size() >= 2) {
+    auto it = std::prev(event_queue.end(), 2);
+    e->parents.insert(e->parents.end(), it, event_queue.end());
   }
+
+  event_queue.submit(e);
 
   return res;
 }
@@ -292,7 +297,7 @@ void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
     args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
   }
 
-#ifdef ENABLE_DPU_LOGGING
+#if ENABLE_DPU_LOGGING >= 1
   log_dpu_launch_args(args, nr_of_dpus);
 #endif
 
@@ -319,12 +324,14 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
-  event_queue.submit(e);
 
-  // TODO have some sort of dependency analysis
-  while (e->finished == false) {
-    event_queue.process_next();
+  e->has_parents = true;
+  if (event_queue.size() >= 1) {
+    auto it = std::prev(event_queue.end(), 1);
+    e->parents.insert(e->parents.end(), it, event_queue.end());
   }
+
+  event_queue.submit(e);
 
   return res;
 }

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <memory>
 #include <queue>
 #include <variant>
@@ -24,9 +25,15 @@ class Event {
   template <typename Callable>
   Event(OperationType t, Callable&& c)
       : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
-
+  
+  size_t id = 0;
   bool finished = false;
   bool started = false;
+  bool has_parents = false;
+
+  bool operator==(const Event& other) const { return this->id == other.id; }
+
+  std::vector<std::shared_ptr<Event>> parents;
 
   void add_completion_callback();
   void mark_finished() { this->finished = true; }
@@ -37,18 +44,36 @@ class EventQueue {
   EventQueue() = default;
   ~EventQueue() = default;
 
-  void submit(std::shared_ptr<Event> e) { operations_.push(e); }
+  void submit(std::shared_ptr<Event> e) {
+    e->id = counter_++;
+    operations_.push_back(e);
+  }
 
   void add_fence(std::shared_ptr<Event> e);
 
   void wait();
-  void process_next();
+  bool process_next();
   void process_events();
   void debug_print_queue();
+  void debug_active_events();
 
   bool has_pending() const { return !operations_.empty(); }
   std::size_t pending_count() const { return operations_.size(); }
 
+  std::deque<std::shared_ptr<Event>>::iterator begin() {
+    return operations_.begin();
+  }
+  std::deque<std::shared_ptr<Event>>::iterator end() {
+    return operations_.end();
+  }
+  size_t size() const { return operations_.size(); }
+
+  std::list<std::shared_ptr<Event>>& get_active_events() {
+    return running_events_;
+  }
+
  private:
-  std::queue<std::shared_ptr<Event>> operations_;
+  size_t counter_ = 0;
+  std::deque<std::shared_ptr<Event>> operations_;
+  std::list<std::shared_ptr<Event>> running_events_;
 };

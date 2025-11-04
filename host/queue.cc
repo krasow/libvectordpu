@@ -4,6 +4,8 @@
 #include "runtime.h"
 #include "vectordpu.h"
 
+#include <thread>
+
 #ifndef DPURT
 #define DPURT
 #include <dpu>  // UPMEM rt syslib
@@ -28,54 +30,86 @@ std::string operationtype_to_string(Event::OperationType op) {
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
-  Event* me = static_cast<Event*>(data);
+  auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
+  std::shared_ptr<Event> me = *self_ptr;
+
   me->mark_finished(/* true */);
-#ifdef ENABLE_DPU_LOGGING
+
+  auto& runtime = DpuRuntime::get();
+  runtime.get_event_queue().get_active_events().remove(me);
+
+#if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[Event] Callback finished: "
-                << operationtype_to_string(me->op) << " started=" << me->started
-                << ", finished=" << me->finished << std::endl;
+  logger.lock() << "[Event(" << me->id << ") "
+                << operationtype_to_string(me->op) << "] Callback finished"
+                << std::endl;
 #endif
 
   return DPU_OK;
 }
 
 void Event::add_completion_callback() {
-  auto& runtime = DpuRuntime::get();
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)this,
-      (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
-                             DPU_CALLBACK_SINGLE_CALL)));
   assert(this->finished == false);
 
-#ifdef ENABLE_DPU_LOGGING
+  auto& runtime = DpuRuntime::get();
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  auto wrapper = new std::shared_ptr<Event>(this);
+
+  CHECK_UPMEM(dpu_callback(
+      dpu_set, &upmem_callback, (void*)wrapper,
+      (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
+                             DPU_CALLBACK_SINGLE_CALL)));
+
+#if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[Event] Added completion callback." << std::endl;
+  logger.lock() << "[Event(" << this->id << ") "
+                << operationtype_to_string(this->op) << "] Callback Registered"
+                << std::endl;
 #endif
 }
 
 void EventQueue::add_fence(std::shared_ptr<Event> e) {
+  assert(e->finished == false);
+
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
+
   CHECK_UPMEM(dpu_callback(
       dpu_set, &upmem_callback, (void*)e.get(),
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
-  assert(e->finished == false);
 }
 
-void EventQueue::process_next() {
+bool EventQueue::process_next() {
   if (operations_.empty()) {
-    return;
+    return false;
   }
   std::shared_ptr<Event> e = operations_.front();
-  debug_print_queue();
 
-#ifdef ENABLE_DPU_LOGGING
+  #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[EventQueue] Processing " << operationtype_to_string(e->op)
-                << " event." << std::endl;
+  #endif
+
+  debug_active_events();
+  
+  // defer processing if parents are not finished
+  if (e->has_parents) {
+    for (const auto& parent : e->parents) {
+      if (!parent->finished) {
+#if ENABLE_DPU_LOGGING >= 2
+        logger.lock() << "[EventQueue] Event id " << e->id
+                      << " has unfinished parents, deferring." << std::endl;
+#endif
+        return false;
+      }
+    }
+  }
+
+  debug_print_queue();
+  
+#if ENABLE_DPU_LOGGING >= 1
+  logger.lock() << "[EventQueue] Processing id " << e->id << ": "
+                << operationtype_to_string(e->op) << " event." << std::endl;
 #endif
 
   switch (e->op) {
@@ -100,27 +134,59 @@ void EventQueue::process_next() {
     default:
       assert(false && "Unknown event type");
   }
-  operations_.pop();  // Remove
+  running_events_.push_back(e);
+  operations_.pop_front();
+  return true;
 }
 
 void EventQueue::process_events() {
-  while (!operations_.empty()) {
-    this->process_next();
+  while (true) {
+    bool made_progress = this->process_next();
+
+    if (operations_.empty() && running_events_.empty())
+      break;
+
+    if (!made_progress)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }
+
 void EventQueue::debug_print_queue() {
-#ifdef ENABLE_DPU_LOGGING
+#if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[EventQueue] Current queue state:" << std::endl;
+  if (!operations_.empty()) {
+    logger.lock() << "[EventQueue] Current queue state:" << std::endl;
 
-  std::queue<std::shared_ptr<Event>> temp_queue = operations_;
+    std::deque<std::shared_ptr<Event>> temp_queue = operations_;
 
-  while (!temp_queue.empty()) {
-    auto e = temp_queue.front();  // Get the front element
-    logger.lock() << "  Event type: " << operationtype_to_string(e->op)
-                  << ", started: " << e->started
-                  << ", finished: " << e->finished << std::endl;
-    temp_queue.pop();  // Pop the element from the temporary queue
+    while (!temp_queue.empty()) {
+      auto e = temp_queue.front();  // Get the front element
+      logger.lock() << "  Event id: " << e->id
+                    << ", type: " << operationtype_to_string(e->op)
+                    << ", started: " << e->started
+                    << ", finished: " << e->finished << std::endl;
+      temp_queue.pop_front();  // Pop the element from the temporary queue
+    }
+  } else {
+    logger.lock() << "[EventQueue] Queue is empty." << std::endl;
+  }
+#endif
+}
+
+void EventQueue::debug_active_events() {
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  if (!running_events_.empty()) {
+    logger.lock() << "[EventQueue] Current active events:" << std::endl;
+
+    for (const auto& e : running_events_) {
+      logger.lock() << "  Event id: " << e->id
+                    << ", type: " << operationtype_to_string(e->op)
+                    << ", started: " << e->started
+                    << ", finished: " << e->finished << std::endl;
+    }
+  } else {
+    logger.lock() << "[EventQueue] No active events." << std::endl;
   }
 #endif
 }

@@ -8,6 +8,11 @@ BUILDDIR ?= bin
 NR_DPUS ?= 32
 NR_TASKLETS ?= 16
 
+DEBUG ?= 0
+LOGGING ?= 0
+
+# Edit only above
+
 ifndef UPMEM_HOME
 $(error UPMEM_HOME is not defined. Please source upmem_env.sh.)
 endif
@@ -16,7 +21,7 @@ RUNTIME_PATH := $(abspath $(CURDIR)/bin)
 RUNTIME := $(RUNTIME_PATH)/runtime.dpu
 
 CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
-	-DENABLE_DPU_LOGGING=1 
+	-DENABLE_DPU_LOGGING=$(LOGGING)
 
 HOST_TARGET := ${BUILDDIR}/libvectordpu
 DPU_TARGET := ${BUILDDIR}/runtime.dpu
@@ -28,6 +33,15 @@ HOST_SOURCES := $(wildcard ${HOST_DIR}/*.cc)
 DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
 TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
 
+ifeq ($(DEBUG),1)
+  CXXFLAGS += -g -O0 -DDEBUG
+  LDFLAGS  +=
+  BUILD_TYPE := debug
+else
+  CXXFLAGS += -O3 -DNDEBUG
+  BUILD_TYPE := release
+endif
+
 .PHONY: all clean test
 
 __dirs := $(shell mkdir -p ${BUILDDIR})
@@ -35,11 +49,12 @@ __dirs := $(shell mkdir -p ${BUILDDIR})
 CXX_STANDARD := -std=c++20
 CXX := g++ ${CXX_STANDARD}
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_INCLUDES}
-HOST_FLAGS := ${COMMON_FLAGS} -O3 `dpu-pkg-config --cflags --libs dpu` \
+HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
 				-DNR_TASKLETS=${NR_TASKLETS} -DNR_DPUS=${NR_DPUS} ${CONFIG_FLAGS}
 DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 
 all: ${HOST_TARGET} ${DPU_TARGET}
+	@echo "Build complete: $(BUILD_TYPE)"
 
 ${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES}
 	$(CXX) -shared -fPIC -o $@.so ${HOST_SOURCES} ${HOST_FLAGS} 
@@ -49,7 +64,7 @@ ${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES}
 
 $(TEST_TARGET): all
-	$(CXX) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES) ${COMMON_FLAGS} -O3 \
+	$(CXX) $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR) -Wl,-rpath,$(RUNTIME_PATH) -lvectordpu
 
 clean:
