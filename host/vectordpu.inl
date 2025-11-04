@@ -167,12 +167,6 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::DPU_TRANSFER, bound_cb);
 
-  if (event_queue.size() >= 1) {
-    e->has_parents = true;
-    auto it = std::prev(event_queue.end(), 1);
-    e->parents.insert(e->parents.end(), it, event_queue.end());
-  }
-
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
@@ -202,11 +196,6 @@ vector<T> dpu_vector<T>::to_cpu() {
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
 
-  e->has_parents = true;
-  if (event_queue.size() >= 1) {
-    auto it = std::prev(event_queue.end(), 1);
-    e->parents.insert(e->parents.end(), it, event_queue.end());
-  }
   event_queue.submit(e);
 
   event_queue.process_events(e->id);
@@ -267,12 +256,6 @@ dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
 
-  e->has_parents = true;
-  if (event_queue.size() >= 2) {
-    auto it = std::prev(event_queue.end(), 2);
-    e->parents.insert(e->parents.end(), it, event_queue.end());
-  }
-
   event_queue.submit(e);
 
   return res;
@@ -322,12 +305,6 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
-
-  e->has_parents = true;
-  if (event_queue.size() >= 1) {
-    auto it = std::prev(event_queue.end(), 1);
-    e->parents.insert(e->parents.end(), it, event_queue.end());
-  }
 
   event_queue.submit(e);
 

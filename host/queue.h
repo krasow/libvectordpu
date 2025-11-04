@@ -29,14 +29,13 @@ class Event {
   size_t id = 0;
   bool finished = false;
   bool started = false;
-  bool has_parents = false;
 
-  bool operator==(const Event& other) const { return this->id == other.id; }
-
-  std::vector<std::shared_ptr<Event>> parents;
+  // bool has_parents = false;
+  // std::list<std::shared_ptr<Event>> parents;
 
   void add_completion_callback();
   void mark_finished() { this->finished = true; }
+  bool operator==(const Event& other) const { return this->id == other.id; }
 };
 
 class EventQueue {

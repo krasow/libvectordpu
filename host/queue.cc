@@ -91,21 +91,20 @@ bool EventQueue::process_next() {
 #endif
 
   debug_active_events();
-
-  // defer processing if parents are not finished
-  if (e->has_parents) {
-    for (const auto& parent : e->parents) {
-      if (!parent->finished) {
-#if ENABLE_DPU_LOGGING >= 2
-        logger.lock() << "[EventQueue] Event id " << e->id
-                      << " has unfinished parents, deferring." << std::endl;
-#endif
-        return false;
-      }
-    }
-  }
-
   debug_print_queue();
+
+// we don't need this as UPMEM thread worker queue handles this
+//   if (e->has_parents) {
+//     for (const auto& parent : e->parents) {
+//       if (!parent->finished) {
+// #if ENABLE_DPU_LOGGING >= 2
+//         logger.lock() << "[EventQueue] Event id " << e->id
+//                       << " has unfinished parents, deferring." << std::endl;
+// #endif
+//         return false;
+//       }
+//     }
+//   }
 
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[EventQueue] Processing id " << e->id << ": "
