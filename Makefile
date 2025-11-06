@@ -8,10 +8,15 @@ BUILDDIR ?= bin
 NR_DPUS ?= 32
 NR_TASKLETS ?= 16
 
+BACKEND ?= simulator
 DEBUG ?= 0
 LOGGING ?= 0
 
-# Edit only above
+# this option enables fencing after dpu-to-host transfers automatically
+# you can disable it to manually control fencing in your code with add_fence() calls
+ENABLE_AUTO_FENCING ?= 1
+
+# ----------------- Edit above this line -----------------
 
 ifndef UPMEM_HOME
 $(error UPMEM_HOME is not defined. Please source upmem_env.sh.)
@@ -21,7 +26,9 @@ RUNTIME_PATH := $(abspath $(CURDIR)/bin)
 RUNTIME := $(RUNTIME_PATH)/runtime.dpu
 
 CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
-	-DENABLE_DPU_LOGGING=$(LOGGING)
+	-DENABLE_DPU_LOGGING=$(LOGGING) \
+	-DBACKEND=\"$(BACKEND)\" \
+	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING)
 
 HOST_TARGET := ${BUILDDIR}/libvectordpu
 DPU_TARGET := ${BUILDDIR}/runtime.dpu

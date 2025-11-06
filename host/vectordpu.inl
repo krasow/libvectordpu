@@ -15,9 +15,6 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
-// ============================
-// DPU Vector
-// ============================
 template <typename T>
 dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
                           std::source_location loc)
@@ -102,6 +99,17 @@ vector<uint32_t> dpu_vector<T>::data() const {
 template <typename T>
 uint32_t dpu_vector<T>::size() const {
   return size_;
+}
+template <typename T>
+void dpu_vector<T>::add_fence() {
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::FENCE);
+
+  event_queue.submit(e);
+  event_queue.process_events(e->id);
 }
 
 void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
@@ -199,7 +207,10 @@ vector<T> dpu_vector<T>::to_cpu() {
 
   event_queue.submit(e);
 
+  // Auto-fence after DPU->HOST transfer if enabled
+#if ENABLE_AUTO_FENCING == 1
   event_queue.process_events(e->id);
+#endif 
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();

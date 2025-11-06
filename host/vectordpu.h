@@ -50,7 +50,8 @@ class dpu_vector {
 
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
                                 LOGGER_ARGS_WITH_DEFAULTS);
-
+  void add_fence();
+                                                  
   vector_desc data_desc() const { return data_; }
 
  private:

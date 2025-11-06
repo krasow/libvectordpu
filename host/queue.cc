@@ -79,8 +79,10 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
+  auto wrapper = new std::shared_ptr<Event>(std::move(e));
+  
   CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)e.get(),
+      dpu_set, &upmem_callback, (void*)wrapper,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
 }
@@ -119,7 +121,7 @@ bool EventQueue::process_next() {
 
   switch (e->op) {
     case Event::OperationType::FENCE:
-      EventQueue::add_fence(e);
+      this->add_fence(e);
       break;
     case Event::OperationType::COMPUTE:
       e->started = true;

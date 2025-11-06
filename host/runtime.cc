@@ -26,11 +26,16 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   // Allocate DPU set
   dpu_set_ = new dpu_set_t();
-  DPU_ASSERT(dpu_alloc(num_dpus_, "backend=simulator", dpu_set_));
+
+  std::string backend_str = "backend=";
+  backend_str += BACKEND;
+
+  DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
   DPU_ASSERT(dpu_load(*dpu_set_, DPU_RUNTIME, nullptr));
 
 #if ENABLE_DPU_LOGGING == 1
-  logger_->lock() << "[runtime] DPU runtime initialized." << std::endl;
+  logger_->lock() << "[runtime] DPU runtime initialized with " << backend_str
+                  << std::endl;
 #endif
 
   // Allocate allocator and event queue
