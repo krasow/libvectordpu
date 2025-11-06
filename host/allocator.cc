@@ -5,13 +5,14 @@
 #include <stdexcept>
 
 #include "logger.h"
+#include "runtime.h"
 
-allocator::allocator(uint32_t start_addr, std::size_t total_size,
+allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
                      std::size_t num_dpus)
-    : start_addr_(start_addr), total_size_(total_size), num_dpus_(num_dpus) {
+    : start_addr_(start_addr), dpu_mem_(dpu_mem), num_dpus_(num_dpus) {
   // Initialize internal state, but do NOT pre-allocate vectors
   ptrs_.resize(num_dpus_, start_addr_);  // all start at base address
-  sizes_.resize(num_dpus_, total_size_ / num_dpus_);
+  sizes_.resize(num_dpus_, dpu_mem_);
   offsets_.resize(num_dpus_, 0);
   free_list_.resize(num_dpus_);
 }
@@ -74,6 +75,11 @@ uint32_t allocator::allocate(std::size_t dpu_id, std::size_t n) {
   }
 
   if (offsets_[dpu_id] + n > sizes_[dpu_id]) {
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[allocator] DPU " << dpu_id
+                  << " out of memory: requested " << n << " bytes, available "
+                  << (sizes_[dpu_id] - offsets_[dpu_id]) << " bytes"
+                  << std::endl;
     throw std::runtime_error("DPU out of memory!");
   }
 

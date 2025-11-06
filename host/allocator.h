@@ -25,7 +25,7 @@ class allocator {
 
  private:
   uint32_t start_addr_;  // starting base address
-  std::size_t total_size_;
+  std::size_t dpu_mem_;  // memory size per DPU
   std::size_t num_dpus_;
 
   vector<uint32_t> ptrs_;                        // base addresses per DPU
