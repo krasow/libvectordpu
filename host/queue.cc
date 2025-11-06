@@ -80,7 +80,7 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   dpu_set_t& dpu_set = runtime.dpu_set();
 
   auto wrapper = new std::shared_ptr<Event>(std::move(e));
-  
+
   CHECK_UPMEM(dpu_callback(
       dpu_set, &upmem_callback, (void*)wrapper,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |

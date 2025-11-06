@@ -16,6 +16,10 @@ LOGGING ?= 0
 # you can disable it to manually control fencing in your code with add_fence() calls
 ENABLE_AUTO_FENCING ?= 1
 
+# the default compiler on feta supports up to C++17
+# c++20 is needed for some debugging output from std::source_location
+CXX_STANDARD ?= c++20
+
 # ----------------- Edit above this line -----------------
 
 ifndef UPMEM_HOME
@@ -53,8 +57,6 @@ endif
 
 __dirs := $(shell mkdir -p ${BUILDDIR})
 
-CXX_STANDARD := -std=c++20
-CXX := g++ ${CXX_STANDARD}
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_INCLUDES}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
 				-DNR_TASKLETS=${NR_TASKLETS} -DNR_DPUS=${NR_DPUS} ${CONFIG_FLAGS}
@@ -64,14 +66,14 @@ all: ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE)"
 
 ${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES}
-	$(CXX) -shared -fPIC -o $@.so ${HOST_SOURCES} ${HOST_FLAGS} 
+	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@.so ${HOST_SOURCES} ${HOST_FLAGS} 
 
 
 ${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES}
 
 $(TEST_TARGET): all
-	$(CXX) $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
+	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR) -Wl,-rpath,$(RUNTIME_PATH) -lvectordpu
 
 clean:

@@ -204,14 +204,14 @@ test_error test_chained_operations() {
 
 int main(void) {
   bool all_passed = true;
-  // RUN_TEST(test_int_add);
-  // RUN_TEST(test_int_sub);
-  // RUN_TEST(test_float_add);
-  // RUN_TEST(test_float_sub);
-  // RUN_TEST(test_int_negate);
-  // RUN_TEST(test_int_abs);
-  // RUN_TEST(test_float_negate);
-  // RUN_TEST(test_float_abs);
+  RUN_TEST(test_int_add);
+  RUN_TEST(test_int_sub);
+  RUN_TEST(test_float_add);
+  RUN_TEST(test_float_sub);
+  RUN_TEST(test_int_negate);
+  RUN_TEST(test_int_abs);
+  RUN_TEST(test_float_negate);
+  RUN_TEST(test_float_abs);
   RUN_TEST(test_chained_operations);
 
   if (!all_passed) {

@@ -210,7 +210,7 @@ vector<T> dpu_vector<T>::to_cpu() {
   // Auto-fence after DPU->HOST transfer if enabled
 #if ENABLE_AUTO_FENCING == 1
   event_queue.process_events(e->id);
-#endif 
+#endif
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();

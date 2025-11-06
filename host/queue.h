@@ -5,9 +5,9 @@
 #include <functional>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <variant>
-#include <mutex>
 
 #include "vectordpu.h"  // for dpu_vector
 

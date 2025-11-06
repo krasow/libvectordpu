@@ -11,14 +11,14 @@
 // Fake source_location for pre-C++20
 // debian upmem machine has outdated compiler that doesn't support C++20 yet
 namespace std {
-    struct source_location {
-        static source_location current() { return {}; }
-        constexpr const char* file_name() const { return "unknown"; }
-        constexpr int line() const { return 0; }
-        constexpr int column() const { return 0; }
-        constexpr const char* function_name() const { return "unknown"; }
-    };
+struct source_location {
+  static source_location current() { return {}; }
+  constexpr const char* file_name() const { return "unknown"; }
+  constexpr int line() const { return 0; }
+  constexpr int column() const { return 0; }
+  constexpr const char* function_name() const { return "unknown"; }
 };
+};  // namespace std
 #else
 #include <source_location>
 #endif
@@ -51,7 +51,7 @@ class dpu_vector {
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
                                 LOGGER_ARGS_WITH_DEFAULTS);
   void add_fence();
-                                                  
+
   vector_desc data_desc() const { return data_; }
 
  private:
