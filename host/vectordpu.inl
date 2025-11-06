@@ -231,7 +231,7 @@ void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].is_binary = true;
-    args[i].num_elements = lhs.size();
+    args[i].num_elements = lhs.data_desc().second[i];
     args[i].size_type = sizeof(T);
     args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.data()[i]);
     args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.data()[i]);
@@ -284,7 +284,7 @@ void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].is_binary = false;
-    args[i].num_elements = a.size();
+    args[i].num_elements = a.data_desc().second[i];
     args[i].size_type = sizeof(T);
     args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
     args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);

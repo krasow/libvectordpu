@@ -40,8 +40,7 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   // Allocate allocator and event queue
   size_t dpu_mem = 64 * 1024 * 1024;  // 64MB per DPU
-  allocator_ =
-      std::make_unique<allocator>(0, dpu_mem, num_dpus_);
+  allocator_ = std::make_unique<allocator>(0, dpu_mem, num_dpus_);
   event_queue_ = std::make_unique<EventQueue>();
 
   initialized_ = true;
