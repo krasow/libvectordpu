@@ -24,13 +24,38 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
   return launch_unary(a, UnaryKernelSelector<T>::abs());
 }
 
-// Template instantiations for shared library
+template <typename T>
+dpu_vector<T> sum(const dpu_vector<T>& a) {
+  return launch_reduction(a, ReductionKernelSelector<T>::sum());
+}
+
+template <typename T>
+dpu_vector<T> product(const dpu_vector<T>& a) {
+  return launch_reduction(a, ReductionKernelSelector<T>::product());
+}
+
+template <typename T>
+dpu_vector<T> max(const dpu_vector<T>& a) {
+  return launch_reduction(a, ReductionKernelSelector<T>::max());
+}
+
+template <typename T>
+dpu_vector<T> min(const dpu_vector<T>& a) {
+  return launch_reduction(a, ReductionKernelSelector<T>::min());
+}
+
+// OperationType::COMPUTE
 #define INSTANTIATE_BINARY_OP(T, OP)                     \
   template dpu_vector<T> OP<T>(const dpu_vector<T>& lhs, \
                                const dpu_vector<T>& rhs);
 #define INSTANTIATE_UNARY_OP(T, OP) \
   template dpu_vector<T> OP<T>(const dpu_vector<T>& vec);
+#define INSTANTIATE_REDUCE_OP(T, OP) \
+  template dpu_vector<T> OP<T>(const dpu_vector<T>& vec);
+
+// OperationType::FENCE
 #define INSTANTIATE_FENCE(T) template void dpu_vector<T>::add_fence();
+// OperationType::DPU_TRANSFER and HOST_TRANSFER
 #define INSTANTIATE_TO_CPU(T) template std::vector<T> dpu_vector<T>::to_cpu();
 #define INSTANTIATE_FROM_CPU(T)                                           \
   template dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec, \
@@ -42,6 +67,10 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
   INSTANTIATE_BINARY_OP(T, operator-) \
   INSTANTIATE_UNARY_OP(T, operator-)  \
   INSTANTIATE_UNARY_OP(T, abs)        \
+  INSTANTIATE_REDUCE_OP(T, sum)       \
+  INSTANTIATE_REDUCE_OP(T, product)   \
+  INSTANTIATE_REDUCE_OP(T, max)       \
+  INSTANTIATE_REDUCE_OP(T, min)       \
   INSTANTIATE_FROM_CPU(T)             \
   INSTANTIATE_TO_CPU(T)               \
   INSTANTIATE_FENCE(T)

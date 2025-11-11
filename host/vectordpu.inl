@@ -230,7 +230,7 @@ void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].is_binary = true;
+    args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
     args[i].num_elements = lhs.data_desc().second[i];
     args[i].size_type = sizeof(T);
     args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.data()[i]);
@@ -283,7 +283,7 @@ void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].is_binary = false;
+    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
     args[i].num_elements = a.data_desc().second[i];
     args[i].size_type = sizeof(T);
     args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
@@ -312,6 +312,56 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
 
   auto bound_cb = std::bind(internal_launch_unary<T>, res, a, kernel_id);
   auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->res = res;
+
+  event_queue.submit(e);
+
+  return res;
+}
+
+template <typename T>
+void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
+                           KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+
+  uint32_t nr_of_dpus = runtime.num_dpus();
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
+    args[i].num_elements = a.data_desc().second[i];
+    args[i].size_type = sizeof(T);
+    args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
+    args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  log_dpu_launch_args(args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
+}
+
+template <typename T>
+dpu_vector<T> launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> res(runtime.num_dpus());  // each dpu returns a single
+
+  auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
