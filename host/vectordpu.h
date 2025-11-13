@@ -131,29 +131,29 @@ dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
 template <typename T>
 dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id);
 
-// ============================
-// Operators
-// ============================
+// binary operations
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs);
 
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs);
 
+// unary operations
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a);
 
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a);
 
+// reduction operations
 template <typename T>
-dpu_vector<T> sum(const dpu_vector<T>& a);
+T sum(const dpu_vector<T>& a);
 
 template <typename T>
-dpu_vector<T> product(const dpu_vector<T>& a);
+T product(const dpu_vector<T>& a);
 
 template <typename T>
-dpu_vector<T> max(const dpu_vector<T>& a);
+T max(const dpu_vector<T>& a);
 
 template <typename T>
-dpu_vector<T> min(const dpu_vector<T>& a); 
+T min(const dpu_vector<T>& a);

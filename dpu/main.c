@@ -9,9 +9,9 @@ __host DPU_LAUNCH_ARGS args;
 
 BARRIER_INIT(my_barrier, NR_TASKLETS);
 
+#include "unary.inl"
 #include "binary.inl"
 #include "reduce.inl"
-#include "unary.inl"
 
 int (*kernels[KERNEL_COUNT])(void) = {
     // Unary

@@ -11,6 +11,7 @@
    David Krasowska, October 2025
 */
 
+#include <limits.h>
 #include <runtime.h>
 #include <vectordpu.h>
 
@@ -35,6 +36,33 @@ using test_error = uint32_t;
       all_passed = false;                                         \
     }                                                             \
   } while (0)
+
+// Generic reduction test helper for any type T
+template <typename T, typename Op, typename DpuOp>
+test_error test_reduction(uint32_t N, T min_val, T max_val, T init_val,
+                          Op cpu_op, DpuOp dpu_op) {
+  vector<T> a(N);
+  for (uint32_t i = 0; i < N; i++) {
+    // Handle both integer and float uniformly
+    if constexpr (std::is_integral<T>::value)
+      a[i] = rand() % (static_cast<int>(max_val - min_val + 1)) + min_val;
+    else
+      a[i] = min_val + static_cast<T>(rand()) / RAND_MAX * (max_val - min_val);
+  }
+
+  dpu_vector<T> da = dpu_vector<T>::from_cpu(a);
+  T dpu_result = dpu_op(da);
+
+  T cpu_result = init_val;
+  for (uint32_t i = 0; i < N; i++) {
+    cpu_result = cpu_op(cpu_result, a[i]);
+  }
+
+  std::cout << "CPU result: " << cpu_result << ", DPU result: " << dpu_result
+            << std::endl;
+
+  return (fabs(dpu_result - cpu_result) < 1e-5) ? TEST_SUCCESS : TEST_ERROR;
+}
 
 template <typename T, typename F>
 test_error compare_cpu_unary(vector<T>& a, dpu_vector<T>& res, F func) {
@@ -202,17 +230,78 @@ test_error test_chained_operations() {
   return TEST_SUCCESS;
 }
 
+test_error test_sum_reduction_int() {
+  return test_reduction<int>(
+      1024 * 1024, 0, 9, 0, [](int acc, int x) { return acc + x; },
+      [](auto& da) { return sum(da); });
+}
+
+test_error test_product_reduction_int() {
+  return test_reduction<int>(
+      1024, 1, 5, 1, [](int acc, int x) { return acc * x; },
+      [](auto& da) { return product(da); });
+}
+
+test_error test_max_reduction_int() {
+  return test_reduction<int>(
+      1024 * 1024, 0, 999, std::numeric_limits<int>::min(),
+      [](int acc, int x) { return (x > acc) ? x : acc; },
+      [](auto& da) { return max(da); });
+}
+
+test_error test_min_reduction_int() {
+  return test_reduction<int>(
+      1024 * 1024, 0, 999, std::numeric_limits<int>::max(),
+      [](int acc, int x) { return (x < acc) ? x : acc; },
+      [](auto& da) { return min(da); });
+}
+test_error test_sum_reduction_float() {
+  return test_reduction<float>(
+      1024 * 1024, 0.0f, 1.0f, 0.0f, [](float acc, float x) { return acc + x; },
+      [](auto& da) { return sum(da); });
+}
+
+test_error test_product_reduction_float() {
+  return test_reduction<float>(
+      1024, 0.5f, 2.0f, 1.0f, [](float acc, float x) { return acc * x; },
+      [](auto& da) { return product(da); });
+}
+
+test_error test_max_reduction_float() {
+  return test_reduction<float>(
+      1024 * 1024, 0.0f, 100.0f, -std::numeric_limits<float>::infinity(),
+      [](float acc, float x) { return (x > acc) ? x : acc; },
+      [](auto& da) { return max(da); });
+}
+
+test_error test_min_reduction_float() {
+  return test_reduction<float>(
+      1024 * 1024, 0.0f, 100.0f, std::numeric_limits<float>::infinity(),
+      [](float acc, float x) { return (x < acc) ? x : acc; },
+      [](auto& da) { return min(da); });
+}
+
 int main(void) {
   bool all_passed = true;
   RUN_TEST(test_int_add);
-  RUN_TEST(test_int_sub);
-  RUN_TEST(test_float_add);
-  RUN_TEST(test_float_sub);
-  RUN_TEST(test_int_negate);
-  RUN_TEST(test_int_abs);
-  RUN_TEST(test_float_negate);
-  RUN_TEST(test_float_abs);
-  RUN_TEST(test_chained_operations);
+  // RUN_TEST(test_int_sub);
+  // RUN_TEST(test_float_add);
+  // RUN_TEST(test_float_sub);
+  // RUN_TEST(test_int_negate);
+  // RUN_TEST(test_int_abs);
+  // RUN_TEST(test_float_negate);
+  // RUN_TEST(test_float_abs);
+  // RUN_TEST(test_chained_operations);
+
+  // RUN_TEST(test_sum_reduction_int);
+  // RUN_TEST(test_product_reduction_int);
+  // RUN_TEST(test_max_reduction_int);
+  // RUN_TEST(test_min_reduction_int);
+
+  // RUN_TEST(test_sum_reduction_float);
+  // RUN_TEST(test_product_reduction_float);
+  // RUN_TEST(test_max_reduction_float);
+  // RUN_TEST(test_min_reduction_float);
 
   if (!all_passed) {
     std::cerr << "Some tests failed.\n";

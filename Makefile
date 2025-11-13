@@ -16,6 +16,9 @@ LOGGING ?= 0
 # you can disable it to manually control fencing in your code with add_fence() calls
 ENABLE_AUTO_FENCING ?= 1
 
+# this option enables printing from the DPU to the host stdout
+ENABLE_DPU_PRINTING ?= 0
+
 # the default compiler on feta supports up to C++17
 # c++20 is needed for some debugging output from std::source_location
 CXX_STANDARD ?= c++20
@@ -32,7 +35,8 @@ RUNTIME := $(RUNTIME_PATH)/runtime.dpu
 CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
 	-DENABLE_DPU_LOGGING=$(LOGGING) \
 	-DBACKEND=\"$(BACKEND)\" \
-	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING)
+	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING) \
+	-DENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)
 
 HOST_TARGET := ${BUILDDIR}/libvectordpu
 DPU_TARGET := ${BUILDDIR}/runtime.dpu
@@ -45,7 +49,7 @@ DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
 TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
 
 ifeq ($(DEBUG),1)
-  CXXFLAGS += -g -O0 -DDEBUG
+  CXXFLAGS += -g -O0 -DDEBUG -fsanitize=address -fno-omit-frame-pointer
   LDFLAGS  +=
   BUILD_TYPE := debug
 else

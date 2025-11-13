@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <numeric>  // for std::accumulate
 
 #include "logger.h"
 #include "runtime.h"
@@ -195,11 +196,27 @@ vector<T> dpu_vector<T>::to_cpu() {
 #endif
 
   // Allocate CPU buffer large enough to hold all data
-  vector<T> cpu_vec(this->size());
+  size_t total_size = this->size();
+  auto& runtime = DpuRuntime::get();
+  // size_t num_dpus = runtime.num_dpus();
+  // size_t min_xfer = 8;  // 8 bytes
+
+  // // Compute bytes per DPU
+  // size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
+
+  // // Ensure at least 8 bytes per DPU
+  // if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
+  //   // Round up to the number of elements that makes 8 bytes per DPU
+  //   size_t elems_per_dpu =
+  //       (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /
+  //       sizeof(T))
+  //   total_size = num_dpus * elems_per_dpu;
+  // }
+
+  vector<T> cpu_vec(total_size);
+
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
   auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc);
-
-  auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
@@ -207,16 +224,29 @@ vector<T> dpu_vector<T>::to_cpu() {
 
   event_queue.submit(e);
 
-  // Auto-fence after DPU->HOST transfer if enabled
-#if ENABLE_AUTO_FENCING == 1
-  event_queue.process_events(e->id);
-#endif
-
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[queue-append] DPU->HOST XFER " << cpu_vec.size()
                 << " elements from DPUs" << std::endl;
 #endif
+
+// Auto-fence after DPU->HOST transfer if enabled
+#if ENABLE_AUTO_FENCING == 1
+  event_queue.process_events(e->id);
+// need the event to be completed before reading printf output
+#if ENABLE_DPU_PRINTING == 1
+  // read and print DPU logs to host stdout
+  dpu_set_t dpu;
+  dpu_set_t& set = runtime.dpu_set();
+  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
+#endif
+#endif
+
+  // for (size_t i = 0; i < 8; i++) {
+  //   std::cout << ((uint64_t*)cpu_vec.data())[i] << " ";
+  // }
+  // std::cout << std::endl;
+
   return cpu_vec;
 }
 
@@ -325,7 +355,7 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
 
 template <typename T>
 void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
-                           KernelID kernel_id) {
+                               KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
 
   uint32_t nr_of_dpus = runtime.num_dpus();
@@ -357,7 +387,7 @@ void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
 }
 
 template <typename T>
-dpu_vector<T> launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
+T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> res(runtime.num_dpus());  // each dpu returns a single
 
@@ -367,8 +397,38 @@ dpu_vector<T> launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
-
   event_queue.submit(e);
 
-  return res;
+  vector<T> res_cpu = res.to_cpu();
+  return res_cpu[0];
+
+  // assert(res_cpu.size() % runtime.num_dpus() == 0);
+
+  // for (auto val : res_cpu) {
+  //   std::cout << "Reduction partial result from DPU: " << val << std::endl;
+  // }
+
+  // T init = res_cpu[0];
+  // // Final reduction on CPU
+  // // std::accumulate will take in lamda for the reduction operation
+  // return std::accumulate(
+  //     res_cpu.begin() + 1, res_cpu.end(), init, [kernel_id](T acc, T x) -> T {
+  //       switch (kernel_id) {
+  //         case K_REDUCTION_FLOAT_SUM:
+  //         case K_REDUCTION_INT_SUM:
+  //           return acc + x;
+  //         case K_REDUCTION_FLOAT_PRODUCT:
+  //         case K_REDUCTION_INT_PRODUCT:
+  //           return acc * x;
+  //         case K_REDUCTION_FLOAT_MAX:
+  //         case K_REDUCTION_INT_MAX:
+  //           return (x > acc) ? x : acc;
+  //         case K_REDUCTION_FLOAT_MIN:
+  //         case K_REDUCTION_INT_MIN:
+  //           return (x < acc) ? x : acc;
+  //         default:
+  //           assert(false && "Unknown kernel_id in final reduction step");
+  //           return acc;
+  //       }
+  //     });
 }
