@@ -27,10 +27,10 @@ vector_desc allocator::allocate_upmem_vector(std::size_t n,
 
   size_t size_per_dpu = n / num_dpus;
 
-  // if (size_per_dpu * size_type == 4) {
-  //   // ensure at least 8 bytes per DPU to avoid zero-size allocations
-  //   size_per_dpu = 2;
-  // }
+  if (size_per_dpu * size_type == 4) {
+    // ensure at least 8 bytes per DPU to avoid zero-size allocations
+    size_per_dpu = 2;
+  }
 
   size_t remainder = n % num_dpus;
 

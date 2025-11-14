@@ -44,7 +44,6 @@
                MINIMUM_WRITE_SIZE);                                            \
                                                                                \
     barrier_wait(&my_barrier);                                                 \
-                                                                               \
     /* Tasklet 0 performs final reduction */                                   \
     if (tasklet_id == 0) {                                                     \
       mram_read((__mram_ptr void const *)res_ptr, res_block,                   \
@@ -52,11 +51,8 @@
                                                                                \
       TYPE total = (TYPE)res_block[0];                                         \
       for (uint32_t i = 1; i < NR_TASKLETS; i++) {                             \
-        total = FUNC(total, res_block[i]);                                     \
+        total = FUNC(total, (TYPE)res_block[i]);                               \
       }                                                                        \
-      printf("Final reduction result in offset 0x%08x: %d\n",                  \
-             (args.reduction.res_offset), (TYPE)total);                        \
-                                                                               \
       mram_write(&total, (__mram_ptr void *)(args.reduction.res_offset),       \
                  MINIMUM_WRITE_SIZE);                                          \
     }                                                                          \

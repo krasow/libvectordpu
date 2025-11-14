@@ -198,20 +198,19 @@ vector<T> dpu_vector<T>::to_cpu() {
   // Allocate CPU buffer large enough to hold all data
   size_t total_size = this->size();
   auto& runtime = DpuRuntime::get();
-  // size_t num_dpus = runtime.num_dpus();
-  // size_t min_xfer = 8;  // 8 bytes
+  size_t num_dpus = runtime.num_dpus();
+  size_t min_xfer = 8;  // 8 bytes
 
-  // // Compute bytes per DPU
-  // size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
+  // Compute bytes per DPU
+  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
 
-  // // Ensure at least 8 bytes per DPU
-  // if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
-  //   // Round up to the number of elements that makes 8 bytes per DPU
-  //   size_t elems_per_dpu =
-  //       (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /
-  //       sizeof(T))
-  //   total_size = num_dpus * elems_per_dpu;
-  // }
+  // Ensure at least 8 bytes per DPU
+  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
+    // Round up to the number of elements that makes 8 bytes per DPU
+    size_t elems_per_dpu =
+        (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /sizeof(T))
+    total_size = num_dpus * elems_per_dpu;
+  }
 
   vector<T> cpu_vec(total_size);
 
@@ -241,11 +240,6 @@ vector<T> dpu_vector<T>::to_cpu() {
   DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
 #endif
 #endif
-
-  // for (size_t i = 0; i < 8; i++) {
-  //   std::cout << ((uint64_t*)cpu_vec.data())[i] << " ";
-  // }
-  // std::cout << std::endl;
 
   return cpu_vec;
 }
@@ -400,35 +394,45 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   event_queue.submit(e);
 
   vector<T> res_cpu = res.to_cpu();
-  return res_cpu[0];
 
-  // assert(res_cpu.size() % runtime.num_dpus() == 0);
+  assert(res_cpu.size() % runtime.num_dpus() == 0);
 
-  // for (auto val : res_cpu) {
-  //   std::cout << "Reduction partial result from DPU: " << val << std::endl;
-  // }
+  size_t stride = res_cpu.size() / runtime.num_dpus();
+  // initialize accumulator with the first partial result
+  T acc = res_cpu[stride-1];
 
-  // T init = res_cpu[0];
-  // // Final reduction on CPU
-  // // std::accumulate will take in lamda for the reduction operation
-  // return std::accumulate(
-  //     res_cpu.begin() + 1, res_cpu.end(), init, [kernel_id](T acc, T x) -> T {
-  //       switch (kernel_id) {
-  //         case K_REDUCTION_FLOAT_SUM:
-  //         case K_REDUCTION_INT_SUM:
-  //           return acc + x;
-  //         case K_REDUCTION_FLOAT_PRODUCT:
-  //         case K_REDUCTION_INT_PRODUCT:
-  //           return acc * x;
-  //         case K_REDUCTION_FLOAT_MAX:
-  //         case K_REDUCTION_INT_MAX:
-  //           return (x > acc) ? x : acc;
-  //         case K_REDUCTION_FLOAT_MIN:
-  //         case K_REDUCTION_INT_MIN:
-  //           return (x < acc) ? x : acc;
-  //         default:
-  //           assert(false && "Unknown kernel_id in final reduction step");
-  //           return acc;
-  //       }
-  //     });
+  size_t start = 0;
+  if (stride == 1) {
+    start = 1;
+  } else if (stride == 2) {
+    start = 3;
+  } else {
+    throw std::runtime_error("Reduction stride not supported");
+  }
+
+  // reduce over the remaining DPUs
+  for (size_t i = start; i < res_cpu.size(); i += stride) {
+    T x = res_cpu[i];
+    switch (kernel_id) {
+      case K_REDUCTION_FLOAT_SUM:
+      case K_REDUCTION_INT_SUM:
+        acc += x;
+        break;
+      case K_REDUCTION_FLOAT_PRODUCT:
+      case K_REDUCTION_INT_PRODUCT:
+        acc *= x;
+        break;
+      case K_REDUCTION_FLOAT_MAX:
+      case K_REDUCTION_INT_MAX:
+        acc = (x > acc) ? x : acc;
+        break;
+      case K_REDUCTION_FLOAT_MIN:
+      case K_REDUCTION_INT_MIN:
+        acc = (x < acc) ? x : acc;
+        break;
+      default:
+        assert(false && "Unknown kernel_id in final reduction step");
+    }
+  }
+  return acc;
 }
