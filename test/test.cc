@@ -58,8 +58,8 @@ test_error test_reduction(uint32_t N, T min_val, T max_val, T init_val,
     cpu_result = cpu_op(cpu_result, a[i]);
   }
 
-  std::cout << "[TEST] CPU result: " << cpu_result << ", DPU result: " << dpu_result
-            << std::endl;
+  std::cout << "[TEST] CPU result: " << cpu_result
+            << ", DPU result: " << dpu_result << std::endl;
 
   return (fabs(dpu_result - cpu_result) < 1e-5) ? TEST_SUCCESS : TEST_ERROR;
 }
