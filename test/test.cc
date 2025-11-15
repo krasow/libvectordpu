@@ -58,8 +58,11 @@ test_error test_reduction(uint32_t N, T min_val, T max_val, T init_val,
     cpu_result = cpu_op(cpu_result, a[i]);
   }
 
-  std::cout << "[TEST] CPU result: " << cpu_result
-            << ", DPU result: " << dpu_result << std::endl;
+  // std::cout << "[TEST] CPU result: " << cpu_result
+  //           << ", DPU result: " << dpu_result << std::endl;
+
+  printf("[TEST] CPU result: %.6f, DPU result: %.6f\n",
+         static_cast<float>(cpu_result), static_cast<float>(dpu_result));
 
   return (fabs(dpu_result - cpu_result) < 1e-5) ? TEST_SUCCESS : TEST_ERROR;
 }
@@ -298,7 +301,7 @@ int main(void) {
   // RUN_TEST(test_max_reduction_int);
   // RUN_TEST(test_min_reduction_int);
 
-  // RUN_TEST(test_sum_reduction_float);
+  RUN_TEST(test_sum_reduction_float);
   // RUN_TEST(test_product_reduction_float);
   // RUN_TEST(test_max_reduction_float);
   // RUN_TEST(test_min_reduction_float);

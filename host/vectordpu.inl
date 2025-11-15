@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
-#include <numeric>  // for std::accumulate
 
 #include "logger.h"
 #include "runtime.h"

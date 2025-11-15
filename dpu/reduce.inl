@@ -9,16 +9,16 @@
 
 #define DEFINE_REDUCTION_KERNEL(TYPE, OP, FUNC)                                \
   int reduction_##TYPE##_##OP(void) {                                          \
+    enum { RES_MULT = (sizeof(TYPE) == 4) ? 2 : 1 };                           \
     unsigned int tasklet_id = me();                                            \
     uint32_t num_elems = args.num_elements;                                    \
                                                                                \
     __mram_ptr TYPE *rhs_ptr = (__mram_ptr TYPE *)(args.reduction.rhs_offset); \
-    __mram_ptr uint64_t *res_ptr =                                             \
-        (__mram_ptr uint64_t *)(args.reduction.res_offset);                    \
+    __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.reduction.res_offset); \
                                                                                \
     /* WRAM working buffer (DMA aligned) */                                    \
     __dma_aligned TYPE rhs_block[BLOCK_SIZE];                                  \
-    __dma_aligned uint64_t res_block[NR_TASKLETS];                             \
+    __dma_aligned TYPE res_block[NR_TASKLETS * RES_MULT];                      \
                                                                                \
     TYPE local_red = (TYPE)0;                                                  \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                   \
@@ -40,19 +40,28 @@
       }                                                                        \
     }                                                                          \
                                                                                \
-    mram_write(&local_red, (__mram_ptr void *)(res_ptr + tasklet_id),          \
+    /* write local result into MRAM using MINIMUM_WRITE_SIZE bytes */          \
+    /* compute per-tasklet write offset in TYPE slots */                       \
+    uint32_t write_slot = tasklet_id * RES_MULT;                               \
+    mram_write((void *)&local_red, (__mram_ptr TYPE *)(res_ptr + write_slot),  \
                MINIMUM_WRITE_SIZE);                                            \
                                                                                \
     barrier_wait(&my_barrier);                                                 \
+                                                                               \
     /* Tasklet 0 performs final reduction */                                   \
     if (tasklet_id == 0) {                                                     \
+      uint32_t total_slots = NR_TASKLETS * RES_MULT;                           \
+      /* read all slots back into WRAM (total_slots * sizeof(TYPE) bytes) */   \
       mram_read((__mram_ptr void const *)res_ptr, res_block,                   \
-                NR_TASKLETS *MINIMUM_WRITE_SIZE);                              \
+                total_slots * sizeof(TYPE));                                   \
                                                                                \
+      /* Reduce only the start of each slot group: index 0, slots,             \
+       * 2*slots...*/                                                          \
       TYPE total = (TYPE)res_block[0];                                         \
-      for (uint32_t i = 1; i < NR_TASKLETS; i++) {                             \
+      for (uint32_t i = RES_MULT; i < total_slots; i += RES_MULT) {            \
         total = FUNC(total, (TYPE)res_block[i]);                               \
       }                                                                        \
+                                                                               \
       mram_write(&total, (__mram_ptr void *)(args.reduction.res_offset),       \
                  MINIMUM_WRITE_SIZE);                                          \
     }                                                                          \
