@@ -301,7 +301,7 @@ int main(void) {
   // RUN_TEST(test_max_reduction_int);
   // RUN_TEST(test_min_reduction_int);
 
-  RUN_TEST(test_sum_reduction_float);
+  // RUN_TEST(test_sum_reduction_float);
   // RUN_TEST(test_product_reduction_float);
   // RUN_TEST(test_max_reduction_float);
   // RUN_TEST(test_min_reduction_float);

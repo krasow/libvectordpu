@@ -38,7 +38,7 @@ CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
 	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING) \
 	-DENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)
 
-HOST_TARGET := ${BUILDDIR}/libvectordpu
+HOST_TARGET := ${BUILDDIR}/libvectordpu.so
 DPU_TARGET := ${BUILDDIR}/runtime.dpu
 TEST_TARGET := ${TEST_DIR}/vectordpu_test
 
@@ -47,6 +47,9 @@ HOST_INCLUDES := host
 HOST_SOURCES := $(wildcard ${HOST_DIR}/*.cc)
 DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
 TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
+
+HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h)
+DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
 
 ifeq ($(DEBUG),1)
   CXXFLAGS += -g -O0 -DDEBUG -fsanitize=address -fno-omit-frame-pointer
@@ -69,11 +72,11 @@ DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 all: ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE)"
 
-${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES}
-	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@.so ${HOST_SOURCES} ${HOST_FLAGS} 
+${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES} ${HOST_HEADERS}
+	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@ ${HOST_SOURCES} ${HOST_FLAGS} 
 
 
-${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES}
+${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES} ${DPU_HEADERS}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES}
 
 $(TEST_TARGET): all

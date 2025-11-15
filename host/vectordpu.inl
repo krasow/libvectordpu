@@ -398,19 +398,10 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
 
   size_t stride = res_cpu.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
-  T acc = res_cpu[stride - 1];
-
-  size_t start = 0;
-  if (stride == 1) {
-    start = 1;
-  } else if (stride == 2) {
-    start = 3;
-  } else {
-    throw std::runtime_error("Reduction stride not supported");
-  }
-
+  T acc = res_cpu[0];
+  
   // reduce over the remaining DPUs
-  for (size_t i = start; i < res_cpu.size(); i += stride) {
+  for (size_t i = stride; i < res_cpu.size(); i += stride) {
     T x = res_cpu[i];
     switch (kernel_id) {
       case K_REDUCTION_FLOAT_SUM:
