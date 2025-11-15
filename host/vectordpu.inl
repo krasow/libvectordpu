@@ -399,7 +399,7 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   size_t stride = res_cpu.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
   T acc = res_cpu[0];
-  
+
   // reduce over the remaining DPUs
   for (size_t i = stride; i < res_cpu.size(); i += stride) {
     T x = res_cpu[i];

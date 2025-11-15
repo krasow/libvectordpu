@@ -40,15 +40,14 @@
                                                                                \
       /* Compute in WRAM */                                                    \
       for (uint32_t i = 0; i < block_elems; i++) {                             \
-        local_red = FUNC(rhs_block[i], local_red);                             \
+        local_red = FUNC(local_red, rhs_block[i]);                             \
       }                                                                        \
     }                                                                          \
                                                                                \
     /* write local result into MRAM using MINIMUM_WRITE_SIZE bytes */          \
     uint64_t buff = 0;                                                         \
     memcpy(&buff, &local_red, sizeof(TYPE));                                   \
-    mram_write((void *)&buff,                                                  \
-               (__mram_ptr uint64_t *)((uint64_t *)res_ptr + tasklet_id),      \
+    mram_write((void *)&buff, (__mram_ptr uint64_t *)res_ptr + tasklet_id,     \
                MINIMUM_WRITE_SIZE);                                            \
                                                                                \
     barrier_wait(&my_barrier);                                                 \
@@ -60,8 +59,8 @@
       mram_read((__mram_ptr void const *)res_ptr, res_block,                   \
                 total_slots * sizeof(TYPE));                                   \
       TYPE total = res_block[0];                                               \
-      for (uint32_t i = stride; i < total_slots; i += stride) {                \
-        total = FUNC(total, res_block[i]);                                     \
+      for (uint32_t i = 1; i < NR_TASKLETS; i++) {                             \
+        total = FUNC(total, res_block[i * stride]);                            \
       }                                                                        \
       memcpy(&buff, &total, sizeof(TYPE));                                     \
                                                                                \
