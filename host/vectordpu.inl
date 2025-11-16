@@ -406,18 +406,22 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
     switch (kernel_id) {
       case K_REDUCTION_FLOAT_SUM:
       case K_REDUCTION_INT_SUM:
+      case K_REDUCTION_DOUBLE_SUM:
         acc += x;
         break;
       case K_REDUCTION_FLOAT_PRODUCT:
       case K_REDUCTION_INT_PRODUCT:
+      case K_REDUCTION_DOUBLE_PRODUCT:
         acc *= x;
         break;
       case K_REDUCTION_FLOAT_MAX:
       case K_REDUCTION_INT_MAX:
+      case K_REDUCTION_DOUBLE_MAX:
         acc = (x > acc) ? x : acc;
         break;
       case K_REDUCTION_FLOAT_MIN:
       case K_REDUCTION_INT_MIN:
+      case K_REDUCTION_DOUBLE_MIN:
         acc = (x < acc) ? x : acc;
         break;
       default:
