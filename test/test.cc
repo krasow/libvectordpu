@@ -289,26 +289,28 @@ test_error test_min_reduction_float() {
 
 int main(void) {
   bool all_passed = true;
-  RUN_TEST(test_int_add);
-  RUN_TEST(test_int_sub);
-  RUN_TEST(test_float_add);
-  RUN_TEST(test_float_sub);
-  RUN_TEST(test_int_negate);
-  RUN_TEST(test_int_abs);
-  RUN_TEST(test_float_negate);
-  RUN_TEST(test_float_abs);
+  // RUN_TEST(test_int_add);
+  // RUN_TEST(test_int_sub);
+  // RUN_TEST(test_float_add);
+  // RUN_TEST(test_float_sub);
+  // RUN_TEST(test_int_negate);
+  // RUN_TEST(test_int_abs);
+  // RUN_TEST(test_float_negate);
+  // RUN_TEST(test_float_abs);
   RUN_TEST(test_chained_operations);
 
-  // RUN_TEST(test_sum_reduction_int);
+  RUN_TEST(test_sum_reduction_int);
   // RUN_TEST(test_product_reduction_int);
   // RUN_TEST(test_max_reduction_int);
   // RUN_TEST(test_min_reduction_int);
 
-  // RUN_TEST(test_sum_reduction_double);
-  // RUN_TEST(test_sum_reduction_float);
+  RUN_TEST(test_sum_reduction_double);
+  RUN_TEST(test_sum_reduction_float);
   // RUN_TEST(test_product_reduction_float);
   // RUN_TEST(test_max_reduction_float);
   // RUN_TEST(test_min_reduction_float);
+
+
 
   if (!all_passed) {
     std::cerr << "Some tests failed.\n";

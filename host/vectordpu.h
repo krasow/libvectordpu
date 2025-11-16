@@ -37,7 +37,7 @@ using vector_desc =
 template <typename T>
 class dpu_vector {
  public:
-  dpu_vector(uint32_t n, LOGGER_ARGS_WITH_DEFAULTS);
+  dpu_vector(uint32_t n, uint32_t reserved = 0, LOGGER_ARGS_WITH_DEFAULTS);
 
   ~dpu_vector();
 
@@ -53,10 +53,12 @@ class dpu_vector {
   void add_fence();
 
   vector_desc data_desc() const { return data_; }
+  uint32_t reserved() const { return reserved_; }
 
  private:
   vector_desc data_;
   uint32_t size_;
+  uint32_t reserved_ = 0;
   const char* debug_name = nullptr;
   const char* debug_file = nullptr;
   int debug_line = -1;

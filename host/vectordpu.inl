@@ -16,9 +16,10 @@
 #endif
 
 template <typename T>
-dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
+dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
                           std::source_location loc)
     : size_(n),
+      reserved_(reserved),
       debug_name(name.data()),
       debug_file(loc.file_name()),
       debug_line(loc.line()) {
@@ -33,7 +34,18 @@ dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
   log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
 #endif
 
-  data_ = runtime.get_allocator().allocate_upmem_vector(n, sizeof(T));
+  size_t reserved_mem = reserved * runtime.num_dpus();
+  // todo this is not intuitive 
+  size_t total_size = n + (reserved_mem / sizeof(T));
+
+  // round to the next multiple of 8 bytes
+  size_t alignment_required = (total_size * sizeof(T) / runtime.num_dpus());
+
+  if (alignment_required % 8 != 0) {
+    total_size += 8 - (alignment_required % 8);
+  }
+
+  data_ = runtime.get_allocator().allocate_upmem_vector(total_size, sizeof(T));
 }
 
 template <typename T>
@@ -158,7 +170,7 @@ template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
                                       std::source_location loc) {
-  dpu_vector<T> vec(cpu_vec.size(), name, loc);
+  dpu_vector<T> vec(cpu_vec.size(), 0, name, loc);
   // .data returns a std::pair<vector<uint32_t>, vector<uint32_t>>
   // the first element is vector of pointers to DPU memory per DPU
   // the second element is vector of sizes per DPU
@@ -189,6 +201,12 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
   auto desc = this->data_desc();  // pair< vector<uint32_t>, vector<uint32_t> >
+
+  uint32_t reserved = this->reserved();
+  // subtract reserved memory from desc
+  for (size_t i = 0; i < desc.second.size(); i++) {
+    desc.second[i] -= reserved;
+  }
 
 #if ENABLE_DPU_LOGGING >= 2
   print_vector_desc(desc);
@@ -382,7 +400,7 @@ void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
 template <typename T>
 T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> res(runtime.num_dpus());  // each dpu returns a single
+  dpu_vector<T> res(runtime.num_dpus(), NR_TASKLETS * sizeof(size_t));  // each dpu returns a single
 
   auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
   auto& event_queue = runtime.get_event_queue();
