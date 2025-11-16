@@ -83,6 +83,14 @@ struct BinaryKernelSelector<int> {
   static KernelID sub() { return KernelID::K_BINARY_INT_SUB; }
 };
 
+// double specialization
+template <>
+struct BinaryKernelSelector<double> {
+  static KernelID add() { return KernelID::K_BINARY_DOUBLE_ADD; }
+  static KernelID sub() { return KernelID::K_BINARY_DOUBLE_SUB; }
+};
+
+
 template <typename T>
 struct UnaryKernelSelector;
 
@@ -98,6 +106,13 @@ template <>
 struct UnaryKernelSelector<int> {
   static KernelID negate() { return KernelID::K_UNARY_INT_NEGATE; }
   static KernelID abs() { return KernelID::K_UNARY_INT_ABS; }
+};
+
+// double specialization
+template <>
+struct UnaryKernelSelector<double> {
+  static KernelID negate() { return KernelID::K_UNARY_DOUBLE_NEGATE; }
+  static KernelID abs() { return KernelID::K_UNARY_DOUBLE_ABS; }
 };
 
 template <typename T>
@@ -119,6 +134,15 @@ struct ReductionKernelSelector<int> {
   static KernelID product() { return KernelID::K_REDUCTION_INT_PRODUCT; }
   static KernelID max() { return KernelID::K_REDUCTION_INT_MAX; }
   static KernelID min() { return KernelID::K_REDUCTION_INT_MIN; }
+};
+
+// double specialization
+template <>
+struct ReductionKernelSelector<double> {
+  static KernelID sum() { return KernelID::K_REDUCTION_DOUBLE_SUM; }
+  static KernelID product() { return KernelID::K_REDUCTION_DOUBLE_PRODUCT; }
+  static KernelID max() { return KernelID::K_REDUCTION_DOUBLE_MAX; }
+  static KernelID min() { return KernelID::K_REDUCTION_DOUBLE_MIN; }
 };
 
 // ============================

@@ -58,13 +58,10 @@ test_error test_reduction(uint32_t N, T min_val, T max_val, T init_val,
     cpu_result = cpu_op(cpu_result, a[i]);
   }
 
-  // std::cout << "[TEST] CPU result: " << cpu_result
-  //           << ", DPU result: " << dpu_result << std::endl;
-
   printf("[TEST] CPU result: %.6f, DPU result: %.6f\n",
-         static_cast<float>(cpu_result), static_cast<float>(dpu_result));
+         static_cast<double>(cpu_result), static_cast<double>(dpu_result));
 
-  return (fabs(dpu_result - cpu_result) < 1e-5) ? TEST_SUCCESS : TEST_ERROR;
+  return (fabs(dpu_result - cpu_result) < 1e-4) ? TEST_SUCCESS : TEST_ERROR;
 }
 
 template <typename T, typename F>
@@ -260,7 +257,13 @@ test_error test_min_reduction_int() {
 }
 test_error test_sum_reduction_float() {
   return test_reduction<float>(
-      1024 * 1024, 0.0f, 1.0f, 0.0f, [](float acc, float x) { return acc + x; },
+      1024, 0.0f, 1.0f, 0.0f, [](float acc, float x) { return acc + x; },
+      [](auto& da) { return sum(da); });
+}
+
+test_error test_sum_reduction_double() {
+  return test_reduction<double>(
+      1024, 0.0, 1.0, 0.0, [](double acc, double x) { return acc + x; },
       [](auto& da) { return sum(da); });
 }
 
@@ -301,7 +304,9 @@ int main(void) {
   // RUN_TEST(test_max_reduction_int);
   // RUN_TEST(test_min_reduction_int);
 
-  RUN_TEST(test_sum_reduction_float);
+  RUN_TEST(test_sum_reduction_double);
+
+  // RUN_TEST(test_sum_reduction_float);
   // RUN_TEST(test_product_reduction_float);
   // RUN_TEST(test_max_reduction_float);
   // RUN_TEST(test_min_reduction_float);

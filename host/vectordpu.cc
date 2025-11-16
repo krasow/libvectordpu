@@ -78,6 +78,7 @@ T min(const dpu_vector<T>& a) {
 
 INSTANTIATE_ALL(int)
 INSTANTIATE_ALL(float)
+INSTANTIATE_ALL(double)
 
 #undef INSTANTIATE_BINARY_OP
 #undef INSTANTIATE_UNARY_OP
