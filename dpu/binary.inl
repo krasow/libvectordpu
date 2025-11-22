@@ -35,10 +35,10 @@
     return 0;                                                               \
   }
 
-#define INSTANTIATE_KERNELS(TYPE)       \
-  DEFINE_BINARY_KERNEL(TYPE, add, +)    \
+#define INSTANTIATE_KERNELS(TYPE)         \
+  DEFINE_BINARY_KERNEL(TYPE, add, +)      \
   DEFINE_BINARY_KERNEL(TYPE, subtract, -) \
-  DEFINE_BINARY_KERNEL(TYPE, sum, +)    \
+  DEFINE_BINARY_KERNEL(TYPE, sum, +)      \
   DEFINE_BINARY_KERNEL(TYPE, product, *)
 
 INSTANTIATE_KERNELS(float)

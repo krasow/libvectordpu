@@ -70,8 +70,7 @@
     return 0;                                                                  \
   }
 
-
-#define INSTANTIATE_KERNELS(TYPE)       \
+#define INSTANTIATE_KERNELS(TYPE)         \
   DEFINE_REDUCTION_KERNEL(TYPE, max, MAX) \
   DEFINE_REDUCTION_KERNEL(TYPE, min, MIN) \
   DEFINE_REDUCTION_KERNEL(TYPE, sum, SUM) \

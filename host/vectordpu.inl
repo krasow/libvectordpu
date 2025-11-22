@@ -34,18 +34,14 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
   log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
 #endif
 
-  size_t reserved_mem = reserved * runtime.num_dpus();
-  // todo this is not intuitive 
-  size_t total_size = n + (reserved_mem / sizeof(T));
+  // size_t alignment_required = (n * sizeof(T) / runtime.num_dpus());
 
-  // round to the next multiple of 8 bytes
-  size_t alignment_required = (total_size * sizeof(T) / runtime.num_dpus());
+  // // round to the next multiple of 8 bytes
+  // if (alignment_required % 8 != 0) {
+  //   total_size += 8 - (alignment_required % 8);
+  // }
 
-  if (alignment_required % 8 != 0) {
-    total_size += 8 - (alignment_required % 8);
-  }
-
-  data_ = runtime.get_allocator().allocate_upmem_vector(total_size, sizeof(T));
+  data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
 }
 
 template <typename T>
@@ -400,7 +396,8 @@ void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
 template <typename T>
 T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> res(runtime.num_dpus(), NR_TASKLETS * sizeof(size_t));  // each dpu returns a single
+  dpu_vector<T> res(runtime.num_dpus(),
+                    NR_TASKLETS * sizeof(size_t));  // each dpu returns a single
 
   auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
   auto& event_queue = runtime.get_event_queue();

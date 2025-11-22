@@ -17,7 +17,7 @@ allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
   free_list_.resize(num_dpus_);
 }
 
-vector_desc allocator::allocate_upmem_vector(std::size_t n,
+vector_desc allocator::allocate_upmem_vector(std::size_t n, std::size_t reserved_mem_per_dpu,
                                              std::size_t size_type) {
   // grab lock
   std::lock_guard<std::mutex> lock(this->lock);
@@ -25,21 +25,20 @@ vector_desc allocator::allocate_upmem_vector(std::size_t n,
   vector<uint32_t> vec_ptrs(num_dpus);
   vector<uint32_t> vec_sizes(num_dpus);
 
-  size_t size_per_dpu = n / num_dpus;
-
-  if (size_per_dpu * size_type == 4) {
+  size_t elems_per_dpu = n / num_dpus;
+  if (elems_per_dpu * size_type == 4) {
     // ensure at least 8 bytes per DPU to avoid zero-size allocations
-    size_per_dpu = 2;
+    elems_per_dpu = 2;
   }
 
-  size_t remainder = n % num_dpus;
+  size_t remainder = (elems_per_dpu / size_type) % num_dpus;
 
   for (size_t i = 0; i < num_dpus; i++) {
-    size_t alloc_size = (size_per_dpu + (i < remainder ? 1 : 0)) * size_type;
-    uint32_t addr = allocate(i, alloc_size);  // use bump/free-list allocator
+    size_t alloc_size = (elems_per_dpu + (i < remainder ? 1 : 0)) * size_type;
+    uint32_t addr = allocate(i, alloc_size + reserved_mem_per_dpu);  // use bump/free-list allocator
 
     vec_ptrs[i] = addr;
-    vec_sizes[i] = alloc_size;
+    vec_sizes[i] = alloc_size + reserved_mem_per_dpu;
   }
 
   return std::make_pair(vec_ptrs, vec_sizes);

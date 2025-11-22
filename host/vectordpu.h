@@ -92,7 +92,6 @@ struct BinaryKernelSelector<double> {
   static KernelID sub() { return KernelID::K_BINARY_DOUBLE_SUB; }
 };
 
-
 template <typename T>
 struct UnaryKernelSelector;
 

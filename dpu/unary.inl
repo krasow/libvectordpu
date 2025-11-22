@@ -40,7 +40,7 @@
     return 0;                                                              \
   }
 
-#define INSTANTIATE_KERNELS(TYPE)       \
+#define INSTANTIATE_KERNELS(TYPE)           \
   DEFINE_UNARY_KERNEL(TYPE, negate, NEGATE) \
   DEFINE_UNARY_KERNEL(TYPE, abs, ABS)
 

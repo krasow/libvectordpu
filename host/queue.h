@@ -19,7 +19,9 @@ class Event {
   std::function<void()> cb;
 
   // Result of the event
-  std::variant<std::monostate, dpu_vector<int>, dpu_vector<float>, dpu_vector<double>> res;
+  std::variant<std::monostate, dpu_vector<int>, dpu_vector<float>,
+               dpu_vector<double>>
+      res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
 
