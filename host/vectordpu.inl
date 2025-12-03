@@ -120,7 +120,7 @@ void dpu_vector<T>::add_fence() {
   event_queue.process_events(e->id);
 }
 
-void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
+void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc, uint32_t reserved) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -130,18 +130,18 @@ void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu];
+    element += desc.second[idx_dpu] - reserved;
   }
 
   uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0];
+  size_t xfer_size = desc.second[0] - reserved;
 
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
 }
 
-void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc) {
+void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc, uint32_t reserved) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -151,12 +151,11 @@ void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu];
+    element += desc.second[idx_dpu] - reserved;
   }
 
   uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0];
-
+  size_t xfer_size = desc.second[0] - reserved;
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -173,11 +172,11 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   auto desc = vec.data_desc();
 
 #if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc);
+  print_vector_desc(desc, vec.reserved());
 #endif
-
+  uint32_t reserved = vec.reserved();
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc);
+  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc, reserved);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -197,15 +196,10 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
   auto desc = this->data_desc();  // pair< vector<uint32_t>, vector<uint32_t> >
-
   uint32_t reserved = this->reserved();
-  // subtract reserved memory from desc
-  for (size_t i = 0; i < desc.second.size(); i++) {
-    desc.second[i] -= reserved;
-  }
 
 #if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc);
+  print_vector_desc(desc, this->reserved());
 #endif
 
   // Allocate CPU buffer large enough to hold all data
@@ -228,7 +222,7 @@ vector<T> dpu_vector<T>::to_cpu() {
   vector<T> cpu_vec(total_size);
 
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc);
+  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc, reserved);
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
@@ -402,6 +396,11 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
   auto& event_queue = runtime.get_event_queue();
 
+  // std::shared_ptr<Event> e1 =
+  //     std::make_shared<Event>(Event::OperationType::FENCE);
+  // event_queue.submit(e1);
+  // event_queue.process_events(e1->id);
+
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
@@ -414,6 +413,10 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   size_t stride = res_cpu.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
   T acc = res_cpu[0];
+
+  for (size_t i = 0; i < res_cpu.size();  i++) {
+    std::cout << "Partial result[" << i << "] = " << res_cpu[i] << std::endl;
+  }
 
   // reduce over the remaining DPUs
   for (size_t i = stride; i < res_cpu.size(); i += stride) {

@@ -17,7 +17,8 @@ allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
   free_list_.resize(num_dpus_);
 }
 
-vector_desc allocator::allocate_upmem_vector(std::size_t n, std::size_t reserved_mem_per_dpu,
+vector_desc allocator::allocate_upmem_vector(std::size_t n,
+                                             std::size_t reserved_mem_per_dpu,
                                              std::size_t size_type) {
   // grab lock
   std::lock_guard<std::mutex> lock(this->lock);
@@ -35,7 +36,8 @@ vector_desc allocator::allocate_upmem_vector(std::size_t n, std::size_t reserved
 
   for (size_t i = 0; i < num_dpus; i++) {
     size_t alloc_size = (elems_per_dpu + (i < remainder ? 1 : 0)) * size_type;
-    uint32_t addr = allocate(i, alloc_size + reserved_mem_per_dpu);  // use bump/free-list allocator
+    uint32_t addr = allocate(
+        i, alloc_size + reserved_mem_per_dpu);  // use bump/free-list allocator
 
     vec_ptrs[i] = addr;
     vec_sizes[i] = alloc_size + reserved_mem_per_dpu;

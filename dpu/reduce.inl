@@ -54,6 +54,7 @@
                                                                                \
     /* Tasklet 0 performs final reduction */                                   \
     if (tasklet_id == 0) {                                                     \
+      buff = 0;                                                                \
       uint32_t total_slots = NR_TASKLETS * stride;                             \
       /* read all slots back into WRAM (total_slots * sizeof(TYPE) bytes) */   \
       mram_read((__mram_ptr void const *)res_ptr, res_block,                   \

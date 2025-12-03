@@ -86,7 +86,7 @@ class EventQueue {
 
  private:
   std::mutex mtx_;
-  size_t counter_ = 0;
+  size_t counter_ = 1;
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;

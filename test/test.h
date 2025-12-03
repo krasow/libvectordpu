@@ -25,7 +25,6 @@ using test_error = uint32_t;
     }                                                             \
   } while (0)
 
-
 #define DEFINE_BINARY_TEST(TYPE, NAME, OP)                         \
   test_error test_##TYPE##_##NAME() {                              \
     return test_binary_op<TYPE>(                                   \
@@ -35,21 +34,18 @@ using test_error = uint32_t;
         cpu_equiv<TYPE>([](TYPE x, TYPE y) { return x OP y; }));   \
   }
 
-#define DEFINE_UNARY_TEST(TYPE, NAME, DPU_EXPR, CPU_EXPR)               \
-test_error test_##TYPE##_##NAME() {                                     \
-    return test_unary_op<TYPE>(                                         \
-        [](const dpu_vector<TYPE>& a){ return DPU_EXPR; },              \
-        [](TYPE x){ return CPU_EXPR; }                                  \
-    );                                                                  \
-}
+#define DEFINE_UNARY_TEST(TYPE, NAME, DPU_EXPR, CPU_EXPR)   \
+  test_error test_##TYPE##_##NAME() {                       \
+    return test_unary_op<TYPE>(                             \
+        [](const dpu_vector<TYPE>& a) { return DPU_EXPR; }, \
+        [](TYPE x) { return CPU_EXPR; });                   \
+  }
 
 #define DEFINE_REDUCTION_TEST(TYPE, NAME, N, LO, HI, INIT, CPU_EXPR, DPU_EXPR) \
-test_error test_##TYPE##_##NAME() {                                            \
+  test_error test_##TYPE##_##NAME() {                                          \
     return test_reduction<TYPE>(                                               \
-        N, LO, HI, INIT,                                                       \
-        [](TYPE acc, TYPE x){ return (CPU_EXPR); },                            \
-        [](const dpu_vector<TYPE>& a){ return (DPU_EXPR); }                    \
-    );                                                                         \
-}
+        N, LO, HI, INIT, [](TYPE acc, TYPE x) { return (CPU_EXPR); },          \
+        [](const dpu_vector<TYPE>& a) { return (DPU_EXPR); });                 \
+  }
 
 #include "test.inl"

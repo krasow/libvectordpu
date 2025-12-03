@@ -92,6 +92,7 @@ bool EventQueue::process_next() {
     return false;
   }
   std::shared_ptr<Event> e = operations_.front();
+  operations_.pop_front();
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
@@ -99,20 +100,6 @@ bool EventQueue::process_next() {
 
   debug_active_events();
   debug_print_queue();
-
-  // we don't need this as UPMEM thread worker queue handles this
-  //   if (e->has_parents) {
-  //     for (const auto& parent : e->parents) {
-  //       if (!parent->finished) {
-  // #if ENABLE_DPU_LOGGING >= 2
-  //         logger.lock() << "[EventQueue] Event id " << e->id
-  //                       << " has unfinished parents, deferring." <<
-  //                       std::endl;
-  // #endif
-  //         return false;
-  //       }
-  //     }
-  //   }
 
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[EventQueue] Processing id " << e->id << ": "
@@ -141,17 +128,18 @@ bool EventQueue::process_next() {
     default:
       assert(false && "Unknown event type");
   }
-
+  
   current_event_ = e;
   running_events_.push_back(e);
-  operations_.pop_front();
   return true;
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
     bool made_progress = this->process_next();
-
+    if(this->get_curr_event_id() > wait_for_id) {
+      break;
+    }
     // check if wait_for_id event has completed
     if (this->get_curr_event_id() == wait_for_id &&
         this->get_curr_event() != nullptr && this->get_curr_event()->finished) {

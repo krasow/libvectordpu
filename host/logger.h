@@ -42,7 +42,7 @@ class Logger {
   Lock lock() { return Lock(*this); }
 };
 
-inline void print_vector_desc(vector_desc desc);
+inline void print_vector_desc(vector_desc desc, uint32_t reserved);
 
 inline void log_allocation(const std::type_info& type, uint32_t n,
                            std::string_view debug_name, const char* debug_file,
