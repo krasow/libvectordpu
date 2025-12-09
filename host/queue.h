@@ -19,7 +19,9 @@ class Event {
   std::function<void()> cb;
 
   // Result of the event
-  std::variant<std::monostate, dpu_vector<int>, dpu_vector<float>> res;
+  std::variant<std::monostate, dpu_vector<int>, dpu_vector<float>,
+               dpu_vector<double>>
+      res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
 
@@ -84,7 +86,7 @@ class EventQueue {
 
  private:
   std::mutex mtx_;
-  size_t counter_ = 0;
+  size_t counter_ = 1;
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;

@@ -10,15 +10,28 @@ __host DPU_LAUNCH_ARGS args;
 BARRIER_INIT(my_barrier, NR_TASKLETS);
 
 #include "binary.inl"
+#include "reduce.inl"
 #include "unary.inl"
 
-int (*kernels[KERNEL_COUNT])(void) = {
-    // Unary
-    unary_float_negate, unary_float_abs, unary_int_negate, unary_int_abs,
+#define UNARY_KERNELS(TYPE) unary_##TYPE##_negate, unary_##TYPE##_abs
 
-    // Binary
-    binary_float_add, binary_float_subtract, binary_int_add,
-    binary_int_subtract};
+#define BINARY_KERNELS(TYPE) binary_##TYPE##_add, binary_##TYPE##_subtract
+
+#define REDUCTION_KERNELS(TYPE)                                               \
+  reduction_##TYPE##_sum, reduction_##TYPE##_product, reduction_##TYPE##_max, \
+      reduction_##TYPE##_min
+
+#define ALL_UNARY_KERNELS \
+  UNARY_KERNELS(float), UNARY_KERNELS(int), UNARY_KERNELS(double)
+
+#define ALL_BINARY_KERNELS \
+  BINARY_KERNELS(float), BINARY_KERNELS(int), BINARY_KERNELS(double)
+
+#define ALL_REDUCTION_KERNELS \
+  REDUCTION_KERNELS(float), REDUCTION_KERNELS(int), REDUCTION_KERNELS(double)
+
+int (*kernels[KERNEL_COUNT])(void) = {ALL_UNARY_KERNELS, ALL_BINARY_KERNELS,
+                                      ALL_REDUCTION_KERNELS};
 
 int main(void) {
   // args.kernel indicates which kernel to run

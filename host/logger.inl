@@ -22,6 +22,22 @@ inline const char* kernel_id_to_string(KernelID id) {
       return "BINARY_INT_ADD";
     case K_BINARY_INT_SUB:
       return "BINARY_INT_SUB";
+    case K_REDUCTION_FLOAT_SUM:
+      return "REDUCTION_FLOAT_SUM";
+    case K_REDUCTION_FLOAT_PRODUCT:
+      return "REDUCTION_FLOAT_PRODUCT";
+    case K_REDUCTION_FLOAT_MAX:
+      return "REDUCTION_FLOAT_MAX";
+    case K_REDUCTION_FLOAT_MIN:
+      return "REDUCTION_FLOAT_MIN";
+    case K_REDUCTION_INT_SUM:
+      return "REDUCTION_INT_SUM";
+    case K_REDUCTION_INT_PRODUCT:
+      return "REDUCTION_INT_PRODUCT";
+    case K_REDUCTION_INT_MAX:
+      return "REDUCTION_INT_MAX";
+    case K_REDUCTION_INT_MIN:
+      return "REDUCTION_INT_MIN";
     case KERNEL_COUNT:
       return "KERNEL_COUNT";
     default:
@@ -29,13 +45,13 @@ inline const char* kernel_id_to_string(KernelID id) {
   }
 }
 
-inline void print_vector_desc(vector_desc desc) {
+inline void print_vector_desc(vector_desc desc, uint32_t reserved) {
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[debug-help] Vector Description:" << std::endl;
+  logger.lock() << "[debug-help] Vector Description with reserved " << reserved << " bytes: " << std::endl;
   for (size_t i = 0; i < desc.first.size(); i++) {
     logger.lock() << "\t DPU[" << i << "] \t"
                   << "ptr=0x" << std::hex << desc.first[i]
-                  << " size=" << std::dec << desc.second[i] << std::endl;
+                  << " bytes=" << std::dec << desc.second[i] << std::endl;
   }
 }
 
@@ -68,19 +84,23 @@ inline void log_dpu_launch_args(const DPU_LAUNCH_ARGS* args,
     log << "[task-logger] DPU[" << i << "]\t"
         << "kernel="
         << kernel_id_to_string(static_cast<KernelID>(args[i].kernel))
-        << " is_binary=" << static_cast<int>(args[i].is_binary)
+        << " ktype=" << static_cast<int>(args[i].ktype)
         << " num_elements=" << args[i].num_elements
         << " size_type=" << args[i].size_type;
 
-    if (args[i].is_binary) {
+    if (args[i].ktype == KERNEL_BINARY) {
       log << std::hex << std::setfill('0') << " lhs_offset=0x" << std::setw(8)
           << args[i].binary.lhs_offset << " rhs_offset=0x" << std::setw(8)
           << args[i].binary.rhs_offset << " res_offset=0x" << std::setw(8)
           << args[i].binary.res_offset << std::dec;
-    } else {
+    } else if (args[i].ktype == KERNEL_UNARY) {
       log << std::hex << std::setfill('0') << " src_offset=0x" << std::setw(8)
           << args[i].unary.rhs_offset << " res_offset=0x" << std::setw(8)
           << args[i].unary.res_offset << std::dec;
+    } else if (args[i].ktype == KERNEL_REDUCTION) {
+      log << std::hex << std::setfill('0') << " rhs_offset=0x" << std::setw(8)
+          << args[i].reduction.rhs_offset << " res_offset=0x" << std::setw(8)
+          << args[i].reduction.res_offset << std::dec;
     }
 
     log << std::endl;

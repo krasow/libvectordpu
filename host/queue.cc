@@ -92,27 +92,11 @@ bool EventQueue::process_next() {
     return false;
   }
   std::shared_ptr<Event> e = operations_.front();
+  operations_.pop_front();
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
 #endif
-
-  debug_active_events();
-  debug_print_queue();
-
-  // we don't need this as UPMEM thread worker queue handles this
-  //   if (e->has_parents) {
-  //     for (const auto& parent : e->parents) {
-  //       if (!parent->finished) {
-  // #if ENABLE_DPU_LOGGING >= 2
-  //         logger.lock() << "[EventQueue] Event id " << e->id
-  //                       << " has unfinished parents, deferring." <<
-  //                       std::endl;
-  // #endif
-  //         return false;
-  //       }
-  //     }
-  //   }
 
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[EventQueue] Processing id " << e->id << ": "
@@ -141,17 +125,21 @@ bool EventQueue::process_next() {
     default:
       assert(false && "Unknown event type");
   }
-
+  
   current_event_ = e;
   running_events_.push_back(e);
-  operations_.pop_front();
+  
+  debug_active_events();
+  debug_print_queue();
   return true;
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
     bool made_progress = this->process_next();
-
+    if(this->get_curr_event_id() > wait_for_id) {
+      break;
+    }
     // check if wait_for_id event has completed
     if (this->get_curr_event_id() == wait_for_id &&
         this->get_curr_event() != nullptr && this->get_curr_event()->finished) {
@@ -191,17 +179,23 @@ void EventQueue::debug_print_queue() {
 void EventQueue::debug_active_events() {
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  if (!running_events_.empty()) {
-    logger.lock() << "[EventQueue] Current active events:" << std::endl;
 
-    for (const auto& e : running_events_) {
-      logger.lock() << "  Event id: " << e->id
-                    << ", type: " << operationtype_to_string(e->op)
-                    << ", started: " << e->started
-                    << ", finished: " << e->finished << std::endl;
+  auto& events = get_active_events();
+  std::mutex& events_mutex = get_mutex();
+  {
+    std::lock_guard<std::mutex> lock(events_mutex);
+    if (!events.empty()) {
+      logger.lock() << "[EventQueue] Current active events:" << std::endl;
+
+      for (const auto& e : events) {
+        logger.lock() << "  Event id: " << e->id
+                      << ", type: " << operationtype_to_string(e->op)
+                      << ", started: " << e->started
+                      << ", finished: " << e->finished << std::endl;
+      }
+    } else {
+      logger.lock() << "[EventQueue] No active events." << std::endl;
     }
-  } else {
-    logger.lock() << "[EventQueue] No active events." << std::endl;
   }
 #endif
 }

@@ -16,9 +16,10 @@
 #endif
 
 template <typename T>
-dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
+dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
                           std::source_location loc)
     : size_(n),
+      reserved_(reserved),
       debug_name(name.data()),
       debug_file(loc.file_name()),
       debug_line(loc.line()) {
@@ -33,7 +34,7 @@ dpu_vector<T>::dpu_vector(uint32_t n, std::string_view name,
   log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
 #endif
 
-  data_ = runtime.get_allocator().allocate_upmem_vector(n, sizeof(T));
+  data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
 }
 
 template <typename T>
@@ -112,7 +113,7 @@ void dpu_vector<T>::add_fence() {
   event_queue.process_events(e->id);
 }
 
-void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
+void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc, uint32_t reserved) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -122,18 +123,18 @@ void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu];
+    element += desc.second[idx_dpu] - reserved;
   }
 
   uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0];
+  size_t xfer_size = desc.second[0] - reserved;
 
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
 }
 
-void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc) {
+void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc, uint32_t reserved) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -143,12 +144,11 @@ void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu];
+    element += desc.second[idx_dpu] - reserved;
   }
 
   uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0];
-
+  size_t xfer_size = desc.second[0] - reserved;
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -158,18 +158,18 @@ template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
                                       std::source_location loc) {
-  dpu_vector<T> vec(cpu_vec.size(), name, loc);
+  dpu_vector<T> vec(cpu_vec.size(), 0, name, loc);
   // .data returns a std::pair<vector<uint32_t>, vector<uint32_t>>
   // the first element is vector of pointers to DPU memory per DPU
   // the second element is vector of sizes per DPU
   auto desc = vec.data_desc();
 
 #if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc);
+  print_vector_desc(desc, vec.reserved());
 #endif
-
+  uint32_t reserved = vec.reserved();
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc);
+  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc, reserved);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -189,17 +189,33 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
   auto desc = this->data_desc();  // pair< vector<uint32_t>, vector<uint32_t> >
+  uint32_t reserved = this->reserved();
 
 #if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc);
+  print_vector_desc(desc, this->reserved());
 #endif
 
   // Allocate CPU buffer large enough to hold all data
-  vector<T> cpu_vec(this->size());
-  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc);
-
+  size_t total_size = this->size();
   auto& runtime = DpuRuntime::get();
+  size_t num_dpus = runtime.num_dpus();
+  size_t min_xfer = 8;  // 8 bytes
+
+  // Compute bytes per DPU
+  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
+
+  // Ensure at least 8 bytes per DPU
+  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
+    // Round up to the number of elements that makes 8 bytes per DPU
+    size_t elems_per_dpu =
+        (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /sizeof(T))
+    total_size = num_dpus * elems_per_dpu;
+  }
+
+  vector<T> cpu_vec(total_size);
+
+  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
+  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc, reserved);
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
@@ -207,16 +223,24 @@ vector<T> dpu_vector<T>::to_cpu() {
 
   event_queue.submit(e);
 
-  // Auto-fence after DPU->HOST transfer if enabled
-#if ENABLE_AUTO_FENCING == 1
-  event_queue.process_events(e->id);
-#endif
-
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[queue-append] DPU->HOST XFER " << cpu_vec.size()
                 << " elements from DPUs" << std::endl;
 #endif
+
+// Auto-fence after DPU->HOST transfer if enabled
+#if ENABLE_AUTO_FENCING == 1
+  event_queue.process_events(e->id);
+// need the event to be completed before reading printf output
+#if ENABLE_DPU_PRINTING == 1
+  // read and print DPU logs to host stdout
+  dpu_set_t dpu;
+  dpu_set_t& set = runtime.dpu_set();
+  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
+#endif
+#endif
+
   return cpu_vec;
 }
 
@@ -230,8 +254,8 @@ void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].is_binary = true;
-    args[i].num_elements = lhs.data_desc().second[i];
+    args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
+    args[i].num_elements = lhs.data_desc().second[i] / sizeof(T);
     args[i].size_type = sizeof(T);
     args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.data()[i]);
     args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.data()[i]);
@@ -283,8 +307,8 @@ void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].is_binary = false;
-    args[i].num_elements = a.data_desc().second[i];
+    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
+    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
     args[i].size_type = sizeof(T);
     args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
     args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
@@ -321,4 +345,94 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
   event_queue.submit(e);
 
   return res;
+}
+
+template <typename T>
+void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
+                               KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+
+  uint32_t nr_of_dpus = runtime.num_dpus();
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
+    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
+    args[i].size_type = sizeof(T);
+    args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
+    args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  log_dpu_launch_args(args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
+}
+
+template <typename T>
+T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> res(runtime.num_dpus(),
+                    NR_TASKLETS * sizeof(size_t));  // each dpu returns a single
+
+  auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->res = res;
+  event_queue.submit(e);
+
+  vector<T> res_cpu = res.to_cpu();
+
+  assert(res_cpu.size() % runtime.num_dpus() == 0);
+
+  size_t stride = res_cpu.size() / runtime.num_dpus();
+  // initialize accumulator with the first partial result
+  T acc = res_cpu[0];
+
+  // for (size_t i = 0; i < res_cpu.size();  i += stride) {
+  //   std::cout << "Partial result[" << i << "] = " << (T)res_cpu[i] << std::endl;
+  // }
+
+  // reduce over the remaining DPUs
+  for (size_t i = stride; i < res_cpu.size(); i += stride) {
+    T x = res_cpu[i];
+    switch (kernel_id) {
+      case K_REDUCTION_FLOAT_SUM:
+      case K_REDUCTION_INT_SUM:
+      case K_REDUCTION_DOUBLE_SUM:
+        acc += x;
+        break;
+      case K_REDUCTION_FLOAT_PRODUCT:
+      case K_REDUCTION_INT_PRODUCT:
+      case K_REDUCTION_DOUBLE_PRODUCT:
+        acc *= x;
+        break;
+      case K_REDUCTION_FLOAT_MAX:
+      case K_REDUCTION_INT_MAX:
+      case K_REDUCTION_DOUBLE_MAX:
+        acc = (x > acc) ? x : acc;
+        break;
+      case K_REDUCTION_FLOAT_MIN:
+      case K_REDUCTION_INT_MIN:
+      case K_REDUCTION_DOUBLE_MIN:
+        acc = (x < acc) ? x : acc;
+        break;
+      default:
+        assert(false && "Unknown kernel_id in final reduction step");
+    }
+  }
+  return acc;
 }

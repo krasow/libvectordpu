@@ -37,7 +37,7 @@ using vector_desc =
 template <typename T>
 class dpu_vector {
  public:
-  dpu_vector(uint32_t n, LOGGER_ARGS_WITH_DEFAULTS);
+  dpu_vector(uint32_t n, uint32_t reserved = 0, LOGGER_ARGS_WITH_DEFAULTS);
 
   ~dpu_vector();
 
@@ -53,10 +53,12 @@ class dpu_vector {
   void add_fence();
 
   vector_desc data_desc() const { return data_; }
+  uint32_t reserved() const { return reserved_; }
 
  private:
   vector_desc data_;
   uint32_t size_;
+  uint32_t reserved_ = 0;
   const char* debug_name = nullptr;
   const char* debug_file = nullptr;
   int debug_line = -1;
@@ -83,6 +85,13 @@ struct BinaryKernelSelector<int> {
   static KernelID sub() { return KernelID::K_BINARY_INT_SUB; }
 };
 
+// double specialization
+template <>
+struct BinaryKernelSelector<double> {
+  static KernelID add() { return KernelID::K_BINARY_DOUBLE_ADD; }
+  static KernelID sub() { return KernelID::K_BINARY_DOUBLE_SUB; }
+};
+
 template <typename T>
 struct UnaryKernelSelector;
 
@@ -100,6 +109,43 @@ struct UnaryKernelSelector<int> {
   static KernelID abs() { return KernelID::K_UNARY_INT_ABS; }
 };
 
+// double specialization
+template <>
+struct UnaryKernelSelector<double> {
+  static KernelID negate() { return KernelID::K_UNARY_DOUBLE_NEGATE; }
+  static KernelID abs() { return KernelID::K_UNARY_DOUBLE_ABS; }
+};
+
+template <typename T>
+struct ReductionKernelSelector;
+
+// float specialization
+template <>
+struct ReductionKernelSelector<float> {
+  static KernelID sum() { return KernelID::K_REDUCTION_FLOAT_SUM; }
+  static KernelID product() { return KernelID::K_REDUCTION_FLOAT_PRODUCT; }
+  static KernelID max() { return KernelID::K_REDUCTION_FLOAT_MAX; }
+  static KernelID min() { return KernelID::K_REDUCTION_FLOAT_MIN; }
+};
+
+// int specialization
+template <>
+struct ReductionKernelSelector<int> {
+  static KernelID sum() { return KernelID::K_REDUCTION_INT_SUM; }
+  static KernelID product() { return KernelID::K_REDUCTION_INT_PRODUCT; }
+  static KernelID max() { return KernelID::K_REDUCTION_INT_MAX; }
+  static KernelID min() { return KernelID::K_REDUCTION_INT_MIN; }
+};
+
+// double specialization
+template <>
+struct ReductionKernelSelector<double> {
+  static KernelID sum() { return KernelID::K_REDUCTION_DOUBLE_SUM; }
+  static KernelID product() { return KernelID::K_REDUCTION_DOUBLE_PRODUCT; }
+  static KernelID max() { return KernelID::K_REDUCTION_DOUBLE_MAX; }
+  static KernelID min() { return KernelID::K_REDUCTION_DOUBLE_MIN; }
+};
+
 // ============================
 // DPU Launch helpers
 // ============================
@@ -110,17 +156,29 @@ dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
 template <typename T>
 dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id);
 
-// ============================
-// Operators
-// ============================
+// binary operations
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs);
 
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs);
 
+// unary operations
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a);
 
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a);
+
+// reduction operations
+template <typename T>
+T sum(const dpu_vector<T>& a);
+
+template <typename T>
+T product(const dpu_vector<T>& a);
+
+template <typename T>
+T max(const dpu_vector<T>& a);
+
+template <typename T>
+T min(const dpu_vector<T>& a);
