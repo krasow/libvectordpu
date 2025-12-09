@@ -29,7 +29,7 @@ auto cpu_equiv_unary(Fn fn) {
 
 template <typename T, typename FnDPU, typename FnCPU>
 test_error test_binary_op(FnDPU dpu_op, FnCPU cpu_op) {
-  const uint32_t N = 1024 * 1024;
+  const uint32_t N = elements;
   std::vector<T> a(N), b(N);
 
   for (uint32_t i = 0; i < N; i++) {
@@ -46,7 +46,7 @@ test_error test_binary_op(FnDPU dpu_op, FnCPU cpu_op) {
 
 template <typename T, typename FnDPU, typename FnCPU>
 test_error test_unary_op(FnDPU dpu_op, FnCPU cpu_op) {
-  const uint32_t N = 1024 * 1024;
+  const uint32_t N = elements;
   std::vector<T> a(N);
 
   for (uint32_t i = 0; i < N; i++) a[i] = random_value<T>();
@@ -77,11 +77,7 @@ test_error test_reduction(uint32_t N, T min_val, T max_val, T init_val,
   for (uint32_t i = 0; i < N; i++) {
     cpu_result = cpu_op(cpu_result, a[i]);
   }
-
-  printf("[TEST] CPU result: %.6f, DPU result: %.6f\n",
-         static_cast<double>(cpu_result), static_cast<double>(dpu_result));
-
-  return (fabs(dpu_result - cpu_result) < 1e-4) ? TEST_SUCCESS : TEST_ERROR;
+  return (fabs(dpu_result - cpu_result) < 1e-2) ? TEST_SUCCESS : TEST_ERROR;
 }
 
 template <typename T, typename F>

@@ -34,13 +34,6 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
   log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
 #endif
 
-  // size_t alignment_required = (n * sizeof(T) / runtime.num_dpus());
-
-  // // round to the next multiple of 8 bytes
-  // if (alignment_required % 8 != 0) {
-  //   total_size += 8 - (alignment_required % 8);
-  // }
-
   data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
 }
 
@@ -262,7 +255,7 @@ void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
-    args[i].num_elements = lhs.data_desc().second[i];
+    args[i].num_elements = lhs.data_desc().second[i] / sizeof(T);
     args[i].size_type = sizeof(T);
     args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.data()[i]);
     args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.data()[i]);
@@ -315,7 +308,7 @@ void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
-    args[i].num_elements = a.data_desc().second[i];
+    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
     args[i].size_type = sizeof(T);
     args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
     args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
@@ -365,7 +358,7 @@ void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
-    args[i].num_elements = a.data_desc().second[i];
+    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
     args[i].size_type = sizeof(T);
     args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
     args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
@@ -396,11 +389,6 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
   auto& event_queue = runtime.get_event_queue();
 
-  // std::shared_ptr<Event> e1 =
-  //     std::make_shared<Event>(Event::OperationType::FENCE);
-  // event_queue.submit(e1);
-  // event_queue.process_events(e1->id);
-
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
@@ -414,9 +402,9 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   // initialize accumulator with the first partial result
   T acc = res_cpu[0];
 
-  for (size_t i = 0; i < res_cpu.size();  i++) {
-    std::cout << "Partial result[" << i << "] = " << res_cpu[i] << std::endl;
-  }
+  // for (size_t i = 0; i < res_cpu.size();  i += stride) {
+  //   std::cout << "Partial result[" << i << "] = " << (T)res_cpu[i] << std::endl;
+  // }
 
   // reduce over the remaining DPUs
   for (size_t i = stride; i < res_cpu.size(); i += stride) {

@@ -98,9 +98,6 @@ bool EventQueue::process_next() {
   Logger& logger = DpuRuntime::get().get_logger();
 #endif
 
-  debug_active_events();
-  debug_print_queue();
-
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[EventQueue] Processing id " << e->id << ": "
                 << operationtype_to_string(e->op) << " event." << std::endl;
@@ -131,6 +128,9 @@ bool EventQueue::process_next() {
   
   current_event_ = e;
   running_events_.push_back(e);
+  
+  debug_active_events();
+  debug_print_queue();
   return true;
 }
 
@@ -179,17 +179,23 @@ void EventQueue::debug_print_queue() {
 void EventQueue::debug_active_events() {
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  if (!running_events_.empty()) {
-    logger.lock() << "[EventQueue] Current active events:" << std::endl;
 
-    for (const auto& e : running_events_) {
-      logger.lock() << "  Event id: " << e->id
-                    << ", type: " << operationtype_to_string(e->op)
-                    << ", started: " << e->started
-                    << ", finished: " << e->finished << std::endl;
+  auto& events = get_active_events();
+  std::mutex& events_mutex = get_mutex();
+  {
+    std::lock_guard<std::mutex> lock(events_mutex);
+    if (!events.empty()) {
+      logger.lock() << "[EventQueue] Current active events:" << std::endl;
+
+      for (const auto& e : events) {
+        logger.lock() << "  Event id: " << e->id
+                      << ", type: " << operationtype_to_string(e->op)
+                      << ", started: " << e->started
+                      << ", finished: " << e->finished << std::endl;
+      }
+    } else {
+      logger.lock() << "[EventQueue] No active events." << std::endl;
     }
-  } else {
-    logger.lock() << "[EventQueue] No active events." << std::endl;
   }
 #endif
 }

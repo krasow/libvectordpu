@@ -11,12 +11,37 @@
 
 #define MINIMUM_WRITE_SIZE 8
 
+#if ENABLE_DPU_PRINTING == 1
+void print_args(DPU_LAUNCH_ARGS args) {
+  printf("Reduction kernel launched with arguments:\n");
+  printf("  num_elements: %u\n", args.num_elements);
+  printf("  rhs_offset: 0x%08X\n", args.reduction.rhs_offset);
+  printf("  res_offset: 0x%08X\n", args.reduction.res_offset);
+}
+void debug_print(DPU_LAUNCH_ARGS args) {
+  print_args(args);
+
+  uint64_t buff = 0;
+  __mram_ptr int *res_ptr = (__mram_ptr int *)(args.reduction.res_offset);
+  mram_read((__mram_ptr void const *)(res_ptr), &buff, MINIMUM_WRITE_SIZE);       
+  // uint32_t v = (uint32_t)(buff & 0xFFFFFFFFull);
+  // printf("Reduction value = %i\n", v);
+  double v;
+  memcpy(&v, &buff, sizeof(double));
+  printf("Reduction value (double) = %lf\n", v);
+}
+#else
+void debug_print(DPU_LAUNCH_ARGS args) {   
+  // do nothing
+}
+#endif  
+
+
 #define DEFINE_REDUCTION_KERNEL(TYPE, OP, FUNC)                                \
   int reduction_##TYPE##_##OP(void) {                                          \
     enum { stride = (MINIMUM_WRITE_SIZE / sizeof(TYPE)) };                     \
     unsigned int tasklet_id = me();                                            \
     uint32_t num_elems = args.num_elements;                                    \
-                                                                               \
     __mram_ptr TYPE *rhs_ptr = (__mram_ptr TYPE *)(args.reduction.rhs_offset); \
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.reduction.res_offset); \
                                                                                \
@@ -65,8 +90,9 @@
       }                                                                        \
       memcpy(&buff, &total, sizeof(TYPE));                                     \
                                                                                \
-      mram_write(&buff, (__mram_ptr void *)(args.reduction.res_offset),        \
+      mram_write(&buff, (__mram_ptr void *)(res_ptr),                          \
                  MINIMUM_WRITE_SIZE);                                          \
+      debug_print(args);                                                       \
     }                                                                          \
     return 0;                                                                  \
   }
