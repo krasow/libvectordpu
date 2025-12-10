@@ -20,7 +20,8 @@ typedef enum {
     REDUCTION_OP_SUM     = 0,
     REDUCTION_OP_PRODUCT = 1,
     REDUCTION_OP_MAX     = 2,
-    REDUCTION_OP_MIN     = 3
+    REDUCTION_OP_MIN     = 3,
+    REDUCTION_KERNEL_COUNT
 } reduction_op_t;
 
 #define UNARY_KERNELS(TYPE) \
@@ -94,11 +95,10 @@ typedef struct {
 // very hacky but works for now
 #ifdef __cplusplus
 inline reduction_op_t get_reduction_op(KernelID kernel_id) {
-    // There are 4 reduction ops per type (SUM, PRODUCT, MAX, MIN)
     // The reduction kernels start after all unary and binary kernels
     int reduction_base = K_REDUCTION_INT_SUM;
     int offset = static_cast<int>(kernel_id) - reduction_base;
-    return static_cast<reduction_op_t>(offset % 4);
+    return static_cast<reduction_op_t>(offset % REDUCTION_KERNEL_COUNT);
 }
 #endif
 
