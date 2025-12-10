@@ -45,7 +45,7 @@ std::string operationtype_to_string(Event::OperationType op) {
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[EventQueue] id=" << me->id
+  logger.lock() << "[Event] id=" << me->id
                 << " type=" << operationtype_to_string(me->op)
                 << " phase=finished" << std::endl;
 #endif
@@ -92,7 +92,7 @@ bool EventQueue::process_next() {
 #endif
 
 #if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[EventQueue] id=" << e->id
+  logger.lock() << "[Event] id=" << e->id
                 << " type=" << operationtype_to_string(e->op)
                 << " phase=started" << std::endl;
 #endif
@@ -156,13 +156,15 @@ void EventQueue::debug_print_queue() {
 
     std::deque<std::shared_ptr<Event>> temp_queue = operations_;
 
+    int i = 0;
     while (!temp_queue.empty()) {
       auto e = temp_queue.front();  // Get the front element
-      logger.lock() << "  Event id: " << e->id
-                    << ", type: " << operationtype_to_string(e->op)
-                    << ", started: " << e->started
-                    << ", finished: " << e->finished << std::endl;
+      logger.lock() << "\t\t" << i << ". id=" << e->id
+                    << " type=" << operationtype_to_string(e->op)
+                    << " started=" << e->started << " finished=" << e->finished
+                    << std::endl;
       temp_queue.pop_front();  // Pop the element from the temporary queue
+      i++;
     }
   } else {
     logger.lock() << "[EventQueue] Queue is empty." << std::endl;
@@ -181,11 +183,13 @@ void EventQueue::debug_active_events() {
     if (!events.empty()) {
       logger.lock() << "[EventQueue] Current active events:" << std::endl;
 
+      int i = 0;
       for (const auto& e : events) {
-        logger.lock() << "  Event id: " << e->id
-                      << ", type: " << operationtype_to_string(e->op)
-                      << ", started: " << e->started
-                      << ", finished: " << e->finished << std::endl;
+        logger.lock() << "\t\t" << i << ". id=" << e->id
+                      << " type=" << operationtype_to_string(e->op)
+                      << " started=" << e->started
+                      << " finished=" << e->finished << std::endl;
+        i++;
       }
     } else {
       logger.lock() << "[EventQueue] No active events." << std::endl;

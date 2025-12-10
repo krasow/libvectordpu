@@ -1,6 +1,5 @@
-#include "vectordpu.inl"
-
 #include "logger.inl"
+#include "vectordpu.inl"
 
 // Binary operators
 template <typename T>

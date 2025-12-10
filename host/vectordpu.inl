@@ -30,13 +30,17 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
     runtime.init(NR_DPUS);
   }
 
-#if ENABLE_DPU_LOGGING >= 1
   if (!copied) {
+#if ENABLE_DPU_LOGGING >= 1
     log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
-  }
 #endif
 
   data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
+
+#if ENABLE_DPU_LOGGING >= 2
+    print_vector_desc(data_, reserved);
+#endif
+  }
 }
 
 template <typename T>
@@ -49,12 +53,12 @@ dpu_vector<T>::dpu_vector(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
-                << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-                << debug_line << std::endl;
-#endif
+  // #if ENABLE_DPU_LOGGING >= 2
+  //   Logger& logger = DpuRuntime::get().get_logger();
+  //   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
+  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+  //                 << debug_line << std::endl;
+  // #endif
 }
 
 template <typename T>
@@ -67,12 +71,12 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
-                << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-                << debug_line << std::endl;
-#endif
+  // #if ENABLE_DPU_LOGGING >= 2
+  //   Logger& logger = DpuRuntime::get().get_logger();
+  //   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
+  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+  //                 << debug_line << std::endl;
+  // #endif
   return *this;
 }
 
@@ -168,9 +172,6 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   // the second element is vector of sizes per DPU
   auto desc = vec.data_desc();
 
-#if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc, vec.reserved());
-#endif
   uint32_t reserved = vec.reserved();
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
   auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc, reserved);
@@ -184,8 +185,8 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] HOST->DPU XFER " << cpu_vec.size()
-                << " elements to DPUs" << std::endl;
+  logger.lock() << "[queue-append] type=DPU_TRANSFER size=" << cpu_vec.size()
+                << std::endl;
 #endif
   return vec;
 }
@@ -194,10 +195,6 @@ template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
   auto desc = this->data_desc();  // pair< vector<uint32_t>, vector<uint32_t> >
   uint32_t reserved = this->reserved();
-
-#if ENABLE_DPU_LOGGING >= 2
-  print_vector_desc(desc, this->reserved());
-#endif
 
   // Allocate CPU buffer large enough to hold all data
   size_t total_size = this->size();
@@ -229,8 +226,8 @@ vector<T> dpu_vector<T>::to_cpu() {
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] DPU->HOST XFER " << cpu_vec.size()
-                << " elements from DPUs" << std::endl;
+  logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << cpu_vec.size()
+                << std::endl;
 #endif
 
 // Auto-fence after DPU->HOST transfer if enabled
@@ -298,6 +295,12 @@ dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
 
   event_queue.submit(e);
 
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
+
   return res;
 }
 
@@ -348,6 +351,12 @@ dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
 
   event_queue.submit(e);
 
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
+
   return res;
 }
 
@@ -397,6 +406,12 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
   event_queue.submit(e);
+
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
 
   vector<T> res_cpu = res.to_cpu();
 
