@@ -47,7 +47,8 @@ inline const char* kernel_id_to_string(KernelID id) {
 
 inline void print_vector_desc(vector_desc desc, uint32_t reserved) {
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[debug-help] Vector Description with reserved " << reserved << " bytes: " << std::endl;
+  logger.lock() << "[debug-help] Vector Description with reserved " << reserved
+                << " bytes: " << std::endl;
   for (size_t i = 0; i < desc.first.size(); i++) {
     logger.lock() << "\t DPU[" << i << "] \t"
                   << "ptr=0x" << std::hex << desc.first[i]

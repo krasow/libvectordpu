@@ -125,10 +125,10 @@ bool EventQueue::process_next() {
     default:
       assert(false && "Unknown event type");
   }
-  
+
   current_event_ = e;
   running_events_.push_back(e);
-  
+
   debug_active_events();
   debug_print_queue();
   return true;
@@ -137,7 +137,7 @@ bool EventQueue::process_next() {
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
     bool made_progress = this->process_next();
-    if(this->get_curr_event_id() > wait_for_id) {
+    if (this->get_curr_event_id() > wait_for_id) {
       break;
     }
     // check if wait_for_id event has completed

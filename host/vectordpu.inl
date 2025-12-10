@@ -403,35 +403,29 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   T acc = res_cpu[0];
 
   // for (size_t i = 0; i < res_cpu.size();  i += stride) {
-  //   std::cout << "Partial result[" << i << "] = " << (T)res_cpu[i] << std::endl;
+  //   std::cout << "Partial result[" << i << "] = " << (T)res_cpu[i] <<
+  //   std::endl;
   // }
 
   // reduce over the remaining DPUs
+  reduction_op_t op = get_reduction_op(kernel_id);
   for (size_t i = stride; i < res_cpu.size(); i += stride) {
     T x = res_cpu[i];
-    switch (kernel_id) {
-      case K_REDUCTION_FLOAT_SUM:
-      case K_REDUCTION_INT_SUM:
-      case K_REDUCTION_DOUBLE_SUM:
+    switch (op) {
+      case REDUCTION_OP_SUM:
         acc += x;
         break;
-      case K_REDUCTION_FLOAT_PRODUCT:
-      case K_REDUCTION_INT_PRODUCT:
-      case K_REDUCTION_DOUBLE_PRODUCT:
+      case REDUCTION_OP_PRODUCT:
         acc *= x;
         break;
-      case K_REDUCTION_FLOAT_MAX:
-      case K_REDUCTION_INT_MAX:
-      case K_REDUCTION_DOUBLE_MAX:
+      case REDUCTION_OP_MAX:
         acc = (x > acc) ? x : acc;
         break;
-      case K_REDUCTION_FLOAT_MIN:
-      case K_REDUCTION_INT_MIN:
-      case K_REDUCTION_DOUBLE_MIN:
+      case REDUCTION_OP_MIN:
         acc = (x < acc) ? x : acc;
         break;
       default:
-        assert(false && "Unknown kernel_id in final reduction step");
+        assert(false && "Unknown reduction operation");
     }
   }
   return acc;

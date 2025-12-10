@@ -16,7 +16,8 @@ DEFINE_UNARY_TEST(float, abs, abs(a), std::fabs(x))
 
 DEFINE_REDUCTION_TEST(int, sum_reduction, elements, 0, 9, 0, acc + x, sum(a))
 
-DEFINE_REDUCTION_TEST(int, product_reduction, elements, 1, 5, 1, acc* x, product(a))
+DEFINE_REDUCTION_TEST(int, product_reduction, elements, 1, 5, 1, acc* x,
+                      product(a))
 
 DEFINE_REDUCTION_TEST(int, max_reduction, elements, 0, 999,
                       std::numeric_limits<int>::min(), (x > acc ? x : acc),
@@ -29,8 +30,8 @@ DEFINE_REDUCTION_TEST(int, min_reduction, elements, 0, 999,
 DEFINE_REDUCTION_TEST(float, sum_reduction, elements, 0.0f, 1.0f, 0.0f, acc + x,
                       sum(a))
 
-DEFINE_REDUCTION_TEST(float, product_reduction, elements, 0.5f, 2.0f, 1.0f, acc* x,
-                      product(a))
+DEFINE_REDUCTION_TEST(float, product_reduction, elements, 0.5f, 2.0f, 1.0f,
+                      acc* x, product(a))
 
 DEFINE_REDUCTION_TEST(float, max_reduction, elements, 0.0f, 100.0f,
                       -std::numeric_limits<float>::infinity(),
@@ -40,8 +41,8 @@ DEFINE_REDUCTION_TEST(float, min_reduction, elements, 0.0f, 100.0f,
                       std::numeric_limits<float>::infinity(),
                       (x < acc ? x : acc), min(a))
 
-DEFINE_REDUCTION_TEST(double, sum_reduction, elements, 0.0, 1.0, 0.0,
-                      acc + x, sum(a))
+DEFINE_REDUCTION_TEST(double, sum_reduction, elements, 0.0, 1.0, 0.0, acc + x,
+                      sum(a))
 
 test_error test_chained_operations() {
   const uint32_t N = elements * elements;

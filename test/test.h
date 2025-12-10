@@ -10,7 +10,6 @@
 using test_error = uint32_t;
 uint32_t elements = 4096;
 
-
 #define TEST_UNIMPLIMENTED 2
 #define TEST_ERROR 1
 #define TEST_SUCCESS 0
