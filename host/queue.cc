@@ -45,9 +45,9 @@ std::string operationtype_to_string(Event::OperationType op) {
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[Event(" << me->id << ") "
-                << operationtype_to_string(me->op) << "] Callback finished"
-                << std::endl;
+  logger.lock() << "[EventQueue] id=" << me->id
+                << " type=" << operationtype_to_string(me->op)
+                << " phase=finished" << std::endl;
 #endif
 
   return DPU_OK;
@@ -64,13 +64,6 @@ void Event::add_completion_callback() {
       dpu_set, &upmem_callback, (void*)wrapper,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
-
-#if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[Event(" << this->id << ") "
-                << operationtype_to_string(this->op) << "] Callback Registered"
-                << std::endl;
-#endif
 }
 
 void EventQueue::add_fence(std::shared_ptr<Event> e) {
@@ -99,8 +92,9 @@ bool EventQueue::process_next() {
 #endif
 
 #if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[EventQueue] Processing id " << e->id << ": "
-                << operationtype_to_string(e->op) << " event." << std::endl;
+  logger.lock() << "[EventQueue] id=" << e->id
+                << " type=" << operationtype_to_string(e->op)
+                << " phase=started" << std::endl;
 #endif
 
   switch (e->op) {

@@ -31,7 +31,9 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
   }
 
 #if ENABLE_DPU_LOGGING >= 1
-  log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
+  if (!copied) {
+    log_allocation(typeid(T), n, debug_name, debug_file, debug_line);
+  }
 #endif
 
   data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
@@ -83,7 +85,9 @@ dpu_vector<T>::~dpu_vector() {
   auto& runtime = DpuRuntime::get();
 
 #if ENABLE_DPU_LOGGING >= 1
-  log_deallocation(typeid(T), size_, debug_name, debug_file, debug_line);
+  if (!copied) {
+    log_deallocation(typeid(T), size_, debug_name, debug_file, debug_line);
+  }
 #endif
 
   runtime.get_allocator().deallocate_upmem_vector(data_);
