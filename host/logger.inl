@@ -38,8 +38,14 @@ inline const char* kernel_id_to_string(KernelID id) {
       return "REDUCTION_INT_MAX";
     case K_REDUCTION_INT_MIN:
       return "REDUCTION_INT_MIN";
-    case KERNEL_COUNT:
-      return "KERNEL_COUNT";
+    case K_REDUCTION_DOUBLE_SUM:
+      return "REDUCTION_DOUBLE_SUM";
+    case K_REDUCTION_DOUBLE_PRODUCT:
+      return "REDUCTION_DOUBLE_PRODUCT";
+    case K_REDUCTION_DOUBLE_MAX:
+      return "REDUCTION_DOUBLE_MAX";
+    case K_REDUCTION_DOUBLE_MIN:
+      return "REDUCTION_DOUBLE_MIN";
     default:
       return "UNKNOWN_KERNEL_ID";
   }
