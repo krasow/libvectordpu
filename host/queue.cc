@@ -45,7 +45,7 @@ std::string operationtype_to_string(Event::OperationType op) {
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[Event] id=" << me->id
+  logger.lock() << "[event-logger] id=" << me->id
                 << " type=" << operationtype_to_string(me->op)
                 << " phase=finished" << std::endl;
 #endif
@@ -92,7 +92,7 @@ bool EventQueue::process_next() {
 #endif
 
 #if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[Event] id=" << e->id
+  logger.lock() << "[event-logger] id=" << e->id
                 << " type=" << operationtype_to_string(e->op)
                 << " phase=started" << std::endl;
 #endif
