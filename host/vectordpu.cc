@@ -1,4 +1,5 @@
-#include "logger.inl"
+#include "vectordpu.h"
+
 #include "vectordpu.inl"
 
 // Binary operators

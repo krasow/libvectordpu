@@ -7,9 +7,21 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <typeindex>
 #include <variant>
 
-#include "vectordpu.h"  // for dpu_vector
+#include "common.h"
+
+struct ResultBuffer {
+  void* impl;
+  size_t size;
+  std::type_index type;
+};
+
+template <typename T>
+ResultBuffer make_result_descriptor(T& vec) {
+  return ResultBuffer(&vec, vec.size(), typeid(T));
+}
 
 class Event {
  public:
@@ -18,10 +30,7 @@ class Event {
   OperationType op;
   std::function<void()> cb;
 
-  // Result of the event
-  std::variant<std::monostate, dpu_vector<int>, dpu_vector<float>,
-               dpu_vector<double>>
-      res;
+  std::variant<std::monostate, ResultBuffer> res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
 

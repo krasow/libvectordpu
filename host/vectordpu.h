@@ -7,6 +7,10 @@
 #include <type_traits>
 #include <vector>
 
+#include "logger.h"
+#include "queue.h"
+#include "runtime.h"
+
 #if __cplusplus < 202002L
 // Fake source_location for pre-C++20
 // debian upmem machine has outdated compiler that doesn't support C++20 yet
@@ -152,9 +156,16 @@ struct ReductionKernelSelector<double> {
 template <typename T>
 dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
                            KernelID kernel_id);
+template <typename T>
+void launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
+                  const dpu_vector<T>& rhs, KernelID kernel_id);
 
 template <typename T>
-dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id);
+dpu_vector<T> launch_unary(const dpu_vector<T>& rhs, KernelID kernel_id);
+
+template <typename T>
+void launch_unary(dpu_vector<T>& res, const dpu_vector<T>& rhs,
+                  KernelID kernel_id);
 
 // binary operations
 template <typename T>

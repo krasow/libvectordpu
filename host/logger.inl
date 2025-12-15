@@ -1,8 +1,4 @@
 #pragma once
-#include "allocator.h"
-#include "logger.h"
-#include "queue.h"
-#include "runtime.h"
 
 inline const char* kernel_id_to_string(KernelID id) {
   switch (id) {
@@ -64,10 +60,9 @@ inline const char* ktype_to_string(uint8_t ktype) {
   }
 }
 
-inline void print_vector_desc(vector_desc desc, uint32_t reserved) {
-  Logger& logger = DpuRuntime::get().get_logger();
+inline void print_vector_desc(Logger& logger, vector_desc desc,
+                              uint32_t reserved) {
   auto out = logger.lock();
-
   out << "  " << std::left << std::setw(6) << "DPU" << std::setw(14) << "PTR"
       << std::setw(14) << "ALLOC(bytes)" << std::setw(14) << "VEC_SIZE(bytes)\n"
       << std::string(51, '-') << "\n";
@@ -83,10 +78,10 @@ inline void print_vector_desc(vector_desc desc, uint32_t reserved) {
   }
 }
 
-inline void log_allocation(const std::type_info& type, uint32_t n,
-                           std::string_view debug_name, const char* debug_file,
-                           int debug_line, bool is_allocation) {
-  Logger& logger = DpuRuntime::get().get_logger();
+inline void log_allocation(Logger& logger, const std::type_info& type,
+                           uint32_t n, std::string_view debug_name,
+                           const char* debug_file, int debug_line,
+                           bool is_allocation) {
   auto log = logger.lock();
   log << "[mem-logger] action=" << (is_allocation ? "allocate  " : "deallocate")
       << " type=dpu_vector<" << type.name() << ">"
@@ -101,9 +96,8 @@ inline void log_allocation(const std::type_info& type, uint32_t n,
 }
 
 #if ENABLE_DPU_LOGGING >= 1
-inline void log_dpu_launch_args(const DPU_LAUNCH_ARGS* args,
+inline void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
                                 uint32_t nr_of_dpus) {
-  Logger& logger = DpuRuntime::get().get_logger();
   auto log = logger.lock();
   log << "[task-logger] kernel="
       << kernel_id_to_string(static_cast<KernelID>(args->kernel))
