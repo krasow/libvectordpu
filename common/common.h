@@ -54,13 +54,6 @@ typedef enum {
     KERNEL_COUNT
 } KernelID;
 
-typedef enum {
-    TYPE_INT = 0,
-    TYPE_FLOAT = 1,
-    TYPE_DOUBLE = 2,
-    TYPE_COUNT
-} TYPEID;
-
 typedef struct {
     uint32_t kernel;       // 4
     uint32_t num_elements; // 4

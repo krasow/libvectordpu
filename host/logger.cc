@@ -1,6 +1,9 @@
-#pragma once
+#include "logger.h"
 
-inline const char* kernel_id_to_string(KernelID id) {
+#include "allocator.h"
+#include "queue.h"
+
+const char* kernel_id_to_string(KernelID id) {
   switch (id) {
     case K_UNARY_FLOAT_NEGATE:
       return "UNARY_FLOAT_NEGATE";
@@ -47,7 +50,7 @@ inline const char* kernel_id_to_string(KernelID id) {
   }
 }
 
-inline const char* ktype_to_string(uint8_t ktype) {
+const char* ktype_to_string(uint8_t ktype) {
   switch (ktype) {
     case KERNEL_UNARY:
       return "UNARY";
@@ -60,7 +63,7 @@ inline const char* ktype_to_string(uint8_t ktype) {
   }
 }
 
-inline void print_vector_desc(Logger& logger, vector_desc desc,
+void print_vector_desc(Logger& logger, vector_desc desc,
                               uint32_t reserved) {
   auto out = logger.lock();
   out << "  " << std::left << std::setw(6) << "DPU" << std::setw(14) << "PTR"
@@ -78,7 +81,7 @@ inline void print_vector_desc(Logger& logger, vector_desc desc,
   }
 }
 
-inline void log_allocation(Logger& logger, const std::type_info& type,
+void log_allocation(Logger& logger, const std::type_info& type,
                            uint32_t n, std::string_view debug_name,
                            const char* debug_file, int debug_line,
                            bool is_allocation) {
@@ -96,7 +99,7 @@ inline void log_allocation(Logger& logger, const std::type_info& type,
 }
 
 #if ENABLE_DPU_LOGGING >= 1
-inline void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
+void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
                                 uint32_t nr_of_dpus) {
   auto log = logger.lock();
   log << "[task-logger] kernel="

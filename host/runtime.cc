@@ -4,7 +4,6 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
-#include "logger.h"
 #include "runtime.h"
 
 allocator& DpuRuntime::get_allocator() { return *allocator_; }

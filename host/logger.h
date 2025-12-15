@@ -8,10 +8,6 @@
 #include <string_view>
 #include <vector>
 
-#include "allocator.h"
-#include "logger.h"
-#include "queue.h"
-
 using vector_desc =
     std::pair<std::vector<uint32_t>, std::vector<uint32_t>>;  // ptrs and sizes
 
@@ -47,10 +43,10 @@ class Logger {
   Lock lock() { return Lock(*this); }
 };
 
-inline void print_vector_desc(Logger& logger, vector_desc desc,
+void print_vector_desc(Logger& logger, vector_desc desc,
                               uint32_t reserved);
 
-inline void log_allocation(Logger& logger, const std::type_info& type,
+void log_allocation(Logger& logger, const std::type_info& type,
                            uint32_t n, std::string_view debug_name,
                            const char* debug_file, int debug_line,
                            bool is_allocation = true);
@@ -58,7 +54,5 @@ inline void log_allocation(Logger& logger, const std::type_info& type,
 #define log_deallocation(logger, type, n, debug_name, debug_file, debug_line) \
   log_allocation(logger, type, n, debug_name, debug_file, debug_line, false)
 
-inline void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
+void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
                                 uint32_t nr_of_dpus);
-
-#include "logger.inl"

@@ -301,7 +301,7 @@ void launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
 
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
-  
+
   e->res = make_result_descriptor(res);
   event_queue.submit(e);
 

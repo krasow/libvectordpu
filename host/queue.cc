@@ -2,9 +2,7 @@
 
 #include <thread>
 
-#include "logger.h"
 #include "runtime.h"
-#include "vectordpu.h"
 
 #ifndef DPURT
 #define DPURT
