@@ -1,6 +1,7 @@
 #include "queue.h"
 
 #include <thread>
+#include <cassert>
 
 #include "runtime.h"
 

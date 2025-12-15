@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <type_traits>
 
 #ifndef DPURT
 #define DPURT
@@ -435,11 +436,6 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
   size_t stride = res_cpu.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
   T acc = res_cpu[0];
-
-  // for (size_t i = 0; i < res_cpu.size();  i += stride) {
-  //   std::cout << "Partial result[" << i << "] = " << (T)res_cpu[i] <<
-  //   std::endl;
-  // }
 
   // reduce over the remaining DPUs
   reduction_op_t op = get_reduction_op(kernel_id);
