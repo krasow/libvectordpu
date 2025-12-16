@@ -5,6 +5,12 @@
 #endif
 
 #include <thread>
+#include <string>
+
+// dl function info
+#include <dlfcn.h>
+#include <libgen.h>
+#include <limits.h>
 
 #include "runtime.h"
 
@@ -32,7 +38,20 @@ void DpuRuntime::init(uint32_t num_dpus) {
   backend_str += BACKEND;
 
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
-  DPU_ASSERT(dpu_load(*dpu_set_, DPU_RUNTIME, nullptr));
+
+  Dl_info info;
+  void* fptr = (void*) &DpuRuntime::get; // static function pointer
+  if (dladdr(fptr, &info) == 0) {
+      std::__throw_runtime_error("Failed to get library path");
+  }
+  // Full path to libvectordpu.so
+  const char* lib_path = info.dli_fname;
+  // Directory containing the library
+  std::string lib_dir = dirname(const_cast<char*>(lib_path));
+  // Compute path to runtime.dpu relative to the library
+  std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
+  
+  DPU_ASSERT(dpu_load(*dpu_set_, dpu_file.c_str(), nullptr));
 
 #if ENABLE_DPU_LOGGING == 1
   logger_->lock() << "[runtime] DPU runtime initialized with " << backend_str

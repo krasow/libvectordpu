@@ -30,19 +30,16 @@ TEST_DIR := test
 
 DESTDIR ?= ./install
 
-RUNTIME_PATH := $(abspath $(CURDIR)/$(BUILDDIR))
-RUNTIME := $(RUNTIME_PATH)/runtime.dpu
-
 CONFIG_STAMP := build.config
 
-CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
+CONFIG_FLAGS ?= \
 	-DENABLE_DPU_LOGGING=$(LOGGING) \
 	-DBACKEND=\"$(BACKEND)\" \
 	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING) \
 	-DENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)
 
-HOST_TARGET := ${BUILDDIR}/libvectordpu.so
-DPU_TARGET := ${BUILDDIR}/runtime.dpu
+HOST_TARGET := ${BUILDDIR}/lib/libvectordpu.so
+DPU_TARGET := ${BUILDDIR}/bin/runtime.dpu
 TEST_TARGET := ${TEST_DIR}/vectordpu_test
 
 COMMON_INCLUDES := common
@@ -65,7 +62,7 @@ endif
 
 .PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config
 
-__dirs := $(shell mkdir -p ${BUILDDIR})
+__dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_INCLUDES}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
@@ -95,7 +92,7 @@ config_check: cache_old reconfigure
 	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
 	        echo "Configuration changed, cleaning build..."; \
 	        $(MAKE) clean-internal; \
-			mkdir -p $(BUILDDIR); \
+			mkdir -p $(BUILDDIR) && mkdir -p $(BUILDDIR)/bin && mkdir -p $(BUILDDIR)/lib; \
 	    }; \
 		rm -f $(CONFIG_STAMP).old; \
 	fi
@@ -109,7 +106,7 @@ ${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES} ${DPU_HEADERS}
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Building test target: $@"
 	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
-		-L$(BUILDDIR) -Wl,-rpath,$(RUNTIME_PATH) -lvectordpu
+		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
 
 clean-internal:
 	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
