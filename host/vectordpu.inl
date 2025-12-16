@@ -24,7 +24,12 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
 
   if (runtime.is_initialized() == false) {
     // throw std::runtime_error("DPU runtime not initialized!");
-    runtime.init(NR_DPUS);
+    int nr_dpus = 8;
+    const char* env_val = std::getenv("NR_DPUS");
+    if (env_val != nullptr) {
+        nr_dpus = std::atoi(env_val);  // convert string to int
+    }
+    runtime.init(nr_dpus);
   }
 
   if (!copied) {

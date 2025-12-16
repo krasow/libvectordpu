@@ -1,7 +1,6 @@
 # https://github.com/CMU-SAFARI/prim-benchmarks/tree/main 
 # leveraged the above repository to create Makefile for DPU and host code compilation
 BUILDDIR ?= build
-NR_DPUS ?= 32
 NR_TASKLETS ?= 16
 
 BACKEND ?= simulator
@@ -64,21 +63,20 @@ else
   BUILD_TYPE := release
 endif
 
-.PHONY: config_check cache_old reconfigure all clean test install uninstall print_config
+.PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config
 
 __dirs := $(shell mkdir -p ${BUILDDIR})
 
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_INCLUDES}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
-				-DNR_TASKLETS=${NR_TASKLETS} -DNR_DPUS=${NR_DPUS} ${CONFIG_FLAGS}
+				-DNR_TASKLETS=${NR_TASKLETS} ${CONFIG_FLAGS}
 DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 
 all: config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"
 
 reconfigure:
-	@echo "NR_DPUS=$(NR_DPUS)" > $(CONFIG_STAMP)
-	@echo "NR_TASKLETS=$(NR_TASKLETS)" >> $(CONFIG_STAMP)
+	@echo "NR_TASKLETS=$(NR_TASKLETS)" > $(CONFIG_STAMP)
 	@echo "BACKEND=$(BACKEND)" >> $(CONFIG_STAMP)
 	@echo "DEBUG=$(DEBUG)" >> $(CONFIG_STAMP)
 	@echo "LOGGING=$(LOGGING)" >> $(CONFIG_STAMP)
@@ -86,14 +84,17 @@ reconfigure:
 	@echo "ENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)" >> $(CONFIG_STAMP)
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
 
-cache_old: $(CONFIG_STAMP)
-	@cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old
+cache_old:
+	@if [ -f $(CONFIG_STAMP) ]; then \
+	    rm -f $(CONFIG_STAMP).old; \
+		cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old; \
+	fi
 
 config_check: cache_old reconfigure
 	@if [ -f $(CONFIG_STAMP) ]; then \
 	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
 	        echo "Configuration changed, cleaning build..."; \
-	        $(MAKE) clean; \
+	        $(MAKE) clean-internal; \
 			mkdir -p $(BUILDDIR); \
 	    }; \
 		rm -f $(CONFIG_STAMP).old; \
@@ -110,8 +111,11 @@ $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR) -Wl,-rpath,$(RUNTIME_PATH) -lvectordpu
 
-clean:
+clean-internal:
 	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
+
+clean: clean-internal
+	$(RM) -r $(CONFIG_STAMP)
 
 # ANSI color codes
 RED    := \033[0;31m
@@ -121,7 +125,7 @@ BLUE   := \033[0;34m
 CYAN   := \033[0;36m
 NC     := \033[0m  # No color
 
-print_config:
+print_config: reconfigure
 	@echo "\n$(CYAN)Current build configuration:$(NC)"
 	@cat $(CONFIG_STAMP) | while read line; do \
 	    key=$${line%%=*}; \
@@ -138,7 +142,7 @@ bindir := $(DESTDIR)/bin
 libdir := $(DESTDIR)/lib
 includedir := $(DESTDIR)/include/vectordpu
 
-install: all
+install: ${DPU_TARGET} ${HOST_TARGET}
 	@echo "Installing to $(DESTDIR)..."
 	install -d $(bindir) $(libdir) $(includedir)
 	install -m 644 $(DPU_TARGET) $(bindir)
