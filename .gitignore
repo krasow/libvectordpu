@@ -13,3 +13,5 @@ vectordpu_test
 *.txt
 *.config
 *.old
+install/*
+install
