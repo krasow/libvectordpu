@@ -82,13 +82,13 @@ reconfigure:
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
 
 cache_old:
-	@if [ -f $(CONFIG_STAMP) ]; then \
+	@if [ -f "$(CONFIG_STAMP)" ]; then \
 	    rm -f $(CONFIG_STAMP).old; \
 		cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old; \
 	fi
 
 config_check: cache_old reconfigure
-	@if [ -f $(CONFIG_STAMP) ]; then \
+	@if [ -f "$(CONFIG_STAMP)" ]; then \
 	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
 	        echo "Configuration changed, cleaning build..."; \
 	        $(MAKE) clean-internal; \
