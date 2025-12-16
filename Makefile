@@ -1,9 +1,5 @@
 # https://github.com/CMU-SAFARI/prim-benchmarks/tree/main 
 # leveraged the above repository to create Makefile for DPU and host code compilation
-
-DPU_DIR := dpu
-HOST_DIR := host
-TEST_DIR := test
 BUILDDIR ?= bin
 NR_DPUS ?= 32
 NR_TASKLETS ?= 16
@@ -29,8 +25,14 @@ ifndef UPMEM_HOME
 $(error UPMEM_HOME is not defined. Please source upmem_env.sh.)
 endif
 
-RUNTIME_PATH := $(abspath $(CURDIR)/bin)
+DPU_DIR := dpu
+HOST_DIR := host
+TEST_DIR := test
+
+RUNTIME_PATH := $(abspath $(CURDIR)/$(BUILDDIR))
 RUNTIME := $(RUNTIME_PATH)/runtime.dpu
+
+CONFIG_STAMP := build.config
 
 CONFIG_FLAGS ?= -DDPU_RUNTIME=\"$(RUNTIME)\" \
 	-DENABLE_DPU_LOGGING=$(LOGGING) \
@@ -60,7 +62,7 @@ else
   BUILD_TYPE := release
 endif
 
-.PHONY: all clean test
+.PHONY: config_check cache_old reconfigure all clean test
 
 __dirs := $(shell mkdir -p ${BUILDDIR})
 
@@ -69,22 +71,63 @@ HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
 				-DNR_TASKLETS=${NR_TASKLETS} -DNR_DPUS=${NR_DPUS} ${CONFIG_FLAGS}
 DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 
-all: ${HOST_TARGET} ${DPU_TARGET}
-	@echo "Build complete: $(BUILD_TYPE)"
+all: config_check print_config ${HOST_TARGET} ${DPU_TARGET}
+	@echo "Build complete: $(BUILD_TYPE) \n"
+
+reconfigure:
+	@echo "NR_DPUS=$(NR_DPUS)" > $(CONFIG_STAMP)
+	@echo "NR_TASKLETS=$(NR_TASKLETS)" >> $(CONFIG_STAMP)
+	@echo "BACKEND=$(BACKEND)" >> $(CONFIG_STAMP)
+	@echo "DEBUG=$(DEBUG)" >> $(CONFIG_STAMP)
+	@echo "LOGGING=$(LOGGING)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)" >> $(CONFIG_STAMP)
+	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
+
+cache_old: $(CONFIG_STAMP)
+	@cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old
+
+config_check: cache_old reconfigure
+	@if [ -f $(CONFIG_STAMP) ]; then \
+	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
+	        echo "Configuration changed, cleaning build..."; \
+	        $(MAKE) clean; \
+			mkdir -p $(BUILDDIR); \
+	    }; \
+		rm -f $(CONFIG_STAMP).old; \
+	fi
 
 ${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES} ${HOST_HEADERS}
 	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@ ${HOST_SOURCES} ${HOST_FLAGS} 
 
-
 ${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES} ${DPU_HEADERS}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES} ${CONFIG_FLAGS}
 
-$(TEST_TARGET): all
+$(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
+	@echo "Building test target: $@"
 	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR) -Wl,-rpath,$(RUNTIME_PATH) -lvectordpu
 
 clean:
 	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
 
-test: $(TEST_TARGET)
+# ANSI color codes
+RED    := \033[0;31m
+GREEN  := \033[0;32m
+YELLOW := \033[0;33m
+BLUE   := \033[0;34m
+CYAN   := \033[0;36m
+NC     := \033[0m  # No color
+
+print_config:
+	@echo "\n$(CYAN)Current build configuration:$(NC)"
+	@cat $(CONFIG_STAMP) | while read line; do \
+	    key=$${line%%=*}; \
+	    value=$${line#*=}; \
+	    echo "  $(YELLOW)$${key}=$(GREEN)$${value}$(NC)"; \
+	done
+	@echo "\n"
+
+test: all $(TEST_TARGET) 
+	@printf "\n$(CYAN)Running tests...$(NC)\n\n"
 	./$(TEST_TARGET)

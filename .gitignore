@@ -11,3 +11,5 @@ vectordpu_test
 *.o
 *.log
 *.txt
+*.config
+*.old

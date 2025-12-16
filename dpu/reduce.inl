@@ -20,7 +20,8 @@ void print_args(DPU_LAUNCH_ARGS args) {
 }
 #else
 void print_args(DPU_LAUNCH_ARGS args) {
-  // do nothing
+  // do nothing 
+  (void)args; // remove unused parameter warning
 }
 #endif
 

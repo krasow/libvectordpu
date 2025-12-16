@@ -43,6 +43,8 @@ class Logger {
   Lock lock() { return Lock(*this); }
 };
 
+char const* kernel_id_to_string(KernelID kernel_id);
+
 void print_vector_desc(Logger& logger, vector_desc desc,
                               uint32_t reserved);
 
