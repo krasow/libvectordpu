@@ -42,14 +42,14 @@ HOST_TARGET := ${BUILDDIR}/lib/libvectordpu.so
 DPU_TARGET := ${BUILDDIR}/bin/runtime.dpu
 TEST_TARGET := ${TEST_DIR}/vectordpu_test
 
-COMMON_INCLUDES := common
+COMMON_DIR := common
 HOST_INCLUDES := host
 HOST_SOURCES := $(wildcard ${HOST_DIR}/*.cc)
 DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
 TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
 
-HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h)
-DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
+HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h) $(wildcard ${COMMON_DIR}/*.h)
+DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h) $(wildcard ${COMMON_DIR}/*.h)
 
 ifeq ($(DEBUG),1)
   CXXFLAGS += -g -O0 -DDEBUG -fsanitize=address -fno-omit-frame-pointer
@@ -64,7 +64,7 @@ endif
 
 __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
-COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_INCLUDES}
+COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_DIR}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
 				-DNR_TASKLETS=${NR_TASKLETS} ${CONFIG_FLAGS}
 DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
@@ -97,10 +97,10 @@ config_check: cache_old reconfigure
 		rm -f $(CONFIG_STAMP).old; \
 	fi
 
-${HOST_TARGET}: ${HOST_SOURCES} ${COMMON_INCLUDES} ${HOST_HEADERS}
+${HOST_TARGET}: ${HOST_SOURCES} ${HOST_HEADERS}
 	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@ ${HOST_SOURCES} ${HOST_FLAGS} 
 
-${DPU_TARGET}: ${DPU_SOURCES} ${COMMON_INCLUDES} ${DPU_HEADERS}
+${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES} ${CONFIG_FLAGS}
 
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
