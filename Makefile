@@ -1,6 +1,6 @@
 # https://github.com/CMU-SAFARI/prim-benchmarks/tree/main 
 # leveraged the above repository to create Makefile for DPU and host code compilation
-BUILDDIR ?= bin
+BUILDDIR ?= build
 NR_DPUS ?= 32
 NR_TASKLETS ?= 16
 
@@ -28,6 +28,8 @@ endif
 DPU_DIR := dpu
 HOST_DIR := host
 TEST_DIR := test
+
+DESTDIR ?= ./install
 
 RUNTIME_PATH := $(abspath $(CURDIR)/$(BUILDDIR))
 RUNTIME := $(RUNTIME_PATH)/runtime.dpu
@@ -62,7 +64,7 @@ else
   BUILD_TYPE := release
 endif
 
-.PHONY: config_check cache_old reconfigure all clean test
+.PHONY: config_check cache_old reconfigure all clean test install uninstall print_config
 
 __dirs := $(shell mkdir -p ${BUILDDIR})
 
@@ -131,3 +133,22 @@ print_config:
 test: all $(TEST_TARGET) 
 	@printf "\n$(CYAN)Running tests...$(NC)\n\n"
 	./$(TEST_TARGET)
+
+bindir := $(DESTDIR)/bin
+libdir := $(DESTDIR)/lib
+includedir := $(DESTDIR)/include/vectordpu
+
+install: all
+	@echo "Installing to $(DESTDIR)..."
+	install -d $(bindir) $(libdir) $(includedir)
+	install -m 644 $(DPU_TARGET) $(bindir)
+	install -m 644 $(HOST_TARGET) $(libdir)
+	install -m 644 $(HOST_HEADERS) $(includedir)
+	install -m 644 $(DPU_HEADERS) $(includedir)
+
+uninstall:
+	@echo "Removing from $(prefix)..."
+	rm -f $(bindir)/$(notdir $(DPU_TARGET))
+	rm -f $(libdir)/$(notdir $(HOST_TARGET))
+	rm -f $(patsubst %,$(includedir)/%,$(notdir $(HOST_HEADERS)))
+	rm -f $(patsubst %,$(includedir)/%,$(notdir $(DPU_HEADERS)))
