@@ -10,17 +10,7 @@
 #include <variant>
 
 #include "common.h"
-
-struct ResultBuffer {
-  void* impl;
-  size_t size;
-  std::type_index type;
-};
-
-template <typename T>
-ResultBuffer make_result_descriptor(T& vec) {
-  return ResultBuffer(&vec, vec.size(), typeid(T));
-}
+#include "desc.h"
 
 class Event {
  public:
@@ -29,7 +19,7 @@ class Event {
   OperationType op;
   std::function<void()> cb;
 
-  std::variant<std::monostate, ResultBuffer> res;
+  std::variant<std::monostate, detail::VectorDesc> res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
 

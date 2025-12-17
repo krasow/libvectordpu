@@ -39,14 +39,3 @@
     }                                                                      \
     return 0;                                                              \
   }
-
-#define INSTANTIATE_KERNELS(TYPE)           \
-  DEFINE_UNARY_KERNEL(TYPE, negate, NEGATE) \
-  DEFINE_UNARY_KERNEL(TYPE, abs, ABS)
-
-INSTANTIATE_KERNELS(float)
-INSTANTIATE_KERNELS(int)
-INSTANTIATE_KERNELS(double)
-
-#undef INSTANTIATE_KERNELS
-#undef DEFINE_UNARY_KERNEL

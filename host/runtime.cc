@@ -4,8 +4,8 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
-#include <thread>
 #include <string>
+#include <thread>
 
 // dl function info
 #include <dlfcn.h>
@@ -40,9 +40,9 @@ void DpuRuntime::init(uint32_t num_dpus) {
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
 
   Dl_info info;
-  void* fptr = (void*) &DpuRuntime::get; // static function pointer
+  void* fptr = (void*)&DpuRuntime::get;  // static function pointer
   if (dladdr(fptr, &info) == 0) {
-      std::__throw_runtime_error("Failed to get library path");
+    std::__throw_runtime_error("Failed to get library path");
   }
   // Full path to libvectordpu.so
   const char* lib_path = info.dli_fname;
@@ -50,7 +50,7 @@ void DpuRuntime::init(uint32_t num_dpus) {
   std::string lib_dir = dirname(const_cast<char*>(lib_path));
   // Compute path to runtime.dpu relative to the library
   std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
-  
+
   DPU_ASSERT(dpu_load(*dpu_set_, dpu_file.c_str(), nullptr));
 
 #if ENABLE_DPU_LOGGING == 1

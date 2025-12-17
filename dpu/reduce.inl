@@ -20,8 +20,8 @@ void print_args(DPU_LAUNCH_ARGS args) {
 }
 #else
 void print_args(DPU_LAUNCH_ARGS args) {
-  // do nothing 
-  (void)args; // remove unused parameter warning
+  // do nothing
+  (void)args;  // remove unused parameter warning
 }
 #endif
 
@@ -83,16 +83,3 @@ void print_args(DPU_LAUNCH_ARGS args) {
     }                                                                          \
     return 0;                                                                  \
   }
-
-#define INSTANTIATE_KERNELS(TYPE)         \
-  DEFINE_REDUCTION_KERNEL(TYPE, max, MAX) \
-  DEFINE_REDUCTION_KERNEL(TYPE, min, MIN) \
-  DEFINE_REDUCTION_KERNEL(TYPE, sum, SUM) \
-  DEFINE_REDUCTION_KERNEL(TYPE, product, PRODUCT)
-
-INSTANTIATE_KERNELS(float)
-INSTANTIATE_KERNELS(int)
-INSTANTIATE_KERNELS(double)
-
-#undef INSTANTIATE_KERNELS
-#undef DEFINE_REDUCTION_KERNEL

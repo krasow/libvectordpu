@@ -10,49 +10,13 @@
 #define BLOCK_SIZE_LOG2 5              // e.g., 32 elements per block
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
-typedef enum {
-    KERNEL_UNARY     = 0,
-    KERNEL_BINARY    = 1,
+typedef uint32_t KernelID;
+
+enum KernelCategory {
+    KERNEL_UNARY = 0,
+    KERNEL_BINARY = 1,
     KERNEL_REDUCTION = 2
-} kernel_type_t;
-
-typedef enum {
-    REDUCTION_OP_SUM     = 0,
-    REDUCTION_OP_PRODUCT = 1,
-    REDUCTION_OP_MAX     = 2,
-    REDUCTION_OP_MIN     = 3,
-    REDUCTION_KERNEL_COUNT
-} reduction_op_t;
-
-#define UNARY_KERNELS(TYPE) \
-    K_UNARY_##TYPE##_NEGATE, \
-    K_UNARY_##TYPE##_ABS
-
-#define BINARY_KERNELS(TYPE) \
-    K_BINARY_##TYPE##_ADD, \
-    K_BINARY_##TYPE##_SUB
-
-#define REDUCTION_KERNELS(TYPE) \
-    K_REDUCTION_##TYPE##_SUM, \
-    K_REDUCTION_##TYPE##_PRODUCT, \
-    K_REDUCTION_##TYPE##_MAX, \
-    K_REDUCTION_##TYPE##_MIN
-
-#define DEFINE_KERNELS_BY_TYPE(TYPE) \
-    UNARY_KERNELS(TYPE), \
-    BINARY_KERNELS(TYPE), \
-    REDUCTION_KERNELS(TYPE)
-
-#define DEFINE_ALL_KERNELS \
-    DEFINE_KERNELS_BY_TYPE(INT), \
-    DEFINE_KERNELS_BY_TYPE(FLOAT), \
-    DEFINE_KERNELS_BY_TYPE(DOUBLE) 
-
-
-typedef enum {
-    DEFINE_ALL_KERNELS,
-    KERNEL_COUNT
-} KernelID;
+};
 
 typedef struct {
     uint32_t kernel;       // 4
@@ -80,24 +44,5 @@ typedef struct {
     uint8_t ktype;         // 0: unary, 1: binary, 2: reduction
     uint8_t pad[7];        // pad struct to 32 bytes
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;
-
-
-#undef UNARY_KERNELS
-#undef BINARY_KERNELS
-#undef REDUCTION_KERNELS
-#undef DEFINE_KERNELS_BY_TYPE
-#undef DEFINE_ALL_KERNELS
-
-// helper to extract reduction operation from kernel ID
-// assumes kernels are ordered: INT, FLOAT, DOUBLE for each op type
-// very hacky but works for now
-#ifdef __cplusplus
-inline reduction_op_t get_reduction_op(KernelID kernel_id) {
-    // The reduction kernels start after all unary and binary kernels
-    int reduction_base = K_REDUCTION_INT_SUM;
-    int offset = static_cast<int>(kernel_id) - reduction_base;
-    return static_cast<reduction_op_t>(offset % REDUCTION_KERNEL_COUNT);
-}
-#endif
 
 #endif // COMMON_H

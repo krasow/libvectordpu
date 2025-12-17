@@ -1,91 +1,215 @@
 #include "vectordpu.h"
+#include "desc.h"
 
-#include "vectordpu.inl"
+#ifndef DPURT
+#define DPURT
+#include <dpu>  // UPMEM rt syslib
+#define CHECK_UPMEM(x) DPU_ASSERT(x)
+#endif
 
-// Binary operators
-template <typename T>
-dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
-  return launch_binop(lhs, rhs, BinaryKernelSelector<T>::add());
+namespace detail {
+
+void vec_xfer_to_dpu(char* cpu, VectorDesc& desc) {
+  auto& runtime = DpuRuntime::get();
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+
+  uint32_t idx_dpu = 0;
+  size_t element = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu[element])));
+    element += desc.desc[idx_dpu].size_bytes - desc.reserved_bytes;
+  }
+
+  uint32_t mram_location = desc.desc[0].ptr;
+  size_t xfer_size = desc.desc[0].size_bytes - desc.reserved_bytes;
+
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
+                            DPU_MRAM_HEAP_POINTER_NAME, mram_location,
+                            xfer_size, DPU_XFER_ASYNC));
 }
 
-template <typename T>
-dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
-  return launch_binop(lhs, rhs, BinaryKernelSelector<T>::sub());
+void vec_xfer_from_dpu(char* cpu, VectorDesc& desc) {
+  auto& runtime = DpuRuntime::get();
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+
+  uint32_t idx_dpu = 0;
+  size_t element = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu[element])));
+    element += desc.desc[idx_dpu].size_bytes - desc.reserved_bytes;
+  }
+
+  uint32_t mram_location = desc.desc[0].ptr;
+  size_t xfer_size = desc.desc[0].size_bytes - desc.reserved_bytes;
+
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
+                            DPU_MRAM_HEAP_POINTER_NAME, mram_location,
+                            xfer_size, DPU_XFER_ASYNC));
 }
 
-// Unary operators
-template <typename T>
-dpu_vector<T> operator-(const dpu_vector<T>& a) {
-  return launch_unary(a, UnaryKernelSelector<T>::negate());
+void internal_launch_binary(VectorDesc& res, const VectorDesc& lhs,
+                           const VectorDesc& rhs, KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+
+  uint32_t nr_of_dpus = runtime.num_dpus();
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
+    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
+    args[i].size_type = rhs.element_size;
+    args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.desc[i].ptr);
+    args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
+    args[i].binary.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  log_dpu_launch_args(logger, args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-template <typename T>
-dpu_vector<T> abs(const dpu_vector<T>& a) {
-  return launch_unary(a, UnaryKernelSelector<T>::abs());
+void internal_launch_unary(VectorDesc& res, const VectorDesc& rhs,
+                           KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+
+  uint32_t nr_of_dpus = runtime.num_dpus();
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
+    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
+    args[i].size_type = rhs.element_size;
+    args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
+    args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  log_dpu_launch_args(logger, args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-template <typename T>
-T sum(const dpu_vector<T>& a) {
-  return launch_reduction(a, ReductionKernelSelector<T>::sum());
+void internal_launch_reduction(VectorDesc& res, const VectorDesc& rhs,
+                               KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+  uint32_t nr_of_dpus = runtime.num_dpus();
+
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
+    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
+    args[i].size_type = rhs.element_size;
+    args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
+    args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  log_dpu_launch_args(logger, args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-template <typename T>
-T product(const dpu_vector<T>& a) {
-  return launch_reduction(a, ReductionKernelSelector<T>::product());
+void launch_binary(VectorDesc& res, const VectorDesc& lhs, const VectorDesc& rhs,
+                  KernelID kernel_id) {
+  assert(lhs.num_elements == rhs.num_elements);
+
+  auto bound_cb = std::bind(detail::internal_launch_binary, std::ref(res),
+                            std::cref(lhs), std::cref(rhs), kernel_id);
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+
+  e->res = res;
+  event_queue.submit(e);
+
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
 }
 
-template <typename T>
-T max(const dpu_vector<T>& a) {
-  return launch_reduction(a, ReductionKernelSelector<T>::max());
+void launch_unary(VectorDesc& res, const VectorDesc& rhs, KernelID kernel_id) {
+  auto bound_cb = std::bind(internal_launch_unary, std::ref(res),
+                            std::cref(rhs), kernel_id);
+
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+
+  e->res = res;
+  event_queue.submit(e);
+
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
 }
 
-template <typename T>
-T min(const dpu_vector<T>& a) {
-  return launch_reduction(a, ReductionKernelSelector<T>::min());
+void launch_reduction(VectorDesc& buf, const VectorDesc& rhs,
+                      KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+  auto bound_cb = std::bind(internal_launch_reduction, std::ref(buf),
+                            std::cref(rhs), kernel_id);
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+
+  e->res = buf;
+  event_queue.submit(e);
+
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
 }
 
-// OperationType::COMPUTE
-#define INSTANTIATE_BINARY_OP(T, OP)                     \
-  template dpu_vector<T> OP<T>(const dpu_vector<T>& lhs, \
-                               const dpu_vector<T>& rhs);
-
-#define INSTANTIATE_UNARY_OP(T, OP) \
-  template dpu_vector<T> OP<T>(const dpu_vector<T>& vec);
-
-#define INSTANTIATE_REDUCE_OP(T, OP) template T OP<T>(const dpu_vector<T>& vec);
-
-// OperationType::FENCE
-#define INSTANTIATE_FENCE(T) template void dpu_vector<T>::add_fence();
-// OperationType::DPU_TRANSFER and HOST_TRANSFER
-#define INSTANTIATE_TO_CPU(T) template std::vector<T> dpu_vector<T>::to_cpu();
-#define INSTANTIATE_FROM_CPU(T)                                           \
-  template dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec, \
-                                                 std::string_view name,   \
-                                                 std::source_location loc);
-
-#define INSTANTIATE_ALL(T)            \
-  INSTANTIATE_BINARY_OP(T, operator+) \
-  INSTANTIATE_BINARY_OP(T, operator-) \
-  INSTANTIATE_UNARY_OP(T, operator-)  \
-  INSTANTIATE_UNARY_OP(T, abs)        \
-  INSTANTIATE_REDUCE_OP(T, sum)       \
-  INSTANTIATE_REDUCE_OP(T, product)   \
-  INSTANTIATE_REDUCE_OP(T, max)       \
-  INSTANTIATE_REDUCE_OP(T, min)       \
-  INSTANTIATE_FROM_CPU(T)             \
-  INSTANTIATE_TO_CPU(T)               \
-  INSTANTIATE_FENCE(T)
-
-INSTANTIATE_ALL(int)
-INSTANTIATE_ALL(float)
-INSTANTIATE_ALL(double)
-
-#undef INSTANTIATE_BINARY_OP
-#undef INSTANTIATE_UNARY_OP
-#undef INSTANTIATE_ABS
-#undef INSTANTIATE_NEGATE
-#undef INSTANTIATE_REDUCE_OP
-#undef INSTANTIATE_FROM_CPU
-#undef INSTANTIATE_TO_CPU
-#undef INSTANTIATE_FENCE
-#undef INSTANTIATE_ALL
+}  // namespace detail
