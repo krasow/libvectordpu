@@ -98,10 +98,6 @@ dpu_vector<T>::~dpu_vector() {
 }
 
 template <typename T>
-uint32_t dpu_vector<T>::size() const {
-  return size_;
-}
-template <typename T>
 void dpu_vector<T>::add_fence() {
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -184,9 +180,7 @@ vector<T> dpu_vector<T>::to_cpu() {
 // need the event to be completed before reading printf output
 #if ENABLE_DPU_PRINTING == 1
   // read and print DPU logs to host stdout
-  dpu_set_t dpu;
-  dpu_set_t& set = runtime.dpu_set();
-  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
+  runtime.debug_print_dpus();
 #endif
 #endif
 

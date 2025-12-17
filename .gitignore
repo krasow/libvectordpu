@@ -15,3 +15,6 @@ vectordpu_test
 *.old
 install/*
 install
+kernelids.h
+opinfo.h
+kernels.h

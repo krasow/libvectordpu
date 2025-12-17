@@ -45,7 +45,6 @@ class dpu_vector {
   dpu_vector(const dpu_vector& other);             // copy constructor
   dpu_vector& operator=(const dpu_vector& other);  // copy assignment
 
-  uint32_t size() const;
   vector<T> to_cpu();
 
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
@@ -55,6 +54,7 @@ class dpu_vector {
   detail::VectorDesc& data_desc() { return data_; }
   const detail::VectorDesc& data_desc() const { return data_; }
 
+  uint32_t size() const { return size_; }
   uint32_t reserved() const { return reserved_; }
 
  private:

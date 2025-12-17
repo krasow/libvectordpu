@@ -34,6 +34,8 @@ class DpuRuntime {
   void init(uint32_t num_dpus);
   bool is_initialized() const { return initialized_; }
 
+  void debug_read_dpu_log();
+
   allocator& get_allocator();
   EventQueue& get_event_queue();
   Logger& get_logger();

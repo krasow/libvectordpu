@@ -90,3 +90,9 @@ void DpuRuntime::shutdown() {
 
   initialized_ = false;
 }
+
+void DpuRuntime::debug_read_dpu_log() {
+  dpu_set_t dpu;
+  dpu_set_t& set = this->dpu_set();
+  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
+}
