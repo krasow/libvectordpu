@@ -19,7 +19,8 @@ const char* ktype_to_string(KernelCategory ktype) {
   }
 }
 
-void print_vector_desc(Logger& logger, detail::VectorDesc desc, uint32_t reserved) {
+void print_vector_desc(Logger& logger, detail::VectorDesc desc,
+                       uint32_t reserved) {
   auto out = logger.lock();
   out << "  " << std::left << std::setw(6) << "DPU" << std::setw(14) << "PTR"
       << std::setw(14) << "ALLOC(bytes)" << std::setw(14) << "VEC_SIZE(bytes)\n"
@@ -123,8 +124,8 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
     }
 
     log << "  " << std::left << std::setw(6) << i << std::setw(12)
-        << ktype_to_string(static_cast<KernelCategory>(a.ktype)) << std::setw(12) << a.num_elements
-        << std::setw(9) << a.size_type;
+        << ktype_to_string(static_cast<KernelCategory>(a.ktype))
+        << std::setw(12) << a.num_elements << std::setw(9) << a.size_type;
 
     if (show_rhs) log << std::setw(13) << rhs.str();
     if (show_lhs) log << std::setw(13) << lhs.str();

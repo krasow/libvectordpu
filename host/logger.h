@@ -44,7 +44,8 @@ class Logger {
 
 char const* kernel_id_to_string(KernelID kernel_id);
 
-void print_vector_desc(Logger& logger, detail::VectorDesc desc, uint32_t reserved);
+void print_vector_desc(Logger& logger, detail::VectorDesc desc,
+                       uint32_t reserved);
 
 void log_allocation(Logger& logger, const std::type_info& type, uint32_t n,
                     std::string_view debug_name, const char* debug_file,

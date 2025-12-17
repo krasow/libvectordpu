@@ -1,4 +1,5 @@
 #include "vectordpu.h"
+
 #include "desc.h"
 
 #ifndef DPURT
@@ -52,7 +53,7 @@ void vec_xfer_from_dpu(char* cpu, VectorDesc& desc) {
 }
 
 void internal_launch_binary(VectorDesc& res, const VectorDesc& lhs,
-                           const VectorDesc& rhs, KernelID kernel_id) {
+                            const VectorDesc& rhs, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
 
   uint32_t nr_of_dpus = runtime.num_dpus();
@@ -150,8 +151,8 @@ void internal_launch_reduction(VectorDesc& res, const VectorDesc& rhs,
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-void launch_binary(VectorDesc& res, const VectorDesc& lhs, const VectorDesc& rhs,
-                  KernelID kernel_id) {
+void launch_binary(VectorDesc& res, const VectorDesc& lhs,
+                   const VectorDesc& rhs, KernelID kernel_id) {
   assert(lhs.num_elements == rhs.num_elements);
 
   auto bound_cb = std::bind(detail::internal_launch_binary, std::ref(res),

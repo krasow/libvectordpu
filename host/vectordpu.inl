@@ -233,7 +233,7 @@ template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
   detail::launch_binary(res.data_desc(), lhs.data_desc(), rhs.data_desc(),
-                OpInfo<T>::add);
+                        OpInfo<T>::add);
   return res;
 }
 
@@ -241,7 +241,7 @@ template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
   detail::launch_binary(res.data_desc(), lhs.data_desc(), rhs.data_desc(),
-                OpInfo<T>::sub);
+                        OpInfo<T>::sub);
   return res;
 }
 

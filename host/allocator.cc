@@ -47,7 +47,7 @@ detail::VectorDesc allocator::allocate_upmem_vector(
   vec_desc.reserved_bytes = reserved_mem_per_dpu;
   vec_desc.element_size = size_type;
   vec_desc.num_elements = n;
-  
+
   return vec_desc;
 }
 
