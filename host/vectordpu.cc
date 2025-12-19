@@ -10,7 +10,7 @@
 
 namespace detail {
 
-void vec_xfer_to_dpu(char* cpu, VectorDesc& desc) {
+void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -20,18 +20,17 @@ void vec_xfer_to_dpu(char* cpu, VectorDesc& desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu[element])));
-    element += desc.desc[idx_dpu].size_bytes - desc.reserved_bytes;
+    element += desc->desc[idx_dpu].size_bytes - desc->reserved_bytes;
   }
 
-  uint32_t mram_location = desc.desc[0].ptr;
-  size_t xfer_size = desc.desc[0].size_bytes - desc.reserved_bytes;
-
+  uint32_t mram_location = desc->desc[0].ptr;
+  size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
 }
 
-void vec_xfer_from_dpu(char* cpu, VectorDesc& desc) {
+void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
@@ -41,19 +40,18 @@ void vec_xfer_from_dpu(char* cpu, VectorDesc& desc) {
 
   DPU_FOREACH(dpu_set, dpu, idx_dpu) {
     CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu[element])));
-    element += desc.desc[idx_dpu].size_bytes - desc.reserved_bytes;
+    element += desc->desc[idx_dpu].size_bytes - desc->reserved_bytes;
   }
 
-  uint32_t mram_location = desc.desc[0].ptr;
-  size_t xfer_size = desc.desc[0].size_bytes - desc.reserved_bytes;
-
+  uint32_t mram_location = desc->desc[0].ptr;
+  size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
 }
 
-void internal_launch_binary(VectorDesc& res, const VectorDesc& lhs,
-                            const VectorDesc& rhs, KernelID kernel_id) {
+void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
+                            VectorDescRef rhs, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
 
   uint32_t nr_of_dpus = runtime.num_dpus();
@@ -62,11 +60,11 @@ void internal_launch_binary(VectorDesc& res, const VectorDesc& lhs,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
-    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
-    args[i].size_type = rhs.element_size;
-    args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.desc[i].ptr);
-    args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
-    args[i].binary.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+    args[i].num_elements = rhs->desc[i].size_bytes / rhs->element_size;
+    args[i].size_type = rhs->element_size;
+    args[i].binary.lhs_offset = (lhs->desc[i].ptr);
+    args[i].binary.rhs_offset = (rhs->desc[i].ptr);
+    args[i].binary.res_offset = (res->desc[i].ptr);
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -86,20 +84,20 @@ void internal_launch_binary(VectorDesc& res, const VectorDesc& lhs,
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-void internal_launch_unary(VectorDesc& res, const VectorDesc& rhs,
+void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
                            KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
-
+  
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
-    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
-    args[i].size_type = rhs.element_size;
-    args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
-    args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+    args[i].num_elements = rhs->desc[i].size_bytes / rhs->element_size;
+    args[i].size_type = rhs->element_size;
+    args[i].unary.rhs_offset = (rhs->desc[i].ptr);
+    args[i].unary.res_offset = (res->desc[i].ptr);
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -119,7 +117,7 @@ void internal_launch_unary(VectorDesc& res, const VectorDesc& rhs,
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-void internal_launch_reduction(VectorDesc& res, const VectorDesc& rhs,
+void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
                                KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
   uint32_t nr_of_dpus = runtime.num_dpus();
@@ -128,10 +126,10 @@ void internal_launch_reduction(VectorDesc& res, const VectorDesc& rhs,
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
-    args[i].num_elements = rhs.desc[i].size_bytes / rhs.element_size;
-    args[i].size_type = rhs.element_size;
-    args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(rhs.desc[i].ptr);
-    args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.desc[i].ptr);
+    args[i].num_elements = rhs->desc[i].size_bytes / rhs->element_size;
+    args[i].size_type = rhs->element_size;
+    args[i].reduction.rhs_offset = (rhs->desc[i].ptr);
+    args[i].reduction.res_offset = (res->desc[i].ptr);
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -151,12 +149,11 @@ void internal_launch_reduction(VectorDesc& res, const VectorDesc& rhs,
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
-void launch_binary(VectorDesc& res, const VectorDesc& lhs,
-                   const VectorDesc& rhs, KernelID kernel_id) {
-  assert(lhs.num_elements == rhs.num_elements);
+void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
+                   KernelID kernel_id) {
+  assert(lhs->num_elements == rhs->num_elements);
 
-  auto bound_cb = std::bind(detail::internal_launch_binary, std::ref(res),
-                            std::cref(lhs), std::cref(rhs), kernel_id);
+  auto bound_cb = std::bind(internal_launch_binary, res, lhs, rhs, kernel_id);
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
@@ -173,9 +170,8 @@ void launch_binary(VectorDesc& res, const VectorDesc& lhs,
 #endif
 }
 
-void launch_unary(VectorDesc& res, const VectorDesc& rhs, KernelID kernel_id) {
-  auto bound_cb = std::bind(internal_launch_unary, std::ref(res),
-                            std::cref(rhs), kernel_id);
+void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id) {
+  auto bound_cb = std::bind(internal_launch_unary, res, rhs, kernel_id);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -193,11 +189,10 @@ void launch_unary(VectorDesc& res, const VectorDesc& rhs, KernelID kernel_id) {
 #endif
 }
 
-void launch_reduction(VectorDesc& buf, const VectorDesc& rhs,
+void launch_reduction(VectorDescRef buf, VectorDescRef rhs,
                       KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
-  auto bound_cb = std::bind(internal_launch_reduction, std::ref(buf),
-                            std::cref(rhs), kernel_id);
+  auto bound_cb = std::bind(internal_launch_reduction, buf, rhs, kernel_id);
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =

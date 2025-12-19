@@ -16,7 +16,7 @@ allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
   free_list_.resize(num_dpus_);
 }
 
-detail::VectorDesc allocator::allocate_upmem_vector(
+detail::VectorDescRef allocator::allocate_upmem_vector(
     std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type) {
   // grab lock
   std::lock_guard<std::mutex> lock(this->lock);
@@ -32,7 +32,7 @@ detail::VectorDesc allocator::allocate_upmem_vector(
 
   size_t remainder = (elems_per_dpu / size_type) % num_dpus;
 
-  detail::VectorDesc vec_desc;
+  auto vec_desc = std::make_shared<detail::VectorDesc>(/* init */);
 
   for (size_t i = 0; i < num_dpus; i++) {
     size_t alloc_size = (elems_per_dpu + (i < remainder ? 1 : 0)) * size_type;
@@ -41,21 +41,21 @@ detail::VectorDesc allocator::allocate_upmem_vector(
 
     detail::VectorSegment seg{
         addr, static_cast<uint32_t>(alloc_size + reserved_mem_per_dpu)};
-    vec_desc.desc.push_back(seg);
+    vec_desc->desc.push_back(seg);
   }
 
-  vec_desc.reserved_bytes = reserved_mem_per_dpu;
-  vec_desc.element_size = size_type;
-  vec_desc.num_elements = n;
+  vec_desc->reserved_bytes = static_cast<uint32_t>(reserved_mem_per_dpu);
+  vec_desc->element_size = static_cast<uint32_t>(size_type);
+  vec_desc->num_elements = n;
 
   return vec_desc;
 }
 
-void allocator::deallocate_upmem_vector(detail::VectorDesc& data) {
+void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
   std::lock_guard<std::mutex> lock(this->lock);
   for (size_t i = 0; i < num_dpus_; ++i) {
-    uint32_t addr = data.desc[i].ptr;
-    size_t size = data.desc[i].size_bytes;
+    uint32_t addr = data->desc[i].ptr;
+    size_t size = data->desc[i].size_bytes;
     deallocate(i, addr, size);
   }
 }

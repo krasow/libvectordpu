@@ -20,10 +20,10 @@ class allocator {
  public:
   allocator(uint32_t start_addr, std::size_t total_size, std::size_t num_dpus);
 
-  detail::VectorDesc allocate_upmem_vector(std::size_t n,
-                                           std::size_t reserved_mem_per_dpu,
-                                           std::size_t size_type);
-  void deallocate_upmem_vector(detail::VectorDesc &data);
+  detail::VectorDescRef allocate_upmem_vector(std::size_t n,
+                                              std::size_t reserved_mem_per_dpu,
+                                              std::size_t size_type);
+  void deallocate_upmem_vector(detail::VectorDescRef data);
 
  private:
   uint32_t start_addr_;  // starting base address

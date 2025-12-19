@@ -3,6 +3,7 @@
 #include <common.h>
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace detail {
@@ -12,7 +13,7 @@ struct VectorSegment {
 };
 
 struct VectorDesc {
-  size_t num_elements;    //
+  size_t num_elements;    // total number of elements
   uint32_t element_size;  // sizeof(T)
   uint32_t reserved_bytes;
   /// ...
@@ -21,12 +22,13 @@ struct VectorDesc {
   std::vector<VectorSegment> desc;
 };
 
+using VectorDescRef = std::shared_ptr<VectorDesc>;
+
 // Implemented in vectordpu.cc
-void vec_xfer_to_dpu(char* cpu, VectorDesc& desc);
-void vec_xfer_from_dpu(char* cpu, VectorDesc& desc);
-void launch_binary(VectorDesc& out, const VectorDesc& lhs,
-                   const VectorDesc& rhs, KernelID kernel_id);
-void launch_unary(VectorDesc& out, const VectorDesc& lhs, KernelID kernel_id);
-void launch_reduction(VectorDesc& buf, const VectorDesc& rhs,
-                      KernelID kernel_id);
+void vec_xfer_to_dpu(char* cpu, VectorDescRef desc);
+void vec_xfer_from_dpu(char* cpu, VectorDescRef desc);
+void launch_binary(VectorDescRef out, VectorDescRef lhs, VectorDescRef rhs,
+                   KernelID kernel_id);
+void launch_unary(VectorDescRef out, VectorDescRef lhs, KernelID kernel_id);
+void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id);
 }  // namespace detail

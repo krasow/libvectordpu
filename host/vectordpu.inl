@@ -51,12 +51,12 @@ dpu_vector<T>::dpu_vector(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+// #if ENABLE_DPU_LOGGING >= 2
+//   Logger& logger = DpuRuntime::get().get_logger();
+//   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
+//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+//                 << debug_line << std::endl;
+// #endif
 }
 
 template <typename T>
@@ -69,12 +69,12 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+// #if ENABLE_DPU_LOGGING >= 2
+//   Logger& logger = DpuRuntime::get().get_logger();
+//   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
+//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+//                 << debug_line << std::endl;
+// #endif
   return *this;
 }
 
@@ -117,7 +117,7 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   // .data returns a std::pair<vector<uint32_t>, vector<uint32_t>>
   // the first element is vector of pointers to DPU memory per DPU
   // the second element is vector of sizes per DPU
-  auto desc = vec.data_desc();
+  auto desc = vec.data_desc_ref();
 
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
   auto bound_cb = std::bind(detail::vec_xfer_to_dpu, cpu_buffer, desc);
@@ -139,7 +139,7 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
-  auto desc = this->data_desc();
+  auto desc = this->data_desc_ref();
   // Allocate CPU buffer large enough to hold all data
   size_t total_size = this->size();
   auto& runtime = DpuRuntime::get();
@@ -226,16 +226,16 @@ T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
-  detail::launch_binary(res.data_desc(), lhs.data_desc(), rhs.data_desc(),
-                        OpInfo<T>::add);
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::add);
   return res;
 }
 
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
-  detail::launch_binary(res.data_desc(), lhs.data_desc(), rhs.data_desc(),
-                        OpInfo<T>::sub);
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::sub);
   return res;
 }
 
@@ -243,14 +243,15 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
-  detail::launch_unary(res.data_desc(), a.data_desc(), OpInfo<T>::negate);
+  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(),
+                       OpInfo<T>::negate);
   return res;
 }
 
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
-  detail::launch_unary(res.data_desc(), a.data_desc(), OpInfo<T>::abs);
+  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(), OpInfo<T>::abs);
   return res;
 }
 
@@ -259,7 +260,8 @@ T sum(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
-  detail::launch_reduction(buf.data_desc(), a.data_desc(), OpInfo<T>::sum);
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::sum);
   return reduction_cpu(buf, OpInfo<T>::sum);
 }
 
@@ -268,7 +270,8 @@ T product(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
-  detail::launch_reduction(buf.data_desc(), a.data_desc(), OpInfo<T>::product);
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::product);
   return reduction_cpu(buf, OpInfo<T>::product);
 }
 
@@ -277,7 +280,8 @@ T min(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
-  detail::launch_reduction(buf.data_desc(), a.data_desc(), OpInfo<T>::min);
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::min);
   return reduction_cpu(buf, OpInfo<T>::min);
 }
 
@@ -286,6 +290,7 @@ T max(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
-  detail::launch_reduction(buf.data_desc(), a.data_desc(), OpInfo<T>::max);
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::max);
   return reduction_cpu(buf, OpInfo<T>::max);
 }

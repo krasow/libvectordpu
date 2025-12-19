@@ -19,7 +19,7 @@ class Event {
   OperationType op;
   std::function<void()> cb;
 
-  std::variant<std::monostate, detail::VectorDesc> res;
+  std::variant<std::monostate, detail::VectorDescRef> res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
 

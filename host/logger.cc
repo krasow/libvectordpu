@@ -19,21 +19,22 @@ const char* ktype_to_string(KernelCategory ktype) {
   }
 }
 
-void print_vector_desc(Logger& logger, detail::VectorDesc desc,
+void print_vector_desc(Logger& logger, detail::VectorDescRef desc,
                        uint32_t reserved) {
   auto out = logger.lock();
   out << "  " << std::left << std::setw(6) << "DPU" << std::setw(14) << "PTR"
       << std::setw(14) << "ALLOC(bytes)" << std::setw(14) << "VEC_SIZE(bytes)\n"
       << std::string(51, '-') << "\n";
 
-  for (size_t i = 0; i < desc.num_elements; i++) {
+  for (size_t i = 0; i < desc->desc.size(); i++) {
     std::ostringstream ptr_hex;
     ptr_hex << "0x" << std::hex << std::setw(8) << std::setfill('0')
-            << desc.desc[i].ptr;
+            << desc->desc[i].ptr;
 
     out << "  " << std::left << std::setw(6) << i << std::setw(14)
-        << ptr_hex.str() << std::setw(14) << std::dec << desc.desc[i].size_bytes
-        << std::dec << (desc.desc[i].size_bytes - reserved) << "\n";
+        << ptr_hex.str() << std::setw(14) << std::dec
+        << desc->desc[i].size_bytes << std::dec
+        << (desc->desc[i].size_bytes - reserved) << "\n";
   }
 }
 

@@ -51,14 +51,14 @@ class dpu_vector {
                                 LOGGER_ARGS_WITH_DEFAULTS);
   void add_fence();
 
-  detail::VectorDesc& data_desc() { return data_; }
-  const detail::VectorDesc& data_desc() const { return data_; }
+  const detail::VectorDesc& data_desc() const { return *data_; }
+  detail::VectorDescRef data_desc_ref() const { return data_; }
 
   uint32_t size() const { return size_; }
   uint32_t reserved() const { return reserved_; }
 
  private:
-  detail::VectorDesc data_;
+  detail::VectorDescRef data_;
   uint32_t size_;
   uint32_t reserved_ = 0;
   const char* debug_name = nullptr;

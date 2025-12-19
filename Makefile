@@ -113,7 +113,7 @@ ${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS}
 
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Building test target: $@"
-	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -DLOGGING=2 -DENABLE_AUTO_FENCING=1 -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
+	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) ${CONFIG_FLAGS} -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
 
 clean-internal:
