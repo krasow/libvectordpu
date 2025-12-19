@@ -6,12 +6,6 @@
 #include <memory>
 #include <type_traits>
 
-#ifndef DPURT
-#define DPURT
-#include <dpu>  // UPMEM rt syslib
-#define CHECK_UPMEM(x) DPU_ASSERT(x)
-#endif
-
 template <typename T>
 dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
                           std::source_location loc)
@@ -27,7 +21,7 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
     int nr_dpus = 8;
     const char* env_val = std::getenv("NR_DPUS");
     if (env_val != nullptr) {
-        nr_dpus = std::atoi(env_val);  // convert string to int
+      nr_dpus = std::atoi(env_val);  // convert string to int
     }
     runtime.init(nr_dpus);
   }
@@ -57,12 +51,12 @@ dpu_vector<T>::dpu_vector(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+// #if ENABLE_DPU_LOGGING >= 2
+//   Logger& logger = DpuRuntime::get().get_logger();
+//   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
+//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+//                 << debug_line << std::endl;
+// #endif
 }
 
 template <typename T>
@@ -75,12 +69,12 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+// #if ENABLE_DPU_LOGGING >= 2
+//   Logger& logger = DpuRuntime::get().get_logger();
+//   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
+//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+//                 << debug_line << std::endl;
+// #endif
   return *this;
 }
 
@@ -104,18 +98,6 @@ dpu_vector<T>::~dpu_vector() {
 }
 
 template <typename T>
-vector<uint32_t> dpu_vector<T>::data() const {
-  // data_ is vector_desc std::pair<vector<uint32_t>, vector<uint32_t>>
-  // where first element is vector of pointers to DPU memory per DPU
-  // and second element is vector of sizes per DPU
-  return data_.first;
-}
-
-template <typename T>
-uint32_t dpu_vector<T>::size() const {
-  return size_;
-}
-template <typename T>
 void dpu_vector<T>::add_fence() {
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -127,49 +109,6 @@ void dpu_vector<T>::add_fence() {
   event_queue.process_events(e->id);
 }
 
-inline void vec_xfer_to_dpu(char* cpu_vec, vector_desc desc,
-                            uint32_t reserved) {
-  auto& runtime = DpuRuntime::get();
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  dpu_set_t dpu;
-
-  uint32_t idx_dpu = 0;
-  size_t element = 0;
-
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu] - reserved;
-  }
-
-  uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0] - reserved;
-
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
-                            DPU_MRAM_HEAP_POINTER_NAME, mram_location,
-                            xfer_size, DPU_XFER_ASYNC));
-}
-
-inline void vec_xfer_from_dpu(char* cpu_vec, vector_desc desc,
-                              uint32_t reserved) {
-  auto& runtime = DpuRuntime::get();
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  dpu_set_t dpu;
-
-  uint32_t idx_dpu = 0;
-  size_t element = 0;
-
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &(cpu_vec[element])));
-    element += desc.second[idx_dpu] - reserved;
-  }
-
-  uint32_t mram_location = desc.first[0];
-  size_t xfer_size = desc.second[0] - reserved;
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
-                            DPU_MRAM_HEAP_POINTER_NAME, mram_location,
-                            xfer_size, DPU_XFER_ASYNC));
-}
-
 template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
@@ -178,11 +117,10 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
   // .data returns a std::pair<vector<uint32_t>, vector<uint32_t>>
   // the first element is vector of pointers to DPU memory per DPU
   // the second element is vector of sizes per DPU
-  auto desc = vec.data_desc();
+  auto desc = vec.data_desc_ref();
 
-  uint32_t reserved = vec.reserved();
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_to_dpu, cpu_buffer, desc, reserved);
+  auto bound_cb = std::bind(detail::vec_xfer_to_dpu, cpu_buffer, desc);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -201,9 +139,7 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
-  auto desc = this->data_desc();  // pair< vector<uint32_t>, vector<uint32_t> >
-  uint32_t reserved = this->reserved();
-
+  auto desc = this->data_desc_ref();
   // Allocate CPU buffer large enough to hold all data
   size_t total_size = this->size();
   auto& runtime = DpuRuntime::get();
@@ -224,7 +160,7 @@ vector<T> dpu_vector<T>::to_cpu() {
   vector<T> cpu_vec(total_size);
 
   char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(vec_xfer_from_dpu, cpu_buffer, desc, reserved);
+  auto bound_cb = std::bind(detail::vec_xfer_from_dpu, cpu_buffer, desc);
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
@@ -244,9 +180,7 @@ vector<T> dpu_vector<T>::to_cpu() {
 // need the event to be completed before reading printf output
 #if ENABLE_DPU_PRINTING == 1
   // read and print DPU logs to host stdout
-  dpu_set_t dpu;
-  dpu_set_t& set = runtime.dpu_set();
-  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
+  runtime.debug_print_dpus();
 #endif
 #endif
 
@@ -254,209 +188,31 @@ vector<T> dpu_vector<T>::to_cpu() {
 }
 
 template <typename T>
-void internal_launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
-                           const dpu_vector<T>& rhs, KernelID kernel_id) {
+T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
+  // block and send to cpu
+  auto a = da.to_cpu();
+
   auto& runtime = DpuRuntime::get();
-
-  uint32_t nr_of_dpus = runtime.num_dpus();
-  DPU_LAUNCH_ARGS args[nr_of_dpus];
-
-  for (uint32_t i = 0; i < nr_of_dpus; i++) {
-    args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY);
-    args[i].num_elements = lhs.data_desc().second[i] / sizeof(T);
-    args[i].size_type = sizeof(T);
-    args[i].binary.lhs_offset = reinterpret_cast<uint32_t>(lhs.data()[i]);
-    args[i].binary.rhs_offset = reinterpret_cast<uint32_t>(rhs.data()[i]);
-    args[i].binary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
-  }
-
-#if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-  log_dpu_launch_args(logger, args, nr_of_dpus);
-#endif
-
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  dpu_set_t dpu;
-  uint32_t idx_dpu = 0;
-
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
-  }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
-  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
-}
-
-template <typename T>
-dpu_vector<T> launch_binop(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs,
-                           KernelID kernel_id) {
-  dpu_vector<T> res(lhs.size());
-  launch_binop<T>(res, lhs, rhs, kernel_id);
-  return res;
-}
-
-template <typename T>
-void launch_binop(dpu_vector<T>& res, const dpu_vector<T>& lhs,
-                  const dpu_vector<T>& rhs, KernelID kernel_id) {
-  assert(lhs.size() == rhs.size());
-
-  auto bound_cb = std::bind(internal_launch_binop<T>, res, lhs, rhs, kernel_id);
-  auto& runtime = DpuRuntime::get();
-  auto& event_queue = runtime.get_event_queue();
-
-  std::shared_ptr<Event> e =
-      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
-
-  e->res = make_result_descriptor(res);
-  event_queue.submit(e);
-
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=COMPUTE kernel="
-                << kernel_id_to_string(kernel_id) << std::endl;
-#endif
-}
-
-template <typename T>
-void internal_launch_unary(dpu_vector<T>& res, const dpu_vector<T>& a,
-                           KernelID kernel_id) {
-  auto& runtime = DpuRuntime::get();
-
-  uint32_t nr_of_dpus = runtime.num_dpus();
-  DPU_LAUNCH_ARGS args[nr_of_dpus];
-
-  for (uint32_t i = 0; i < nr_of_dpus; i++) {
-    args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
-    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
-    args[i].size_type = sizeof(T);
-    args[i].unary.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
-    args[i].unary.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
-  }
-
-#if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-  log_dpu_launch_args(logger, args, nr_of_dpus);
-#endif
-
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  dpu_set_t dpu;
-  uint32_t idx_dpu = 0;
-
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
-  }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
-  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
-}
-
-template <typename T>
-dpu_vector<T> launch_unary(const dpu_vector<T>& a, KernelID kernel_id) {
-  dpu_vector<T> res(a.size());
-  launch_unary<T>(res, a, kernel_id);
-  return res;
-}
-
-template <typename T>
-void launch_unary(dpu_vector<T>& res, const dpu_vector<T>& rhs,
-                  KernelID kernel_id) {
-  auto bound_cb = std::bind(internal_launch_unary<T>, res, rhs, kernel_id);
-  auto& runtime = DpuRuntime::get();
-  auto& event_queue = runtime.get_event_queue();
-
-  std::shared_ptr<Event> e =
-      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
-
-  e->res = make_result_descriptor(res);
-  event_queue.submit(e);
-
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=COMPUTE kernel="
-                << kernel_id_to_string(kernel_id) << std::endl;
-#endif
-}
-
-template <typename T>
-void internal_launch_reduction(dpu_vector<T>& res, const dpu_vector<T>& a,
-                               KernelID kernel_id) {
-  auto& runtime = DpuRuntime::get();
-
-  uint32_t nr_of_dpus = runtime.num_dpus();
-  DPU_LAUNCH_ARGS args[nr_of_dpus];
-
-  for (uint32_t i = 0; i < nr_of_dpus; i++) {
-    args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].ktype = static_cast<uint8_t>(KERNEL_REDUCTION);
-    args[i].num_elements = a.data_desc().second[i] / sizeof(T);
-    args[i].size_type = sizeof(T);
-    args[i].reduction.rhs_offset = reinterpret_cast<uint32_t>(a.data()[i]);
-    args[i].reduction.res_offset = reinterpret_cast<uint32_t>(res.data()[i]);
-  }
-
-#if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-  log_dpu_launch_args(logger, args, nr_of_dpus);
-#endif
-
-  dpu_set_t& dpu_set = runtime.dpu_set();
-  dpu_set_t dpu;
-  uint32_t idx_dpu = 0;
-
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
-  }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
-  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
-}
-
-template <typename T>
-T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
-  auto& runtime = DpuRuntime::get();
-  dpu_vector<T> res(runtime.num_dpus(),
-                    NR_TASKLETS * sizeof(size_t));  // each dpu returns a single
-
-  auto bound_cb = std::bind(internal_launch_reduction<T>, res, a, kernel_id);
-  auto& event_queue = runtime.get_event_queue();
-
-  std::shared_ptr<Event> e =
-      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
-
-  e->res = make_result_descriptor(res);
-  event_queue.submit(e);
-
-#if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=COMPUTE kernel="
-                << kernel_id_to_string(kernel_id) << std::endl;
-#endif
-
-  vector<T> res_cpu = res.to_cpu();
-
-  assert(res_cpu.size() % runtime.num_dpus() == 0);
-
-  size_t stride = res_cpu.size() / runtime.num_dpus();
+  assert(a.size() % runtime.num_dpus() == 0);
+  size_t stride = a.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
-  T acc = res_cpu[0];
+  T acc = a[0];
 
   // reduce over the remaining DPUs
-  reduction_op_t op = get_reduction_op(kernel_id);
-  for (size_t i = stride; i < res_cpu.size(); i += stride) {
-    T x = res_cpu[i];
+  auto op = kernel_infos[kernel_id].op;
+  for (size_t i = stride; i < a.size(); i += stride) {
+    T x = a[i];
     switch (op) {
-      case REDUCTION_OP_SUM:
+      case KERNEL_OP_SUM:
         acc += x;
         break;
-      case REDUCTION_OP_PRODUCT:
+      case KERNEL_OP_PRODUCT:
         acc *= x;
         break;
-      case REDUCTION_OP_MAX:
+      case KERNEL_OP_MAX:
         acc = (x > acc) ? x : acc;
         break;
-      case REDUCTION_OP_MIN:
+      case KERNEL_OP_MIN:
         acc = (x < acc) ? x : acc;
         break;
       default:
@@ -464,4 +220,77 @@ T launch_reduction(const dpu_vector<T>& a, KernelID kernel_id) {
     }
   }
   return acc;
+}
+
+// Binary operators
+template <typename T>
+dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
+  dpu_vector<T> res(lhs.size());
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::add);
+  return res;
+}
+
+template <typename T>
+dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
+  dpu_vector<T> res(lhs.size());
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::sub);
+  return res;
+}
+
+// Unary operators
+template <typename T>
+dpu_vector<T> operator-(const dpu_vector<T>& a) {
+  dpu_vector<T> res(a.size());
+  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(),
+                       OpInfo<T>::negate);
+  return res;
+}
+
+template <typename T>
+dpu_vector<T> abs(const dpu_vector<T>& a) {
+  dpu_vector<T> res(a.size());
+  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(), OpInfo<T>::abs);
+  return res;
+}
+
+template <typename T>
+T sum(const dpu_vector<T>& a) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * sizeof(size_t));
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::sum);
+  return reduction_cpu(buf, OpInfo<T>::sum);
+}
+
+template <typename T>
+T product(const dpu_vector<T>& a) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * sizeof(size_t));
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::product);
+  return reduction_cpu(buf, OpInfo<T>::product);
+}
+
+template <typename T>
+T min(const dpu_vector<T>& a) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * sizeof(size_t));
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::min);
+  return reduction_cpu(buf, OpInfo<T>::min);
+}
+
+template <typename T>
+T max(const dpu_vector<T>& a) {
+  auto& runtime = DpuRuntime::get();
+  dpu_vector<T> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * sizeof(size_t));
+  detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
+                           OpInfo<T>::max);
+  return reduction_cpu(buf, OpInfo<T>::max);
 }

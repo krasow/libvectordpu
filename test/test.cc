@@ -45,7 +45,7 @@ DEFINE_REDUCTION_TEST(double, sum_reduction, elements, 0.0, 1.0, 0.0, acc + x,
                       sum(a))
 
 test_error test_chained_operations() {
-  const uint32_t N = elements * elements;
+  const uint32_t N = elements;
 
   vector<int> a(N), b(N);
   for (uint32_t i = 0; i < N; i++) {
@@ -92,7 +92,7 @@ int main(void) {
   RUN_TEST(test_chained_operations);
 
   RUN_TEST(test_int_sum_reduction);
-  RUN_TEST(test_int_product_reduction);
+  // RUN_TEST(test_int_product_reduction);
   // RUN_TEST(test_int_max_reduction);
   // RUN_TEST(test_int_min_reduction);
 

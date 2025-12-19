@@ -4,8 +4,8 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
-#include <thread>
 #include <string>
+#include <thread>
 
 // dl function info
 #include <dlfcn.h>
@@ -20,6 +20,21 @@ Logger& DpuRuntime::get_logger() { return *logger_; }
 dpu_set_t& DpuRuntime::dpu_set() { return *dpu_set_; }
 uint32_t DpuRuntime::num_dpus() const { return num_dpus_; }
 uint32_t DpuRuntime::num_tasklets() const { return NR_TASKLETS; }
+
+std::string get_runtime_dpu_binary() {
+  Dl_info info;
+  void* fptr = (void*)&DpuRuntime::get;  // static function pointer
+  if (dladdr(fptr, &info) == 0) {
+    std::__throw_runtime_error("Failed to get library path");
+  }
+  // Full path to libvectordpu.so
+  const char* lib_path = info.dli_fname;
+  // Directory containing the library
+  std::string lib_dir = dirname(const_cast<char*>(lib_path));
+  // Compute path to runtime.dpu relative to the library
+  std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
+  return dpu_file;
+}
 
 void DpuRuntime::init(uint32_t num_dpus) {
   if (initialized_) return;  // idempotent
@@ -39,18 +54,8 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
 
-  Dl_info info;
-  void* fptr = (void*) &DpuRuntime::get; // static function pointer
-  if (dladdr(fptr, &info) == 0) {
-      std::__throw_runtime_error("Failed to get library path");
-  }
-  // Full path to libvectordpu.so
-  const char* lib_path = info.dli_fname;
-  // Directory containing the library
-  std::string lib_dir = dirname(const_cast<char*>(lib_path));
-  // Compute path to runtime.dpu relative to the library
-  std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
-  
+  // Load DPU binary
+  std::string dpu_file = get_runtime_dpu_binary();
   DPU_ASSERT(dpu_load(*dpu_set_, dpu_file.c_str(), nullptr));
 
 #if ENABLE_DPU_LOGGING == 1
@@ -89,4 +94,10 @@ void DpuRuntime::shutdown() {
   dpu_set_ = nullptr;
 
   initialized_ = false;
+}
+
+void DpuRuntime::debug_read_dpu_log() {
+  dpu_set_t dpu;
+  dpu_set_t& set = this->dpu_set();
+  DPU_FOREACH(set, dpu) { DPU_ASSERT(dpu_log_read(dpu, stdout)); }
 }

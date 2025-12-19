@@ -1,61 +1,17 @@
 #include "logger.h"
 
 #include "allocator.h"
+#include "kernelids.h"
 #include "queue.h"
 
-const char* kernel_id_to_string(KernelID id) {
-  switch (id) {
-    case K_UNARY_FLOAT_NEGATE:
-      return "UNARY_FLOAT_NEGATE";
-    case K_UNARY_FLOAT_ABS:
-      return "UNARY_FLOAT_ABS";
-    case K_UNARY_INT_NEGATE:
-      return "UNARY_INT_NEGATE";
-    case K_UNARY_INT_ABS:
-      return "UNARY_INT_ABS";
-    case K_BINARY_FLOAT_ADD:
-      return "BINARY_FLOAT_ADD";
-    case K_BINARY_FLOAT_SUB:
-      return "BINARY_FLOAT_SUB";
-    case K_BINARY_INT_ADD:
-      return "BINARY_INT_ADD";
-    case K_BINARY_INT_SUB:
-      return "BINARY_INT_SUB";
-    case K_REDUCTION_FLOAT_SUM:
-      return "REDUCTION_FLOAT_SUM";
-    case K_REDUCTION_FLOAT_PRODUCT:
-      return "REDUCTION_FLOAT_PRODUCT";
-    case K_REDUCTION_FLOAT_MAX:
-      return "REDUCTION_FLOAT_MAX";
-    case K_REDUCTION_FLOAT_MIN:
-      return "REDUCTION_FLOAT_MIN";
-    case K_REDUCTION_INT_SUM:
-      return "REDUCTION_INT_SUM";
-    case K_REDUCTION_INT_PRODUCT:
-      return "REDUCTION_INT_PRODUCT";
-    case K_REDUCTION_INT_MAX:
-      return "REDUCTION_INT_MAX";
-    case K_REDUCTION_INT_MIN:
-      return "REDUCTION_INT_MIN";
-    case K_REDUCTION_DOUBLE_SUM:
-      return "REDUCTION_DOUBLE_SUM";
-    case K_REDUCTION_DOUBLE_PRODUCT:
-      return "REDUCTION_DOUBLE_PRODUCT";
-    case K_REDUCTION_DOUBLE_MAX:
-      return "REDUCTION_DOUBLE_MAX";
-    case K_REDUCTION_DOUBLE_MIN:
-      return "REDUCTION_DOUBLE_MIN";
-    default:
-      return "UNKNOWN_KERNEL_ID";
-  }
-}
+const char* kernel_id_to_string(KernelID id) { return kernel_infos[id].name; }
 
-const char* ktype_to_string(uint8_t ktype) {
+const char* ktype_to_string(KernelCategory ktype) {
   switch (ktype) {
-    case KERNEL_UNARY:
-      return "UNARY";
     case KERNEL_BINARY:
       return "BINARY";
+    case KERNEL_UNARY:
+      return "UNARY";
     case KERNEL_REDUCTION:
       return "REDUCTION";
     default:
@@ -63,28 +19,28 @@ const char* ktype_to_string(uint8_t ktype) {
   }
 }
 
-void print_vector_desc(Logger& logger, vector_desc desc,
-                              uint32_t reserved) {
+void print_vector_desc(Logger& logger, detail::VectorDescRef desc,
+                       uint32_t reserved) {
   auto out = logger.lock();
   out << "  " << std::left << std::setw(6) << "DPU" << std::setw(14) << "PTR"
       << std::setw(14) << "ALLOC(bytes)" << std::setw(14) << "VEC_SIZE(bytes)\n"
       << std::string(51, '-') << "\n";
 
-  for (size_t i = 0; i < desc.first.size(); i++) {
+  for (size_t i = 0; i < desc->desc.size(); i++) {
     std::ostringstream ptr_hex;
     ptr_hex << "0x" << std::hex << std::setw(8) << std::setfill('0')
-            << desc.first[i];
+            << desc->desc[i].ptr;
 
     out << "  " << std::left << std::setw(6) << i << std::setw(14)
-        << ptr_hex.str() << std::setw(14) << std::dec << desc.second[i]
-        << std::dec << (desc.second[i] - reserved) << "\n";
+        << ptr_hex.str() << std::setw(14) << std::dec
+        << desc->desc[i].size_bytes << std::dec
+        << (desc->desc[i].size_bytes - reserved) << "\n";
   }
 }
 
-void log_allocation(Logger& logger, const std::type_info& type,
-                           uint32_t n, std::string_view debug_name,
-                           const char* debug_file, int debug_line,
-                           bool is_allocation) {
+void log_allocation(Logger& logger, const std::type_info& type, uint32_t n,
+                    std::string_view debug_name, const char* debug_file,
+                    int debug_line, bool is_allocation) {
   auto log = logger.lock();
   log << "[mem-logger] action=" << (is_allocation ? "allocate  " : "deallocate")
       << " type=dpu_vector<" << type.name() << ">"
@@ -100,7 +56,7 @@ void log_allocation(Logger& logger, const std::type_info& type,
 
 #if ENABLE_DPU_LOGGING >= 1
 void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
-                                uint32_t nr_of_dpus) {
+                         uint32_t nr_of_dpus) {
   auto log = logger.lock();
   log << "[task-logger] kernel="
       << kernel_id_to_string(static_cast<KernelID>(args->kernel))
@@ -169,8 +125,8 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
     }
 
     log << "  " << std::left << std::setw(6) << i << std::setw(12)
-        << ktype_to_string(a.ktype) << std::setw(12) << a.num_elements
-        << std::setw(9) << a.size_type;
+        << ktype_to_string(static_cast<KernelCategory>(a.ktype))
+        << std::setw(12) << a.num_elements << std::setw(9) << a.size_type;
 
     if (show_rhs) log << std::setw(13) << rhs.str();
     if (show_lhs) log << std::setw(13) << lhs.str();

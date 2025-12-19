@@ -8,8 +8,8 @@
 
 using std::size_t;
 using std::vector;
-using vector_desc =
-    std::pair<vector<uint32_t>, vector<uint32_t>>;  // ptrs and sizes
+
+#include "desc.h"
 
 struct FreeBlock {
   uint32_t addr;
@@ -20,10 +20,10 @@ class allocator {
  public:
   allocator(uint32_t start_addr, std::size_t total_size, std::size_t num_dpus);
 
-  vector_desc allocate_upmem_vector(std::size_t n,
-                                    std::size_t reserved_mem_per_dpu,
-                                    std::size_t size_type);
-  void deallocate_upmem_vector(vector_desc &data);
+  detail::VectorDescRef allocate_upmem_vector(std::size_t n,
+                                              std::size_t reserved_mem_per_dpu,
+                                              std::size_t size_type);
+  void deallocate_upmem_vector(detail::VectorDescRef data);
 
  private:
   uint32_t start_addr_;  // starting base address
@@ -40,9 +40,6 @@ class allocator {
 
   // Deallocate a block and merge adjacent free blocks
   void deallocate(std::size_t dpu_id, uint32_t addr, size_t size);
-
-  // Get vector_desc (pointers and sizes per DPU)
-  vector_desc get_vector_desc() const;
 
   std::mutex lock;
 };

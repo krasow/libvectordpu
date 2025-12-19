@@ -62,6 +62,9 @@ endif
 
 .PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config
 
+GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h
+
+
 __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_DIR}
@@ -69,8 +72,13 @@ HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
 				-DNR_TASKLETS=${NR_TASKLETS} ${CONFIG_FLAGS}
 DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 
-all: config_check print_config ${HOST_TARGET} ${DPU_TARGET}
+all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"
+
+
+$(GENERATED_TARGETS): tools/generate.py
+	@echo "Generating kernel headers..."
+	python3 tools/generate.py
 
 reconfigure:
 	@echo "NR_TASKLETS=$(NR_TASKLETS)" > $(CONFIG_STAMP)
@@ -105,14 +113,14 @@ ${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS}
 
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Building test target: $@"
-	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
+	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) ${CONFIG_FLAGS} -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
 
 clean-internal:
 	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
 
 clean: clean-internal
-	$(RM) -r $(CONFIG_STAMP)
+	$(RM) -r $(CONFIG_STAMP) $(GENERATED_TARGETS)
 
 # ANSI color codes
 RED    := \033[0;31m

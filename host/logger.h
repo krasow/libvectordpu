@@ -8,8 +8,7 @@
 #include <string_view>
 #include <vector>
 
-using vector_desc =
-    std::pair<std::vector<uint32_t>, std::vector<uint32_t>>;  // ptrs and sizes
+#include "desc.h"
 
 class Logger {
   std::mutex mtx_;
@@ -45,16 +44,15 @@ class Logger {
 
 char const* kernel_id_to_string(KernelID kernel_id);
 
-void print_vector_desc(Logger& logger, vector_desc desc,
-                              uint32_t reserved);
+void print_vector_desc(Logger& logger, detail::VectorDescRef desc,
+                       uint32_t reserved);
 
-void log_allocation(Logger& logger, const std::type_info& type,
-                           uint32_t n, std::string_view debug_name,
-                           const char* debug_file, int debug_line,
-                           bool is_allocation = true);
+void log_allocation(Logger& logger, const std::type_info& type, uint32_t n,
+                    std::string_view debug_name, const char* debug_file,
+                    int debug_line, bool is_allocation = true);
 
 #define log_deallocation(logger, type, n, debug_name, debug_file, debug_line) \
   log_allocation(logger, type, n, debug_name, debug_file, debug_line, false)
 
 void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
-                                uint32_t nr_of_dpus);
+                         uint32_t nr_of_dpus);
