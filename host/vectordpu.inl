@@ -51,12 +51,12 @@ dpu_vector<T>::dpu_vector(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-// #if ENABLE_DPU_LOGGING >= 2
-//   Logger& logger = DpuRuntime::get().get_logger();
-//   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
-//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-//                 << debug_line << std::endl;
-// #endif
+  // #if ENABLE_DPU_LOGGING >= 2
+  //   Logger& logger = DpuRuntime::get().get_logger();
+  //   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
+  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+  //                 << debug_line << std::endl;
+  // #endif
 }
 
 template <typename T>
@@ -69,12 +69,12 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
     debug_line = other.debug_line;
     copied = true;
   }
-// #if ENABLE_DPU_LOGGING >= 2
-//   Logger& logger = DpuRuntime::get().get_logger();
-//   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
-//                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-//                 << debug_line << std::endl;
-// #endif
+  // #if ENABLE_DPU_LOGGING >= 2
+  //   Logger& logger = DpuRuntime::get().get_logger();
+  //   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
+  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
+  //                 << debug_line << std::endl;
+  // #endif
   return *this;
 }
 

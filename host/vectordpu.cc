@@ -1,6 +1,6 @@
 #include "vectordpu.h"
 
-#include "desc.h"
+#include "vectordesc.h"
 
 #ifndef DPURT
 #define DPURT
@@ -90,7 +90,7 @@ void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
-  
+
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
     args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
