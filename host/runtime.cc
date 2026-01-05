@@ -21,9 +21,11 @@ dpu_set_t& DpuRuntime::dpu_set() { return *dpu_set_; }
 uint32_t DpuRuntime::num_dpus() const { return num_dpus_; }
 uint32_t DpuRuntime::num_tasklets() const { return NR_TASKLETS; }
 
+extern "C" void vectordpu_dladdr_anchor() {}
+
 std::string get_runtime_dpu_binary() {
   Dl_info info;
-  void* fptr = (void*)&DpuRuntime::get;  // static function pointer
+  void* fptr = (void*)&vectordpu_dladdr_anchor;
   if (dladdr(fptr, &info) == 0) {
     std::__throw_runtime_error("Failed to get library path");
   }
@@ -33,7 +35,12 @@ std::string get_runtime_dpu_binary() {
   std::string lib_dir = dirname(const_cast<char*>(lib_path));
   // Compute path to runtime.dpu relative to the library
   std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
-  return dpu_file;
+  // Canonicalize to absolute path
+  char resolved[PATH_MAX];
+  if (!realpath(dpu_file.c_str(), resolved)) {
+    std::__throw_runtime_error("Failed to resolve runtime.dpu path");
+  }
+  return std::string(resolved);
 }
 
 void DpuRuntime::init(uint32_t num_dpus) {
