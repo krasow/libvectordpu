@@ -6,7 +6,7 @@
 #define NR_TASKLETS 16
 #define BACKEND "simulator"
 #define DEBUG 0
-#define ENABLE_DPU_LOGGING 1
+#define ENABLE_DPU_LOGGING 0
 #define ENABLE_AUTO_FENCING 1
 #define ENABLE_DPU_PRINTING 0
 #define CXX_STANDARD "c++20"

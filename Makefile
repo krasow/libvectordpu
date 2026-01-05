@@ -55,7 +55,7 @@ else
   BUILD_TYPE := release
 endif
 
-.PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config
+.PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config make_header
 
 GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h
 
@@ -74,7 +74,7 @@ $(GENERATED_TARGETS): tools/generate.py
 	@echo "Generating kernel headers..."
 	python3 tools/generate.py
 
-common/config.h: tools/generate_config.py 
+make_header: tools/generate_config.py 
 	@echo "Generating config header..."
 	python3 tools/generate_config.py
 
@@ -93,7 +93,7 @@ cache_old:
 		cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old; \
 	fi
 
-config_check: cache_old reconfigure common/config.h
+config_check: cache_old reconfigure make_header
 	@if [ -f "$(CONFIG_STAMP)" ]; then \
 	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
 	        echo "Configuration changed, cleaning build..."; \
