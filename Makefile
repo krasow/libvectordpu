@@ -32,12 +32,6 @@ DESTDIR ?= ./install
 
 CONFIG_STAMP := build.config
 
-CONFIG_FLAGS ?= \
-	-DENABLE_DPU_LOGGING=$(LOGGING) \
-	-DBACKEND=\"$(BACKEND)\" \
-	-DENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING) \
-	-DENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)
-
 HOST_TARGET := ${BUILDDIR}/lib/libvectordpu.so
 DPU_TARGET := ${BUILDDIR}/bin/runtime.dpu
 TEST_TARGET := ${TEST_DIR}/vectordpu_test
@@ -48,8 +42,9 @@ HOST_SOURCES := $(wildcard ${HOST_DIR}/*.cc)
 DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
 TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
 
-HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h) $(wildcard ${COMMON_DIR}/*.h)
-DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h) $(wildcard ${COMMON_DIR}/*.h)
+HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h)
+DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
+COMMON_HEADERS := ${COMMON_DIR}/common.h ${COMMON_DIR}/config.h
 
 ifeq ($(DEBUG),1)
   CXXFLAGS += -g -O0 -DDEBUG -fsanitize=address -fno-omit-frame-pointer
@@ -68,9 +63,8 @@ GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h
 __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
 COMMON_FLAGS := -Wall -Wextra -g -I${COMMON_DIR}
-HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu` \
-				-DNR_TASKLETS=${NR_TASKLETS} ${CONFIG_FLAGS}
-DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
+HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu`
+DPU_FLAGS := ${COMMON_FLAGS} -O2 
 
 all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"
@@ -79,6 +73,10 @@ all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 $(GENERATED_TARGETS): tools/generate.py
 	@echo "Generating kernel headers..."
 	python3 tools/generate.py
+
+common/config.h: tools/generate_config.py 
+	@echo "Generating config header..."
+	python3 tools/generate_config.py
 
 reconfigure:
 	@echo "NR_TASKLETS=$(NR_TASKLETS)" > $(CONFIG_STAMP)
@@ -95,7 +93,7 @@ cache_old:
 		cp -f $(CONFIG_STAMP) $(CONFIG_STAMP).old; \
 	fi
 
-config_check: cache_old reconfigure
+config_check: cache_old reconfigure common/config.h
 	@if [ -f "$(CONFIG_STAMP)" ]; then \
 	    cmp -s $(CONFIG_STAMP) $(CONFIG_STAMP).old 2>/dev/null || { \
 	        echo "Configuration changed, cleaning build..."; \
@@ -105,22 +103,22 @@ config_check: cache_old reconfigure
 		rm -f $(CONFIG_STAMP).old; \
 	fi
 
-${HOST_TARGET}: ${HOST_SOURCES} ${HOST_HEADERS}
+${HOST_TARGET}: ${HOST_SOURCES} ${HOST_HEADERS} ${COMMON_HEADERS}
 	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@ ${HOST_SOURCES} ${HOST_FLAGS} 
 
-${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS}
-	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES} ${CONFIG_FLAGS}
+${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS} ${COMMON_HEADERS}
+	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES}
 
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Building test target: $@"
-	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) ${CONFIG_FLAGS} -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
+	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
 
 clean-internal:
 	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
 
 clean: clean-internal
-	$(RM) -r $(CONFIG_STAMP) $(GENERATED_TARGETS)
+	$(RM) -r $(CONFIG_STAMP) $(GENERATED_TARGETS) common/config.h
 
 # ANSI color codes
 RED    := \033[0;31m
@@ -147,17 +145,18 @@ bindir := $(DESTDIR)/bin
 libdir := $(DESTDIR)/lib
 includedir := $(DESTDIR)/include/vectordpu
 
-install: ${DPU_TARGET} ${HOST_TARGET}
+install: all
 	@echo "Installing to $(DESTDIR)..."
 	install -d $(bindir) $(libdir) $(includedir)
 	install -m 644 $(DPU_TARGET) $(bindir)
 	install -m 644 $(HOST_TARGET) $(libdir)
 	install -m 644 $(HOST_HEADERS) $(includedir)
 	install -m 644 $(DPU_HEADERS) $(includedir)
+	install -m 644 $(COMMON_HEADERS) $(includedir)
+	install -m 644 $(GENERATED_TARGETS) $(includedir)
 
 uninstall:
 	@echo "Removing from $(prefix)..."
 	rm -f $(bindir)/$(notdir $(DPU_TARGET))
 	rm -f $(libdir)/$(notdir $(HOST_TARGET))
-	rm -f $(patsubst %,$(includedir)/%,$(notdir $(HOST_HEADERS)))
-	rm -f $(patsubst %,$(includedir)/%,$(notdir $(DPU_HEADERS)))
+	rm -rf $(includedir)

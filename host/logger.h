@@ -1,6 +1,7 @@
 #pragma once
 
 #include <common.h>
+#include <config.h>
 
 #include <iomanip>
 #include <iostream>
