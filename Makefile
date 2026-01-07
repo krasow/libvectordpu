@@ -1,7 +1,7 @@
 # https://github.com/CMU-SAFARI/prim-benchmarks/tree/main 
 # leveraged the above repository to create Makefile for DPU and host code compilation
 BUILDDIR ?= build
-NR_TASKLETS ?= 16
+NR_TASKLETS ?= 12
 
 BACKEND ?= simulator
 DEBUG ?= 0

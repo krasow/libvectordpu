@@ -19,3 +19,4 @@ kernelids.h
 opinfo.h
 kernels.h
 config.h
+.envrc

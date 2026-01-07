@@ -10,6 +10,7 @@
 #include "opinfo.h"
 #include "runtime.h"
 #include "vectordesc.h"
+#include "timer.h"
 
 #if __cplusplus < 202002L
 // Fake source_location for pre-C++20
