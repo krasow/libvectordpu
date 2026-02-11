@@ -81,7 +81,7 @@ void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
   }
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
                             sizeof(args[0]), DPU_XFER_DEFAULT));
-  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS)); 
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
 void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,

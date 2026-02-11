@@ -9,8 +9,8 @@
 #include "kernelids.h"
 #include "opinfo.h"
 #include "runtime.h"
-#include "vectordesc.h"
 #include "timer.h"
+#include "vectordesc.h"
 
 #if __cplusplus < 202002L
 // Fake source_location for pre-C++20
