@@ -55,10 +55,10 @@ std::string operationtype_to_string(Event::OperationType op) {
 void Event::add_completion_callback() {
   assert(this->finished == false);
 
-  if (this->op == OperationType::COMPUTE) {
+ if (this->op == OperationType::COMPUTE) {
     this->mark_finished();
-    return;
-  }
+   return;
+ }
 
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();

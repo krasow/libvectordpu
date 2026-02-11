@@ -7,7 +7,7 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 5              // e.g., 32 elements per block
+#define BLOCK_SIZE_LOG2 4              // e.g., 32 elements per block
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
 typedef uint32_t KernelID;

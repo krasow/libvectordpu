@@ -3,7 +3,6 @@
   int binary_##TYPE##_##OP(void) {                                          \
     unsigned int tasklet_id = me();                                         \
     uint32_t num_elems = args.num_elements;                                 \
-                                                                            \
     __mram_ptr TYPE *lhs_ptr = (__mram_ptr TYPE *)(args.binary.lhs_offset); \
     __mram_ptr TYPE *rhs_ptr = (__mram_ptr TYPE *)(args.binary.rhs_offset); \
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.binary.res_offset); \
@@ -34,3 +33,4 @@
     }                                                                       \
     return 0;                                                               \
   }
+  

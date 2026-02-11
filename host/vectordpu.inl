@@ -180,7 +180,7 @@ vector<T> dpu_vector<T>::to_cpu() {
 // need the event to be completed before reading printf output
 #if ENABLE_DPU_PRINTING == 1
   // read and print DPU logs to host stdout
-  runtime.debug_print_dpus();
+  runtime.debug_read_dpu_log();
 #endif
 #endif
 

@@ -59,7 +59,7 @@ ops = [
 ]
 
 types = [
-    'float', 'int', 'double'
+    'int32_t'
 ]
 
 all_ops = [] # :: (KernelID, OpClass)
