@@ -19,6 +19,14 @@ class Event {
   OperationType op;
   std::function<void()> cb;
 
+  // Metadata for fusion
+  std::vector<detail::VectorDescRef> inputs;
+  detail::VectorDescRef output;
+  std::vector<uint8_t> rpn_ops;
+  KernelID kid = 0;
+  KernelID pipeline_kid = 0;  // For lazy promotion
+  uint8_t opcode = 0;         // For lazy promotion
+
   std::variant<std::monostate, detail::VectorDescRef> res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
@@ -30,8 +38,6 @@ class Event {
   size_t id = 0;
   bool finished = false;
   bool started = false;
-  // bool has_parents = false;
-  // std::list<std::shared_ptr<Event>> parents;
 
   void add_completion_callback();
   void mark_finished() { this->finished = true; }
@@ -43,10 +49,7 @@ class EventQueue {
   EventQueue() = default;
   ~EventQueue() = default;
 
-  void submit(std::shared_ptr<Event> e) {
-    e->id = counter_++;
-    operations_.push_back(e);
-  }
+  void submit(std::shared_ptr<Event> e);
 
   void add_fence(std::shared_ptr<Event> e);
 

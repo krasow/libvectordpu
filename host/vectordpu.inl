@@ -227,7 +227,8 @@ template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
-                        rhs.data_desc_ref(), OpInfo<T>::add);
+                        rhs.data_desc_ref(), OpInfo<T>::add, OpInfo<T>::add_op,
+                        OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -235,23 +236,145 @@ template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size());
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
-                        rhs.data_desc_ref(), OpInfo<T>::sub);
+                        rhs.data_desc_ref(), OpInfo<T>::sub, OpInfo<T>::sub_op,
+                        OpInfo<T>::universal_pipeline);
   return res;
 }
+
+template <typename T>
+dpu_vector<T> operator*(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
+  dpu_vector<T> res(lhs.size());
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::mul, OpInfo<T>::mul_op,
+                        OpInfo<T>::universal_pipeline);
+  return res;
+}
+
+template <typename T>
+dpu_vector<T> operator/(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
+  dpu_vector<T> res(lhs.size());
+  detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
+                        rhs.data_desc_ref(), OpInfo<T>::div, OpInfo<T>::div_op,
+                        OpInfo<T>::universal_pipeline);
+  return res;
+}
+
+#if PIPELINE
+template <typename T>
+pipeline_result<T> dpu_vector<T>::pipeline(const std::vector<uint8_t>& ops) {
+  return pipeline(ops, {});
+}
+#endif
+
+#if PIPELINE
+template <typename T>
+pipeline_result<T> dpu_vector<T>::pipeline(
+    const std::vector<uint8_t>& ops,
+    const std::vector<dpu_vector<T>>& operands) {
+  dpu_vector<T> res(this->size());
+  std::vector<uint8_t> rpn_ops;
+  // Check if it already looks like RPN (starts with a PUSH)
+  // PUSH_INPUT=11, PUSH_OPERAND_X=12-19
+  bool is_rpn = !ops.empty() && (ops[0] >= OP_PUSH_INPUT);
+
+  if (is_rpn) {
+    rpn_ops = ops;
+  } else {
+    // Translate Linear -> RPN
+    if (!ops.empty()) {
+      rpn_ops.push_back(OP_PUSH_INPUT);  // OP_PUSH_INPUT
+      size_t next_operand = 0;
+      for (uint8_t op : ops) {
+        // ADD=3, SUB=4, MUL=5, DIV=6
+        bool is_binary = (op >= OP_ADD && op <= OP_DIV);
+        if (is_binary) {
+          if (next_operand < MAX_PIPELINE_OPERANDS) {
+            rpn_ops.push_back(OP_PUSH_OPERAND_0 +
+                              next_operand);  // OP_PUSH_OPERAND_0..7
+            next_operand++;
+          }
+        }
+        rpn_ops.push_back(op);
+      }
+    }
+  }
+
+  std::vector<detail::VectorDescRef> operand_refs;
+  for (const auto& op : operands) {
+    operand_refs.push_back(op.data_desc_ref());
+  }
+
+  detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
+                                    rpn_ops, operand_refs,
+                                    OpInfo<T>::universal_pipeline);
+  return res;
+}
+#endif
+
+#if PIPELINE
+template <typename T>
+T dpu_vector<T>::pipeline_reduce(const std::vector<uint8_t>& ops,
+                                 const std::vector<dpu_vector<T>>& operands) {
+  // A reduction pipeline must return a scalar.
+  // We reuse pipeline() but return the aggregated result.
+  dpu_vector<T> res = pipeline(ops, operands);
+
+  // The last op defines the reduction type
+  assert(!ops.empty());
+  uint8_t last_op = ops.back();
+
+  // Map opcode back to a standard KernelID for reduction_cpu
+  // Standard reduction OPs are MIN, MAX, SUM, PRODUCT
+  KernelID rid = OpInfo<T>::sum;  // default
+  switch (last_op) {
+    case OP_MIN:
+      rid = OpInfo<T>::min;
+      break;
+    case OP_MAX:
+      rid = OpInfo<T>::max;
+      break;
+    case OP_SUM:
+      rid = OpInfo<T>::sum;
+      break;
+    case OP_PRODUCT:
+      rid = OpInfo<T>::product;
+      break;
+    default:
+      // rid remains OpInfo<T>::sum (the default)
+      break;
+  }
+
+  return reduction_cpu(res, rid);
+}
+#endif
+
+#if PIPELINE
+template <typename T>
+pipeline_result<T>::operator T() {
+  if (vec.data_desc().is_reduction_result) {
+    return reduction_cpu(const_cast<dpu_vector<T>&>(vec),
+                         vec.data_desc().reduction_rid);
+  }
+  // If not a reduction, return first element as a best effort scalar conversion
+  return vec.to_cpu()[0];
+}
+#endif
 
 // Unary operators
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
   detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(),
-                       OpInfo<T>::negate);
+                       OpInfo<T>::negate, OpInfo<T>::negate_op,
+                       OpInfo<T>::universal_pipeline);
   return res;
 }
 
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
-  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(), OpInfo<T>::abs);
+  detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(), OpInfo<T>::abs,
+                       OpInfo<T>::abs_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -261,7 +384,8 @@ T sum(const dpu_vector<T>& a) {
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
-                           OpInfo<T>::sum);
+                           OpInfo<T>::sum, OpInfo<T>::sum_op,
+                           OpInfo<T>::universal_pipeline);
   return reduction_cpu(buf, OpInfo<T>::sum);
 }
 
@@ -271,7 +395,8 @@ T product(const dpu_vector<T>& a) {
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
-                           OpInfo<T>::product);
+                           OpInfo<T>::product, OpInfo<T>::product_op,
+                           OpInfo<T>::universal_pipeline);
   return reduction_cpu(buf, OpInfo<T>::product);
 }
 
@@ -281,7 +406,8 @@ T min(const dpu_vector<T>& a) {
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
-                           OpInfo<T>::min);
+                           OpInfo<T>::min, OpInfo<T>::min_op,
+                           OpInfo<T>::universal_pipeline);
   return reduction_cpu(buf, OpInfo<T>::min);
 }
 
@@ -291,6 +417,7 @@ T max(const dpu_vector<T>& a) {
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
-                           OpInfo<T>::max);
+                           OpInfo<T>::max, OpInfo<T>::max_op,
+                           OpInfo<T>::universal_pipeline);
   return reduction_cpu(buf, OpInfo<T>::max);
 }

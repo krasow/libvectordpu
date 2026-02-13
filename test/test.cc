@@ -27,7 +27,8 @@ DEFINE_REDUCTION_TEST(int, min_reduction, elements, 0, 999,
                       std::numeric_limits<int>::max(), (x < acc ? x : acc),
                       min(a))
 
-// DEFINE_REDUCTION_TEST(float, sum_reduction, elements, 0.0f, 1.0f, 0.0f, acc + x,
+// DEFINE_REDUCTION_TEST(float, sum_reduction, elements, 0.0f, 1.0f, 0.0f, acc +
+// x,
 //                       sum(a))
 
 // DEFINE_REDUCTION_TEST(float, product_reduction, elements, 0.5f, 2.0f, 1.0f,
@@ -41,7 +42,8 @@ DEFINE_REDUCTION_TEST(int, min_reduction, elements, 0, 999,
 //                       std::numeric_limits<float>::infinity(),
 //                       (x < acc ? x : acc), min(a))
 
-// DEFINE_REDUCTION_TEST(double, sum_reduction, elements, 0.0, 1.0, 0.0, acc + x,
+// DEFINE_REDUCTION_TEST(double, sum_reduction, elements, 0.0, 1.0, 0.0, acc +
+// x,
 //                       sum(a))
 
 test_error test_chained_operations() {
@@ -83,14 +85,9 @@ int main(void) {
   bool all_passed = true;
   RUN_TEST(test_int_add);
   RUN_TEST(test_int_sub);
-  // RUN_TEST(test_float_add);
-  // RUN_TEST(test_float_sub);
   RUN_TEST(test_int_negate);
   RUN_TEST(test_int_abs);
-  // RUN_TEST(test_float_negate);
-  // RUN_TEST(test_float_abs);
   RUN_TEST(test_chained_operations);
-
   RUN_TEST(test_int_sum_reduction);
   // RUN_TEST(test_int_product_reduction);
   // RUN_TEST(test_int_max_reduction);

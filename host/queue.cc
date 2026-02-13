@@ -1,9 +1,12 @@
 #include "queue.h"
 
 #include <cassert>
+#include <mutex>
+#include <ostream>
 #include <thread>
 
 #include "runtime.h"
+#include "vectordpu.h"
 
 #ifndef DPURT
 #define DPURT
@@ -55,11 +58,6 @@ std::string operationtype_to_string(Event::OperationType op) {
 void Event::add_completion_callback() {
   assert(this->finished == false);
 
-  if (this->op == OperationType::COMPUTE) {
-    this->mark_finished();
-    return;
-  }
-
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
@@ -108,7 +106,23 @@ bool EventQueue::process_next() {
       break;
     case Event::OperationType::COMPUTE:
       e->started = true;
-      e->cb();
+#if PIPELINE
+      if (!e->rpn_ops.empty()) {
+        // Automatic fusion or manual RPN pipeline
+        detail::internal_launch_universal_pipeline(
+            e->output, (e->inputs.empty() ? nullptr : e->inputs[0]), e->rpn_ops,
+            (e->inputs.size() > 1 ? std::vector<detail::VectorDescRef>(
+                                        e->inputs.begin() + 1, e->inputs.end())
+                                  : std::vector<detail::VectorDescRef>()),
+            e->kid);
+      } else if (e->cb) {
+        e->cb();
+      }
+#else
+      if (e->cb) {
+        e->cb();
+      }
+#endif
       e->add_completion_callback();
       break;
     case Event::OperationType::DPU_TRANSFER:
@@ -201,4 +215,106 @@ void EventQueue::debug_active_events() {
     }
   }
 #endif
+}
+void EventQueue::submit(std::shared_ptr<Event> e) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  e->id = counter_++;
+
+  bool fused = false;
+#if PIPELINE
+  if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
+    auto last = operations_.back();
+    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr) {
+      // Look for dependency: does any input of 'e' match 'last->output'?
+      bool dependent = false;
+      for (size_t i = 0; i < e->inputs.size(); ++i) {
+        if (e->inputs[i] == last->output) {
+          dependent = true;
+          break;
+        }
+      }
+
+      if (dependent) {
+        // Check fusion constraints:
+        // 1. Total ops <= MAX_PIPELINE_OPS
+        // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
+        if (last->rpn_ops.size() + e->rpn_ops.size() <= MAX_PIPELINE_OPS &&
+            last->inputs.size() + e->inputs.size() <= MAX_PIPELINE_OPERANDS) {
+          // Fusion!
+          // last sequence: [ ... ] -> result on stack top
+          // e sequence: [ PUSH_INPUT, ... ] where INPUT is last->output
+
+          // Rewrite 'e' sequence to use result on stack instead of pushing it
+          std::vector<uint8_t> new_rpn;
+
+          // Promote 'last' if it's not already RPN
+          if (last->rpn_ops.empty()) {
+            new_rpn.push_back(OP_PUSH_INPUT);
+            if (last->inputs.size() > 1) {  // Binary
+              new_rpn.push_back(OP_PUSH_OPERAND_0);
+            }
+            new_rpn.push_back(last->opcode);
+            last->kid = last->pipeline_kid;
+          } else {
+            new_rpn = last->rpn_ops;
+          }
+
+          // Promote 'e' to RPN if needed to merge
+          std::vector<uint8_t> e_rpn = e->rpn_ops;
+          if (e_rpn.empty()) {
+            e_rpn.push_back(OP_PUSH_INPUT);
+            if (e->inputs.size() > 1) {  // Binary
+              e_rpn.push_back(OP_PUSH_OPERAND_0);
+            }
+            e_rpn.push_back(e->opcode);
+          }
+
+          std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
+
+          for (uint8_t op : e_rpn) {
+            if (op == OP_PUSH_INPUT) {  // OP_PUSH_INPUT
+              if (e->inputs[0] == last->output) {
+                // already on stack! do nothing
+              } else {
+                // Need to push it. Map it to next operand slot
+                uint8_t slot = combined_inputs.size() - 1;
+                combined_inputs.push_back(e->inputs[0]);
+                new_rpn.push_back(OP_PUSH_OPERAND_0 + slot);
+              }
+            } else if (op >= OP_PUSH_OPERAND_0 &&
+                       op <= OP_PUSH_OPERAND_7) {  // OP_PUSH_OPERAND_X
+              uint32_t orig_idx = op - OP_PUSH_OPERAND_0;
+              if (e->inputs[orig_idx + 1] == last->output) {
+                // fused input. already on stack
+              } else {
+                uint8_t slot = combined_inputs.size() - 1;
+                combined_inputs.push_back(e->inputs[orig_idx + 1]);
+                new_rpn.push_back(OP_PUSH_OPERAND_0 + slot);
+              }
+            } else {
+              new_rpn.push_back(op);
+            }
+          }
+
+          last->rpn_ops = new_rpn;
+          last->inputs = combined_inputs;
+          last->output = e->output;
+          fused = true;
+
+#if ENABLE_DPU_LOGGING >= 1
+          Logger& logger = DpuRuntime::get().get_logger();
+          logger.lock() << "[queue-fuse] fused event id=" << e->id
+                        << " into last=" << last->id
+                        << " new_ops_count=" << last->rpn_ops.size()
+                        << std::endl;
+#endif
+        }
+      }
+    }
+  }
+#endif
+
+  if (!fused) {
+    operations_.push_back(e);
+  }
 }

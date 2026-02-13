@@ -7,6 +7,9 @@ BACKEND ?= simulator
 DEBUG ?= 0
 LOGGING ?= 0
 
+# this option enables experimental pipeline and fusion features
+PIPELINE ?= 0
+
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
 ENABLE_AUTO_FENCING ?= 1
@@ -16,7 +19,7 @@ ENABLE_DPU_PRINTING ?= 0
 
 # the default compiler on feta supports up to C++17
 # c++20 is needed for some debugging output from std::source_location
-CXX_STANDARD ?= c++20
+CXX_STANDARD ?= c++17
 
 # ----------------- Edit above this line -----------------
 
@@ -57,13 +60,14 @@ endif
 
 .PHONY: config_check cache_old reconfigure all clean clean-internal test install uninstall print_config make_header
 
-GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h
+GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h common/opcodes.h
 
 
 __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
 COMMON_FLAGS := -Wall -Wextra -I${COMMON_DIR}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu`
+# DPU-specific flags
 DPU_FLAGS := ${COMMON_FLAGS} -O3 -DNR_TASKLETS=${NR_TASKLETS}
 
 all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
@@ -86,6 +90,7 @@ reconfigure:
 	@echo "ENABLE_AUTO_FENCING=$(ENABLE_AUTO_FENCING)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)" >> $(CONFIG_STAMP)
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
+	@echo "PIPELINE=$(PIPELINE)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

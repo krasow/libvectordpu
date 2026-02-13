@@ -9,7 +9,7 @@
 #define PRODUCT(a, b) ((a) * (b))
 #define SUM(a, b) ((a) + (b))
 
-#define MINIMUM_WRITE_SIZE 8
+// MINIMUM_WRITE_SIZE is defined in common.h
 
 #if ENABLE_DPU_PRINTING == 1
 void print_args(DPU_LAUNCH_ARGS args) {

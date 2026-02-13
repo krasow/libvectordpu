@@ -37,6 +37,11 @@ using std::vector;
 // ============================
 // DPU Vector
 // ============================
+#if PIPELINE
+template <typename T>
+struct pipeline_result;
+#endif
+
 template <typename T>
 class dpu_vector {
  public:
@@ -64,9 +69,57 @@ class dpu_vector {
   uint32_t size_;
   uint32_t reserved_ = 0;
   const char* debug_name = nullptr;
+
   const char* debug_file = nullptr;
   int debug_line = -1;
   bool copied = false;
+
+ public:
+#if PIPELINE
+  pipeline_result<T> pipeline(const std::vector<uint8_t>& ops);
+  pipeline_result<T> pipeline(const std::vector<uint8_t>& ops,
+                              const std::vector<dpu_vector<T>>& operands);
+  T pipeline_reduce(const std::vector<uint8_t>& ops,
+                    const std::vector<dpu_vector<T>>& operands = {});
+#endif
 };
+
+#if PIPELINE
+template <typename T>
+struct pipeline_result {
+  dpu_vector<T> vec;
+  pipeline_result(dpu_vector<T> v) : vec(v) {}
+  operator T();
+  operator dpu_vector<T>() { return vec; }
+  dpu_vector<T>* operator->() { return &vec; }
+};
+#endif
+
+namespace detail {
+void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
+                   KernelID kernel_id, uint8_t opcode, KernelID pipeline_kid);
+void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
+                  uint8_t opcode, KernelID pipeline_kid);
+void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id,
+                      uint8_t opcode, KernelID pipeline_kid);
+
+void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
+                            VectorDescRef rhs, KernelID kernel_id);
+void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
+                           KernelID kernel_id);
+void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
+                               KernelID kernel_id);
+
+#if PIPELINE
+void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
+                               const std::vector<uint8_t>& ops,
+                               const std::vector<VectorDescRef>& operands,
+                               KernelID kernel_id);
+
+void internal_launch_universal_pipeline(
+    VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
+    const std::vector<VectorDescRef>& operands, KernelID kernel_id);
+#endif
+}  // namespace detail
 
 #include "vectordpu.inl"

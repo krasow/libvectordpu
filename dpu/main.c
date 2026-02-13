@@ -18,7 +18,6 @@ int main(void) {
   if (args.kernel < KERNEL_COUNT) {
     return kernels[args.kernel]();
   } else {
-    // invalid kernel ID
     return -1;
   }
 }

@@ -21,6 +21,9 @@ struct VectorDesc {
 
   // Sharded per DPU.
   std::vector<VectorSegment> desc;
+
+  bool is_reduction_result = false;
+  KernelID reduction_rid;
 };
 
 using VectorDescRef = std::shared_ptr<VectorDesc>;
