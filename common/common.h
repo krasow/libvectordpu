@@ -7,8 +7,13 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 4              // e.g., 32 elements per block
+#define BLOCK_SIZE_LOG2 6              // 64 elements per block (256 bytes for int32)
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
+
+#ifdef __dpu__
+#include <config.h>
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][5 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
+#endif
 
 typedef uint32_t KernelID;
 
@@ -22,7 +27,7 @@ enum KernelCategory {
 #include "opcodes.h"
 
 #define MAX_PIPELINE_OPS 8
-#define MAX_PIPELINE_OPERANDS 8
+#define MAX_PIPELINE_OPERANDS 3
 #define MAX_PIPELINE_STACK_DEPTH 4
 #define MINIMUM_WRITE_SIZE 8
 

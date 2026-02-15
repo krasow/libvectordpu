@@ -52,16 +52,18 @@ std::string operationtype_to_string(Event::OperationType op) {
                 << " phase=finished" << std::endl;
 #endif
 
+  delete self_ptr;
+
   return DPU_OK;
 }
 
-void Event::add_completion_callback() {
+void Event::add_completion_callback(std::shared_ptr<Event> self) {
   assert(this->finished == false);
 
   auto& runtime = DpuRuntime::get();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
-  auto wrapper = new std::shared_ptr<Event>(this);
+  auto wrapper = new std::shared_ptr<Event>(self);
 
   CHECK_UPMEM(dpu_callback(
       dpu_set, &upmem_callback, (void*)wrapper,
@@ -123,17 +125,17 @@ bool EventQueue::process_next() {
         e->cb();
       }
 #endif
-      e->add_completion_callback();
+      e->add_completion_callback(e);
       break;
     case Event::OperationType::DPU_TRANSFER:
       e->started = true;
       e->cb();
-      e->add_completion_callback();
+      e->add_completion_callback(e);
       break;
     case Event::OperationType::HOST_TRANSFER:
       e->started = true;
       e->cb();
-      e->add_completion_callback();
+      e->add_completion_callback(e);
       break;
     default:
       assert(false && "Unknown event type");

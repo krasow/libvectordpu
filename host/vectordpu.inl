@@ -15,86 +15,104 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
       debug_file(loc.file_name()),
       debug_line(loc.line()) {
   auto& runtime = DpuRuntime::get();
-
   if (runtime.is_initialized() == false) {
-    // throw std::runtime_error("DPU runtime not initialized!");
     int nr_dpus = 8;
     const char* env_val = std::getenv("NR_DPUS");
     if (env_val != nullptr) {
-      nr_dpus = std::atoi(env_val);  // convert string to int
+      nr_dpus = std::atoi(env_val);
     }
     runtime.init(nr_dpus);
   }
 
-  if (!copied) {
+  data_ =
+      runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
+
 #if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = DpuRuntime::get().get_logger();
-    log_allocation(logger, typeid(T), n, debug_name, debug_file, debug_line);
+  Logger& logger = DpuRuntime::get().get_logger();
+  log_allocation(logger, typeid(T), n, debug_name, debug_file, debug_line);
 #endif
-
-    data_ =
-        runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
-
-#if ENABLE_DPU_LOGGING >= 2
-    print_vector_desc(logger, data_, reserved);
-#endif
-  }
 }
 
 template <typename T>
-dpu_vector<T>::dpu_vector(const dpu_vector& other) {
-  if (this != &other) {
-    data_ = other.data_;
-    size_ = other.size_;
-    debug_name = other.debug_name;
-    debug_file = other.debug_file;
-    debug_line = other.debug_line;
-    copied = true;
-  }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY CONSTRUCTOR at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+dpu_vector<T>::dpu_vector(const dpu_vector& other)
+    : data_(other.data_),
+      size_(other.size_),
+      reserved_(other.reserved_),
+      debug_name(other.debug_name),
+      debug_file(other.debug_file),
+      debug_line(other.debug_line),
+      copied(true) {}
+
+template <typename T>
+dpu_vector<T>::dpu_vector(dpu_vector&& other) noexcept
+    : data_(std::move(other.data_)),
+      size_(other.size_),
+      reserved_(other.reserved_),
+      debug_name(other.debug_name),
+      debug_file(other.debug_file),
+      debug_line(other.debug_line),
+      copied(false) {
+  other.copied = true;
 }
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
   if (this != &other) {
+    if (!copied && data_) {
+      auto& runtime = DpuRuntime::get();
+#if ENABLE_DPU_LOGGING >= 1
+      Logger& logger = runtime.get_logger();
+      log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
+                       debug_line);
+#endif
+      runtime.get_allocator().deallocate_upmem_vector(data_);
+    }
     data_ = other.data_;
     size_ = other.size_;
+    reserved_ = other.reserved_;
     debug_name = other.debug_name;
     debug_file = other.debug_file;
     debug_line = other.debug_line;
     copied = true;
   }
-  // #if ENABLE_DPU_LOGGING >= 2
-  //   Logger& logger = DpuRuntime::get().get_logger();
-  //   logger.lock() << "[dpu_vector] COPY ASSIGNMENT at " << debug_name
-  //                 << " OF SIZE " << size_ << " FROM " << debug_file << ":"
-  //                 << debug_line << std::endl;
-  // #endif
+  return *this;
+}
+
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator=(dpu_vector&& other) noexcept {
+  if (this != &other) {
+    if (!copied && data_) {
+      auto& runtime = DpuRuntime::get();
+#if ENABLE_DPU_LOGGING >= 1
+      Logger& logger = runtime.get_logger();
+      log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
+                       debug_line);
+#endif
+      runtime.get_allocator().deallocate_upmem_vector(data_);
+    }
+    data_ = std::move(other.data_);
+    size_ = other.size_;
+    reserved_ = other.reserved_;
+    debug_name = other.debug_name;
+    debug_file = other.debug_file;
+    debug_line = other.debug_line;
+    copied = false;
+    other.copied = true;
+  }
   return *this;
 }
 
 template <typename T>
 dpu_vector<T>::~dpu_vector() {
-  if (copied == true) {
-    // Nothing to deallocate
-    return;
-  }
-  auto& runtime = DpuRuntime::get();
-
+  if (!copied && data_) {
+    auto& runtime = DpuRuntime::get();
 #if ENABLE_DPU_LOGGING >= 1
-  if (!copied) {
-    Logger& logger = DpuRuntime::get().get_logger();
+    Logger& logger = runtime.get_logger();
     log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
                      debug_line);
-  }
 #endif
-
-  runtime.get_allocator().deallocate_upmem_vector(data_);
+    runtime.get_allocator().deallocate_upmem_vector(data_);
+  }
 }
 
 template <typename T>
@@ -259,7 +277,46 @@ dpu_vector<T> operator/(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   return res;
 }
 
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator+=(const dpu_vector<T>& other) {
+  detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
+                        other.data_desc_ref(), OpInfo<T>::add, OpInfo<T>::add_op,
+                        OpInfo<T>::universal_pipeline);
+  return *this;
+}
+
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator-=(const dpu_vector<T>& other) {
+  detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
+                        other.data_desc_ref(), OpInfo<T>::sub, OpInfo<T>::sub_op,
+                        OpInfo<T>::universal_pipeline);
+  return *this;
+}
+
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator*=(const dpu_vector<T>& other) {
+  detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
+                        other.data_desc_ref(), OpInfo<T>::mul, OpInfo<T>::mul_op,
+                        OpInfo<T>::universal_pipeline);
+  return *this;
+}
+
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator/=(const dpu_vector<T>& other) {
+  detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
+                        other.data_desc_ref(), OpInfo<T>::div, OpInfo<T>::div_op,
+                        OpInfo<T>::universal_pipeline);
+  return *this;
+}
+
 #if PIPELINE
+template <typename T>
+dpu_vector<T>& dpu_vector<T>::operator=(const pipeline_result<T>& other) {
+  this->data_ = other.vec.data_desc_ref();
+  this->size_ = other.vec.size();
+  return *this;
+}
+
 template <typename T>
 pipeline_result<T> dpu_vector<T>::pipeline(const std::vector<uint8_t>& ops) {
   return pipeline(ops, {});

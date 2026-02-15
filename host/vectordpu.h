@@ -50,13 +50,23 @@ class dpu_vector {
   ~dpu_vector();
 
   dpu_vector(const dpu_vector& other);             // copy constructor
+  dpu_vector(dpu_vector&& other) noexcept;        // move constructor
   dpu_vector& operator=(const dpu_vector& other);  // copy assignment
+  dpu_vector& operator=(dpu_vector&& other) noexcept; // move assignment
 
   vector<T> to_cpu();
 
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
                                 LOGGER_ARGS_WITH_DEFAULTS);
   void add_fence();
+  dpu_vector<T>& operator+=(const dpu_vector<T>& other);
+  dpu_vector<T>& operator-=(const dpu_vector<T>& other);
+  dpu_vector<T>& operator*=(const dpu_vector<T>& other);
+  dpu_vector<T>& operator/=(const dpu_vector<T>& other);
+
+#if PIPELINE
+  dpu_vector<T>& operator=(const pipeline_result<T>& other);
+#endif
 
   const detail::VectorDesc& data_desc() const { return *data_; }
   detail::VectorDescRef data_desc_ref() const { return data_; }

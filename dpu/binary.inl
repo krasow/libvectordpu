@@ -7,9 +7,9 @@
     __mram_ptr TYPE *rhs_ptr = (__mram_ptr TYPE *)(args.binary.rhs_offset); \
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.binary.res_offset); \
                                                                             \
-    __dma_aligned TYPE lhs_block[BLOCK_SIZE];                               \
-    __dma_aligned TYPE rhs_block[BLOCK_SIZE];                               \
-    __dma_aligned TYPE res_block[BLOCK_SIZE];                               \
+    TYPE *lhs_block = (TYPE *)dpu_workspace[tasklet_id];                    \
+    TYPE *rhs_block = (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)]; \
+    TYPE *res_block = (TYPE *)&dpu_workspace[tasklet_id][2 * BLOCK_SIZE * sizeof(TYPE)]; \
                                                                             \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                \
          block_loc < num_elems;                                             \

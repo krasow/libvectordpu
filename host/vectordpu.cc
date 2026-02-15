@@ -172,14 +172,15 @@ void internal_launch_universal_pipeline(
 
     args[i].pipeline.init_offset = init->desc[i].ptr;
     args[i].pipeline.res_offset = res->desc[i].ptr;
-    args[i].pipeline.num_ops = std::min((size_t)ops.size(), (size_t)8);
+    args[i].pipeline.num_ops =
+        std::min((size_t)ops.size(), (size_t)MAX_PIPELINE_OPS);
 
     for (size_t j = 0; j < args[i].pipeline.num_ops; ++j) {
       args[i].pipeline.ops[j] = ops[j];
     }
 
-    // Map operands by index (0-7 for PUSH_OPERAND_0..7)
-    for (size_t j = 0; j < 8; ++j) {
+    // Map operands by index (0..MAX_PIPELINE_OPERANDS-1)
+    for (size_t j = 0; j < MAX_PIPELINE_OPERANDS; ++j) {
       if (j < operands.size()) {
         args[i].pipeline.binary_operands[j] = operands[j]->desc[i].ptr;
       } else {

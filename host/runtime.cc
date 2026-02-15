@@ -60,6 +60,15 @@ void DpuRuntime::init(uint32_t num_dpus) {
   backend_str += BACKEND;
 
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
+  
+  // Update num_dpus_ to actual allocated count
+  uint32_t actual_dpus;
+  DPU_ASSERT(dpu_get_nr_dpus(*dpu_set_, &actual_dpus));
+  num_dpus_ = actual_dpus;
+
+#if ENABLE_DPU_LOGGING == 1
+  logger_->lock() << "[runtime] Allocated " << num_dpus_ << " DPUs..." << std::endl;
+#endif
 
   // Load DPU binary
   std::string dpu_file = get_runtime_dpu_binary();
@@ -72,6 +81,7 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   // Allocate allocator and event queue
   size_t dpu_mem = 64 * 1024 * 1024;  // 64MB per DPU
+  // Constructor: allocator(uint32_t start_addr, std::size_t dpu_mem, std::size_t num_dpus)
   allocator_ = std::make_unique<allocator>(0, dpu_mem, num_dpus_);
   event_queue_ = std::make_unique<EventQueue>();
 

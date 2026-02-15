@@ -12,7 +12,7 @@
 #include "common.h"
 #include "vectordesc.h"
 
-class Event {
+class Event : public std::enable_shared_from_this<Event> {
  public:
   enum class OperationType { COMPUTE, DPU_TRANSFER, HOST_TRANSFER, FENCE };
 
@@ -39,7 +39,7 @@ class Event {
   bool finished = false;
   bool started = false;
 
-  void add_completion_callback();
+  void add_completion_callback(std::shared_ptr<Event> self);
   void mark_finished() { this->finished = true; }
   bool operator==(const Event& other) const { return this->id == other.id; }
 };

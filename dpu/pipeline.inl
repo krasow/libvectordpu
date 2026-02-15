@@ -9,125 +9,140 @@
   int universal_##TYPE##_pipeline(void) {                                    \
     unsigned int id = me();                                                  \
     uint32_t n = args.num_elements, n_ops = args.pipeline.num_ops;           \
-    __mram_ptr TYPE *in = (__mram_ptr TYPE *)(args.pipeline.init_offset);    \
-    __mram_ptr TYPE *rs = (__mram_ptr TYPE *)(args.pipeline.res_offset);     \
-    __dma_aligned TYPE st[MAX_PIPELINE_STACK_DEPTH][BLOCK_SIZE];             \
+    __mram_ptr TYPE *in_ptr = (__mram_ptr TYPE *)(args.pipeline.init_offset);\
+    __mram_ptr TYPE *rs_ptr = (__mram_ptr TYPE *)(args.pipeline.res_offset); \
+                                                                             \
+    /* Workspace Layout: input(0), operands(1-3), scratch(4) */               \
+    TYPE *input_blk = (TYPE *)dpu_workspace[id];                             \
+    TYPE *op_blks[MAX_PIPELINE_OPERANDS];                                    \
+    for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++)                          \
+      op_blks[k] = (TYPE *)&dpu_workspace[id][(k + 1) * BLOCK_SIZE * MINIMUM_WRITE_SIZE]; \
+    TYPE (*scratch_blks)[BLOCK_SIZE] = (TYPE (*)[BLOCK_SIZE])&dpu_workspace[id][(MAX_PIPELINE_OPERANDS + 1) * BLOCK_SIZE * MINIMUM_WRITE_SIZE]; \
+                                                                             \
     TYPE acc;                                                                \
     bool has_r = false;                                                      \
     uint8_t r_op = 0;                                                        \
-    uint32_t blk, i, b_e, b_b, sp;                                           \
+    uint32_t blk, i, b_e, b_b, oi;                                           \
+                                                                             \
+    /* Pre-scan for operands and reductions */                               \
+    bool uses_input = false;                                                 \
+    bool uses_op[MAX_PIPELINE_OPERANDS] = {false};                           \
+    for (oi = 0; oi < n_ops; ++oi) {                                         \
+      uint8_t op = args.pipeline.ops[oi];                                    \
+      if (op == OP_PUSH_INPUT) uses_input = true;                            \
+      else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) \
+        uses_op[op - OP_PUSH_OPERAND_0] = true;                              \
+      else if (IS_OP_REDUCTION(op)) { r_op = op; has_r = true; }             \
+    }                                                                        \
+                                                                             \
+    if (has_r) {                                                             \
+      switch (r_op) {                                                        \
+        case OP_SUM: acc = 0; break;                                         \
+        case OP_PRODUCT: acc = 1; break;                                     \
+        case OP_MIN: acc = (TYPE)0x7FFFFFFF; break;                          \
+        case OP_MAX: acc = (TYPE)0x80000000; break;                          \
+      }                                                                      \
+    }                                                                        \
                                                                              \
     for (blk = id << BLOCK_SIZE_LOG2; blk < n;                               \
          blk += (NR_TASKLETS << BLOCK_SIZE_LOG2)) {                          \
       b_e = (blk + BLOCK_SIZE >= n) ? (n - blk) : BLOCK_SIZE;                \
       b_b = b_e * sizeof(TYPE);                                              \
-      sp = 0;                                                                \
-      for (uint32_t oi = 0; oi < n_ops; ++oi) {                              \
+                                                                             \
+      /* 1. Fetch operands (with deduplication) */                           \
+      if (uses_input) mram_read((__mram_ptr void const *)(in_ptr + blk), input_blk, b_b); \
+      for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {                      \
+        if (uses_op[k]) {                                                    \
+           __mram_ptr TYPE *p = (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]); \
+           bool found = false;                                               \
+           if (uses_input && p == in_ptr) { op_blks[k] = input_blk; found = true; } \
+           for (int j = 0; j < k; j++) {                                     \
+             if (uses_op[j] && p == (__mram_ptr TYPE *)(args.pipeline.binary_operands[j])) { \
+               op_blks[k] = op_blks[j]; found = true; break;                 \
+             }                                                               \
+           }                                                                 \
+           if (!found) mram_read((__mram_ptr void const *)(p + blk), op_blks[k], b_b); \
+        }                                                                    \
+      }                                                                      \
+                                                                             \
+      /* 2. Pointer-based Horizontal Fusion (Loop of Loops) */               \
+      TYPE *st_ptr[MAX_PIPELINE_STACK_DEPTH];                                \
+      bool st_is_temp[MAX_PIPELINE_STACK_DEPTH];                             \
+      uint32_t sp = 0;                                                       \
+                                                                             \
+      for (oi = 0; oi < n_ops; oi++) {                                       \
         uint8_t op = args.pipeline.ops[oi];                                  \
         if (IS_OP_STACK(op)) {                                               \
-          if (sp < MAX_PIPELINE_STACK_DEPTH) {                               \
-            __mram_ptr TYPE *p =                                             \
-                (op == OP_PUSH_INPUT)                                        \
-                    ? in                                                     \
-                    : (__mram_ptr TYPE                                       \
-                           *)(args.pipeline                                  \
-                                  .binary_operands[op - OP_PUSH_OPERAND_0]); \
-            mram_read((__mram_ptr void const *)(p + blk), st[sp++], b_b);    \
-          }                                                                  \
+          st_ptr[sp] = (op == OP_PUSH_INPUT) ? input_blk : op_blks[op - OP_PUSH_OPERAND_0]; \
+          st_is_temp[sp] = false;                                            \
+          sp++;                                                              \
         } else if (IS_OP_UNARY(op)) {                                        \
-          TYPE *s1 = st[sp - 1];                                             \
-          if (op == OP_NEGATE)                                               \
-            for (i = 0; i < b_e; i++) s1[i] = NEGATE(s1[i]);                 \
-          else                                                               \
-            for (i = 0; i < b_e; i++) s1[i] = ABS(s1[i]);                    \
-        } else if (IS_OP_BINARY(op)) {                                       \
-          TYPE *s1 = st[sp - 1];                                             \
-          TYPE *s2 = st[sp - 2];                                             \
-          switch (op) {                                                      \
-            case OP_ADD:                                                     \
-              for (i = 0; i < b_e; i++) s2[i] += s1[i];                      \
-              break;                                                         \
-            case OP_SUB:                                                     \
-              for (i = 0; i < b_e; i++) s2[i] -= s1[i];                      \
-              break;                                                         \
-            case OP_MUL:                                                     \
-              for (i = 0; i < b_e; i++) s2[i] *= s1[i];                      \
-              break;                                                         \
-            case OP_DIV:                                                     \
-              for (i = 0; i < b_e; i++)                                      \
-                if (s1[i] != 0) s2[i] /= s1[i];                              \
-              break;                                                         \
+          TYPE *s = st_ptr[sp-1];                                              \
+          if (!st_is_temp[sp-1]) {                                           \
+            TYPE *dest = scratch_blks[sp-1];                                 \
+            if (op == OP_NEGATE) for (i = 0; i < b_e; i++) dest[i] = -s[i];   \
+            else for (i = 0; i < b_e; i++) dest[i] = (s[i] < 0) ? -s[i] : s[i]; \
+            st_ptr[sp-1] = dest;                                             \
+            st_is_temp[sp-1] = true;                                         \
+          } else {                                                           \
+            if (op == OP_NEGATE) for (i = 0; i < b_e; i++) s[i] = -s[i];      \
+            else for (i = 0; i < b_e; i++) s[i] = (s[i] < 0) ? -s[i] : s[i];  \
           }                                                                  \
-          sp--;                                                              \
-        } else {                                                             \
-          /* IS_OP_REDUCTION */                                              \
-          r_op = op;                                                         \
-          if (!has_r) {                                                      \
-            has_r = true;                                                    \
+        } else if (IS_OP_BINARY(op)) {                                       \
+          TYPE *s1 = st_ptr[--sp];                                           \
+          TYPE *s2 = st_ptr[sp-1];                                           \
+          if (!st_is_temp[sp-1]) {                                           \
+            TYPE *dest = scratch_blks[sp-1];                                 \
             switch (op) {                                                    \
-              case OP_SUM:                                                   \
-                acc = 0;                                                     \
-                break;                                                       \
-              case OP_PRODUCT:                                               \
-                acc = 1;                                                     \
-                break;                                                       \
-              case OP_MIN:                                                   \
-                acc = (TYPE)0x7FFFFFFF;                                      \
-                break;                                                       \
-              case OP_MAX:                                                   \
-                acc = (TYPE)0x80000000;                                      \
-                break;                                                       \
+              case OP_ADD: for (i = 0; i < b_e; i++) dest[i] = s2[i] + s1[i]; break; \
+              case OP_SUB: for (i = 0; i < b_e; i++) dest[i] = s2[i] - s1[i]; break; \
+              case OP_MUL: for (i = 0; i < b_e; i++) dest[i] = s2[i] * s1[i]; break; \
+              case OP_DIV: for (i = 0; i < b_e; i++) dest[i] = (s1[i] != 0) ? s2[i] / s1[i] : (TYPE)0; break; \
+            }                                                                \
+            st_ptr[sp-1] = dest;                                             \
+            st_is_temp[sp-1] = true;                                         \
+          } else {                                                           \
+            switch (op) {                                                    \
+              case OP_ADD: for (i = 0; i < b_e; i++) s2[i] += s1[i]; break;    \
+              case OP_SUB: for (i = 0; i < b_e; i++) s2[i] -= s1[i]; break;    \
+              case OP_MUL: for (i = 0; i < b_e; i++) s2[i] *= s1[i]; break;    \
+              case OP_DIV: for (i = 0; i < b_e; i++) if (s1[i] != 0) s2[i] /= s1[i]; break; \
             }                                                                \
           }                                                                  \
-          TYPE *s1 = st[sp - 1];                                             \
+        } else { /* REDUCTION */                                             \
+          TYPE *s = st_ptr[--sp];                                            \
           switch (op) {                                                      \
-            case OP_SUM:                                                     \
-              for (i = 0; i < b_e; i++) acc += s1[i];                        \
-              break;                                                         \
-            case OP_PRODUCT:                                                 \
-              for (i = 0; i < b_e; i++) acc *= s1[i];                        \
-              break;                                                         \
-            case OP_MIN:                                                     \
-              for (i = 0; i < b_e; i++) {                                    \
-                if (s1[i] < acc) acc = s1[i];                                \
-              }                                                              \
-              break;                                                         \
-            case OP_MAX:                                                     \
-              for (i = 0; i < b_e; i++) {                                    \
-                if (s1[i] > acc) acc = s1[i];                                \
-              }                                                              \
-              break;                                                         \
+            case OP_SUM: for (i = 0; i < b_e; i++) acc += s[i]; break;        \
+            case OP_PRODUCT: for (i = 0; i < b_e; i++) acc *= s[i]; break;    \
+            case OP_MIN: for (i = 0; i < b_e; i++) if (s[i] < acc) acc = s[i]; break; \
+            case OP_MAX: for (i = 0; i < b_e; i++) if (s[i] > acc) acc = s[i]; break; \
           }                                                                  \
-          sp--;                                                              \
         }                                                                    \
       }                                                                      \
       if (!has_r && sp > 0)                                                  \
-        mram_write(st[sp - 1], (__mram_ptr void *)(rs + blk), b_b);          \
+        mram_write(st_ptr[sp - 1], (__mram_ptr void *)(rs_ptr + blk), b_b);  \
     }                                                                        \
+                                                                             \
     if (has_r) {                                                             \
       enum { sd = (MINIMUM_WRITE_SIZE / sizeof(TYPE)) };                     \
       uint64_t bf = 0;                                                       \
       memcpy(&bf, &acc, sizeof(TYPE));                                       \
-      mram_write((void *)&bf, (__mram_ptr uint64_t *)rs + id, 8);            \
+      mram_write((void *)&bf, (__mram_ptr uint64_t *)rs_ptr + id, MINIMUM_WRITE_SIZE); \
       barrier_wait(&my_barrier);                                             \
       if (id == 0) {                                                         \
-        __dma_aligned TYPE rb[NR_TASKLETS * sd];                             \
-        mram_read((__mram_ptr void const *)rs, rb, NR_TASKLETS * 8);         \
+        TYPE rb[NR_TASKLETS * sd];                                           \
+        mram_read((__mram_ptr void const *)rs_ptr, rb, NR_TASKLETS * MINIMUM_WRITE_SIZE); \
         TYPE tot = rb[0];                                                    \
         for (i = 1; i < NR_TASKLETS; i++) {                                  \
           TYPE v = rb[i * sd];                                               \
-          if (r_op == OP_SUM)                                                \
-            tot += v;                                                        \
-          else if (r_op == OP_MIN) {                                         \
-            if (v < tot) tot = v;                                            \
-          } else if (r_op == OP_MAX) {                                       \
-            if (v > tot) tot = v;                                            \
-          } else                                                             \
-            tot *= v;                                                        \
+          if (r_op == OP_SUM) tot += v;                                      \
+          else if (r_op == OP_MIN) { if (v < tot) tot = v; }                 \
+          else if (r_op == OP_MAX) { if (v > tot) tot = v; }                 \
+          else tot *= v;                                                     \
         }                                                                    \
         bf = 0;                                                              \
         memcpy(&bf, &tot, sizeof(TYPE));                                     \
-        mram_write(&bf, (__mram_ptr void *)rs, 8);                           \
+        mram_write(&bf, (__mram_ptr void *)rs_ptr, MINIMUM_WRITE_SIZE);      \
       }                                                                      \
     }                                                                        \
     return 0;                                                                \
