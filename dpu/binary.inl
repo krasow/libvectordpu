@@ -8,8 +8,10 @@
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.binary.res_offset); \
                                                                             \
     TYPE *lhs_block = (TYPE *)dpu_workspace[tasklet_id];                    \
-    TYPE *rhs_block = (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)]; \
-    TYPE *res_block = (TYPE *)&dpu_workspace[tasklet_id][2 * BLOCK_SIZE * sizeof(TYPE)]; \
+    TYPE *rhs_block =                                                       \
+        (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)];      \
+    TYPE *res_block =                                                       \
+        (TYPE *)&dpu_workspace[tasklet_id][2 * BLOCK_SIZE * sizeof(TYPE)];  \
                                                                             \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                \
          block_loc < num_elems;                                             \

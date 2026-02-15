@@ -12,8 +12,9 @@
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.unary.res_offset); \
                                                                            \
     /* WRAM working buffer (DMA aligned) */                                \
-    TYPE *rhs_block = (TYPE *)dpu_workspace[tasklet_id];                    \
-    TYPE *res_block = (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)]; \
+    TYPE *rhs_block = (TYPE *)dpu_workspace[tasklet_id];                   \
+    TYPE *res_block =                                                      \
+        (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)];     \
                                                                            \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;               \
          block_loc < num_elems;                                            \

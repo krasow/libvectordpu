@@ -24,8 +24,7 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, std::string_view name,
     runtime.init(nr_dpus);
   }
 
-  data_ =
-      runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
+  data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T));
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
@@ -280,32 +279,32 @@ dpu_vector<T> operator/(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator+=(const dpu_vector<T>& other) {
   detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
-                        other.data_desc_ref(), OpInfo<T>::add, OpInfo<T>::add_op,
-                        OpInfo<T>::universal_pipeline);
+                        other.data_desc_ref(), OpInfo<T>::add,
+                        OpInfo<T>::add_op, OpInfo<T>::universal_pipeline);
   return *this;
 }
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator-=(const dpu_vector<T>& other) {
   detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
-                        other.data_desc_ref(), OpInfo<T>::sub, OpInfo<T>::sub_op,
-                        OpInfo<T>::universal_pipeline);
+                        other.data_desc_ref(), OpInfo<T>::sub,
+                        OpInfo<T>::sub_op, OpInfo<T>::universal_pipeline);
   return *this;
 }
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator*=(const dpu_vector<T>& other) {
   detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
-                        other.data_desc_ref(), OpInfo<T>::mul, OpInfo<T>::mul_op,
-                        OpInfo<T>::universal_pipeline);
+                        other.data_desc_ref(), OpInfo<T>::mul,
+                        OpInfo<T>::mul_op, OpInfo<T>::universal_pipeline);
   return *this;
 }
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator/=(const dpu_vector<T>& other) {
   detail::launch_binary(this->data_desc_ref(), this->data_desc_ref(),
-                        other.data_desc_ref(), OpInfo<T>::div, OpInfo<T>::div_op,
-                        OpInfo<T>::universal_pipeline);
+                        other.data_desc_ref(), OpInfo<T>::div,
+                        OpInfo<T>::div_op, OpInfo<T>::universal_pipeline);
   return *this;
 }
 
