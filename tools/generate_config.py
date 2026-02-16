@@ -48,20 +48,14 @@ def generate_config_h(config, output_path):
         # Determine if value is numeric or string
         if value.isdigit():
             # Numeric value
-            lines.append(f"#ifndef {macro_name}")
             lines.append(f"#define {macro_name} {value}")
-            lines.append(f"#endif")
         elif value.lower() in ('true', 'false', 'yes', 'no', 'on', 'off'):
             # Boolean value - convert to 0 or 1
             bool_value = 1 if value.lower() in ('true', 'yes', 'on', '1') else 0
-            lines.append(f"#ifndef {macro_name}")
             lines.append(f"#define {macro_name} {bool_value}")
-            lines.append(f"#endif")
         else:
             # String value
-            lines.append(f"#ifndef {macro_name}")
             lines.append(f"#define {macro_name} \"{value}\"")
-            lines.append(f"#endif")
     
     lines.extend([
         "",
