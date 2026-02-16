@@ -24,6 +24,10 @@ struct VectorDesc {
 
   bool is_reduction_result = false;
   KernelID reduction_rid;
+
+  bool ptr_allocated =
+      true;  // Default to true for backwards/eager compatibility
+  size_t last_producer_id = 0;
 };
 
 using VectorDescRef = std::shared_ptr<VectorDesc>;

@@ -4,6 +4,8 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+#include <fstream>
+#include <iostream>
 #include <string>
 #include <thread>
 
@@ -12,7 +14,12 @@
 #include <libgen.h>
 #include <limits.h>
 
+#include "perfetto/trace.h"
 #include "runtime.h"
+
+#if TRACE == 1
+PERFETTO_TRACK_EVENT_STATIC_STORAGE();
+#endif
 
 allocator& DpuRuntime::get_allocator() { return *allocator_; }
 EventQueue& DpuRuntime::get_event_queue() { return *event_queue_; }
@@ -45,6 +52,10 @@ std::string get_runtime_dpu_binary() {
 
 void DpuRuntime::init(uint32_t num_dpus) {
   if (initialized_) return;  // idempotent
+  TRACE_INIT();
+
+  TRACE_EVENT("runtime", "DpuRuntime::init");
+
   num_dpus_ = num_dpus;
   logger_ = std::make_unique<Logger>();
 
@@ -93,6 +104,8 @@ void DpuRuntime::init(uint32_t num_dpus) {
 void DpuRuntime::shutdown() {
   if (!initialized_) return;
 
+  TRACE_EVENT("runtime", "DpuRuntime::shutdown");
+
 #if ENABLE_DPU_LOGGING == 1
   logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
@@ -113,6 +126,10 @@ void DpuRuntime::shutdown() {
   dpu_set_ = nullptr;
 
   initialized_ = false;
+
+  initialized_ = false;
+
+  TRACE_SHUTDOWN();
 }
 
 void DpuRuntime::debug_read_dpu_log() {

@@ -1,9 +1,9 @@
 #pragma once
-
 #include <memory>
 
 #include "allocator.h"
 #include "logger.h"
+#include "perfetto/trace.h"
 #include "queue.h"
 
 struct dpu_set_t;

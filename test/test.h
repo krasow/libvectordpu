@@ -49,4 +49,5 @@ uint32_t elements = 4096;
         [](const dpu_vector<TYPE>& a) { return (DPU_EXPR); });                 \
   }
 
+#include "memory.inl"
 #include "test.inl"

@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "logger.h"
+#include "perfetto/trace.h"
 #include "runtime.h"
 
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
@@ -17,7 +18,8 @@ allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
 }
 
 detail::VectorDescRef allocator::allocate_upmem_vector(
-    std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type) {
+    std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type,
+    bool lazy) {
   // Check if we can use optimized broadcast allocation
   bool uniform_size = (n % num_dpus_ == 0);
 
@@ -31,8 +33,8 @@ detail::VectorDescRef allocator::allocate_upmem_vector(
   {
     std::lock_guard<std::mutex> lock(this->lock);
     if (is_synchronized_ && uniform_size) {
-      return allocate_upmem_vector_broadcast(n, reserved_mem_per_dpu,
-                                             size_type);
+      return allocate_upmem_vector_broadcast(n, reserved_mem_per_dpu, size_type,
+                                             lazy);
     }
   }
 
@@ -49,36 +51,38 @@ detail::VectorDescRef allocator::allocate_upmem_vector(
 
   for (size_t i = 0; i < num_dpus_; i++) {
     size_t alloc_size = (effective_elems + (i < rem ? 1 : 0)) * size_type;
-    uint32_t addr = allocate(i, alloc_size + reserved_mem_per_dpu);
+    uint32_t addr = 0;
+    if (!lazy) {
+      addr = allocate(i, alloc_size + reserved_mem_per_dpu);
+    }
 
     detail::VectorSegment seg{
         addr, static_cast<uint32_t>(alloc_size + reserved_mem_per_dpu)};
     vec_desc->desc.push_back(seg);
   }
 
+  vec_desc->ptr_allocated = !lazy;
+
   vec_desc->reserved_bytes = static_cast<uint32_t>(reserved_mem_per_dpu);
   vec_desc->element_size = static_cast<uint32_t>(size_type);
   vec_desc->num_elements = n;
+
+  TRACE_EVENT("runtime", "allocate_upmem_vector", "num_elements", (uint64_t)n,
+              "num_dpus", (uint32_t)num_dpus_, "element_size",
+              (uint32_t)size_type, "total_bytes", (uint64_t)(n * size_type));
 
   return vec_desc;
 }
 
 detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
-    std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type) {
+    std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type,
+    bool lazy) {
   std::size_t num_dpus = this->num_dpus_;
   size_t elems_per_dpu = n / num_dpus;
 
   // Ensure 8-byte alignment/minimum size logic
   if (elems_per_dpu * size_type < 8) {
-    // If less than 8 bytes, round up to 8 bytes.
-    // Assuming size_type <= 8. if size_type is 4, we need 2 elems.
-    // If size_type is 8, 1 elem is fine.
-    // The original logic was: if (elems * size == 4) elems = 2;
-    // This covers the specific case of 4-byte integers.
-    // What if size is 1 or 2? Not supported heavily but should be safe.
-    // Let's just enforce alloc_size >= 8.
-    // Allocation logic uses alloc_size (bytes).
-    // Elems calculation is just for derivation.
+    // Ensure 8-byte alignment for MRAM transfers.
   }
 
   size_t alloc_size = elems_per_dpu * size_type;
@@ -87,18 +91,41 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
   size_t total_size = alloc_size + reserved_mem_per_dpu;
 
   // Perform O(1) allocation
-  uint32_t addr = allocate_broadcast(total_size);
+  uint32_t addr = 0;
+  if (!lazy) {
+    addr = allocate_broadcast(total_size);
+  }
 
   auto vec_desc = std::make_shared<detail::VectorDesc>();
 
   detail::VectorSegment seg{addr, static_cast<uint32_t>(total_size)};
   vec_desc->desc.resize(num_dpus, seg);
+  vec_desc->ptr_allocated = !lazy;
 
   vec_desc->reserved_bytes = static_cast<uint32_t>(reserved_mem_per_dpu);
   vec_desc->element_size = static_cast<uint32_t>(size_type);
   vec_desc->num_elements = n;
 
   return vec_desc;
+}
+
+void allocator::realize_allocation(detail::VectorDescRef data) {
+  if (data->ptr_allocated) return;
+
+  std::lock_guard<std::mutex> lock(this->lock);
+  if (is_synchronized_) {
+    size_t total_size = data->desc[0].size_bytes;
+    uint32_t addr = allocate_broadcast(total_size);
+    for (size_t i = 0; i < num_dpus_; ++i) {
+      data->desc[i].ptr = addr;
+    }
+  } else {
+    for (size_t i = 0; i < num_dpus_; ++i) {
+      size_t total_size = data->desc[i].size_bytes;
+      data->desc[i].ptr = allocate(i, total_size);
+    }
+  }
+  data->ptr_allocated = true;
 }
 
 uint32_t allocator::allocate_broadcast(std::size_t n) {
@@ -135,6 +162,8 @@ uint32_t allocator::allocate_broadcast(std::size_t n) {
 
   // Sync offsets for fallback compatibility
   std::fill(offsets_.begin(), offsets_.end(), broadcast_offset_);
+
+  TRACE_COUNTER("runtime", "broadcast_offset", broadcast_offset_);
 
   return addr;
 }
@@ -176,6 +205,8 @@ void allocator::deallocate_broadcast(uint32_t addr, std::size_t size) {
 }
 
 void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
+  if (!data->ptr_allocated) return;  // Nothing to do if never realized
+
   std::lock_guard<std::mutex> lock(this->lock);
 
   // Check if we can use optimized broadcast deallocation
@@ -205,6 +236,8 @@ void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
     size_t size = data->desc[i].size_bytes;
     deallocate(i, addr, size);
   }
+
+  TRACE_EVENT("runtime", "deallocate_upmem_vector");
 }
 
 uint32_t allocator::allocate(std::size_t dpu_id, std::size_t n) {

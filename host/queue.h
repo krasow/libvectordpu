@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <typeindex>
 #include <variant>
 
@@ -27,6 +28,8 @@ class Event : public std::enable_shared_from_this<Event> {
   KernelID pipeline_kid = 0;  // For lazy promotion
   uint8_t opcode = 0;         // For lazy promotion
   bool is_scalar = false;     // Prevent fusion of scalar ops for now
+  void* host_ptr = nullptr;   // For transfers
+  size_t transfer_size = 0;   // For transfers
 
   std::variant<std::monostate, detail::VectorDescRef> res;
 
@@ -37,6 +40,8 @@ class Event : public std::enable_shared_from_this<Event> {
       : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
 
   size_t id = 0;
+  std::string slice_name;
+  std::set<size_t> dependencies;
   bool finished = false;
   bool started = false;
 

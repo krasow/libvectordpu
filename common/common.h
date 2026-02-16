@@ -27,7 +27,7 @@ enum KernelCategory {
 
 #include "opcodes.h"
 
-#define MAX_PIPELINE_OPS 8
+#define MAX_PIPELINE_OPS 16
 #define MAX_PIPELINE_OPERANDS 3
 #define MAX_PIPELINE_STACK_DEPTH 4
 #define MINIMUM_WRITE_SIZE 8

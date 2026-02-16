@@ -22,13 +22,18 @@ class allocator {
 
   detail::VectorDescRef allocate_upmem_vector(std::size_t n,
                                               std::size_t reserved_mem_per_dpu,
-                                              std::size_t size_type);
+                                              std::size_t size_type,
+                                              bool lazy = false);
   void deallocate_upmem_vector(detail::VectorDescRef data);
 
   // Broadcast allocation/deallocation (O(1))
   detail::VectorDescRef allocate_upmem_vector_broadcast(
-      std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type);
+      std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type,
+      bool lazy = false);
   void deallocate_upmem_vector_broadcast(detail::VectorDescRef data);
+
+  // Realize a lazy allocation
+  void realize_allocation(detail::VectorDescRef data);
 
  private:
   uint32_t start_addr_;  // starting base address

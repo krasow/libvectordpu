@@ -1,5 +1,6 @@
 #include "vectordpu.h"
 
+#include "perfetto/trace.h"
 #include "vectordesc.h"
 
 #ifndef DPURT
@@ -12,6 +13,7 @@ namespace detail {
 
 void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(desc);
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
 
@@ -25,6 +27,9 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
 
   uint32_t mram_location = desc->desc[0].ptr;
   size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  TRACE_EVENT("transfer", "vec_xfer_to_dpu", "mram_offset", mram_location,
+              "bytes_per_dpu", xfer_size, "element_size", desc->element_size,
+              "total_bytes", xfer_size * runtime.num_dpus());
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -32,6 +37,7 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
 
 void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(desc);
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
 
@@ -45,6 +51,9 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
 
   uint32_t mram_location = desc->desc[0].ptr;
   size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  TRACE_EVENT("transfer", "vec_xfer_from_dpu", "mram_offset", mram_location,
+              "bytes_per_dpu", xfer_size, "element_size", desc->element_size,
+              "total_bytes", xfer_size * runtime.num_dpus());
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -53,6 +62,8 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
 void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
                                    uint32_t scalar, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(res);
+  runtime.get_allocator().realize_allocation(lhs);
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -87,6 +98,9 @@ void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
 void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
                             VectorDescRef rhs, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(res);
+  runtime.get_allocator().realize_allocation(lhs);
+  runtime.get_allocator().realize_allocation(rhs);
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -121,6 +135,8 @@ void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
 void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
                            KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(res);
+  runtime.get_allocator().realize_allocation(rhs);
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -154,6 +170,8 @@ void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
 void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
                                KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(res);
+  runtime.get_allocator().realize_allocation(rhs);
 
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -190,6 +208,11 @@ void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
+  runtime.get_allocator().realize_allocation(res);
+  if (init) runtime.get_allocator().realize_allocation(init);
+  for (auto& op : operands) {
+    runtime.get_allocator().realize_allocation(op);
+  }
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
 
@@ -266,6 +289,10 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   auto bound_cb = std::bind(internal_launch_unary, res, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->inputs = {rhs};
+  e->output = res;
+  e->kid = kernel_id;
+  e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
 #endif
@@ -334,6 +361,10 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
   auto bound_cb = std::bind(internal_launch_binary, res, lhs, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->inputs = {lhs, rhs};
+  e->output = res;
+  e->kid = kernel_id;
+  e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
 #endif
@@ -375,6 +406,10 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
   e->res = res;
+  e->inputs = {lhs};
+  e->output = res;
+  e->kid = kernel_id;
+  e->opcode = opcode;
   e->is_scalar = true;
   event_queue.submit(e);
 #endif
@@ -416,6 +451,10 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   auto bound_cb = std::bind(internal_launch_reduction, res, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->inputs = {rhs};
+  e->output = res;
+  e->kid = kernel_id;
+  e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
 #endif
