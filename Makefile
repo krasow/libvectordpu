@@ -31,7 +31,7 @@ DPU_DIR := dpu
 HOST_DIR := host
 TEST_DIR := test
 
-DESTDIR ?= ./install
+DESTDIR ?= ../vectordpu
 
 CONFIG_STAMP := build.config
 

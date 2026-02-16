@@ -50,6 +50,40 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
                             xfer_size, DPU_XFER_ASYNC));
 }
 
+void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
+                                   uint32_t scalar, KernelID kernel_id) {
+  auto& runtime = DpuRuntime::get();
+
+  uint32_t nr_of_dpus = runtime.num_dpus();
+  DPU_LAUNCH_ARGS args[nr_of_dpus];
+
+  for (uint32_t i = 0; i < nr_of_dpus; i++) {
+    args[i].kernel = static_cast<uint32_t>(kernel_id);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_BINARY_SCALAR);
+    args[i].num_elements = lhs->desc[i].size_bytes / lhs->element_size;
+    args[i].size_type = lhs->element_size;
+    args[i].binary_scalar.lhs_offset = (lhs->desc[i].ptr);
+    args[i].binary_scalar.rhs_scalar = scalar;
+    args[i].binary_scalar.res_offset = (res->desc[i].ptr);
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  log_dpu_launch_args(logger, args, nr_of_dpus);
+#endif
+
+  dpu_set_t& dpu_set = runtime.dpu_set();
+  dpu_set_t dpu;
+  uint32_t idx_dpu = 0;
+
+  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  }
+  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                            sizeof(args[0]), DPU_XFER_DEFAULT));
+  CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
+}
+
 void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
                             VectorDescRef rhs, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
@@ -307,6 +341,47 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[queue-append] type=COMPUTE (binary) kernel="
+                << kernel_id_to_string(kernel_id) << std::endl;
+#endif
+}
+
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+                          KernelID kernel_id, uint8_t opcode,
+                          KernelID pipeline_kid) {
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+#if PIPELINE
+  (void)pipeline_kid;
+
+  std::shared_ptr<Event> e = std::make_shared<Event>(
+      Event::OperationType::COMPUTE,
+      std::bind(internal_launch_binary_scalar, res, lhs, scalar, kernel_id));
+
+  e->inputs = {lhs};
+  e->output = res;
+  e->kid = kernel_id;
+  e->pipeline_kid = pipeline_kid;
+  e->opcode = opcode;
+  e->res = res;
+  e->is_scalar = true;
+
+  event_queue.submit(e);
+#else
+  (void)opcode;
+  (void)pipeline_kid;
+  auto bound_cb =
+      std::bind(internal_launch_binary_scalar, res, lhs, scalar, kernel_id);
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+  e->res = res;
+  e->is_scalar = true;
+  event_queue.submit(e);
+#endif
+
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-append] type=COMPUTE (binary_scalar) kernel="
                 << kernel_id_to_string(kernel_id) << std::endl;
 #endif
 }

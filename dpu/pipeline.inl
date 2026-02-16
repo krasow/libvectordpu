@@ -139,6 +139,9 @@
                 for (i = 0; i < b_e; i++)                                     \
                   dest[i] = (s1[i] != 0) ? s2[i] / s1[i] : (TYPE)0;           \
                 break;                                                        \
+              case OP_ASR:                                                    \
+                for (i = 0; i < b_e; i++) dest[i] = s2[i] >> s1[i];           \
+                break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
             st_is_temp[sp - 1] = true;                                        \
@@ -156,6 +159,9 @@
               case OP_DIV:                                                    \
                 for (i = 0; i < b_e; i++)                                     \
                   if (s1[i] != 0) s2[i] /= s1[i];                             \
+                break;                                                        \
+              case OP_ASR:                                                    \
+                for (i = 0; i < b_e; i++) s2[i] >>= s1[i];                    \
                 break;                                                        \
             }                                                                 \
           }                                                                   \

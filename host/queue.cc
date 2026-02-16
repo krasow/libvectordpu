@@ -226,7 +226,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
     auto last = operations_.back();
-    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr) {
+    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr &&
+        !e->is_scalar && !last->is_scalar) {
       // Look for dependency: does any input of 'e' match 'last->output'?
       bool dependent = false;
       for (size_t i = 0; i < e->inputs.size(); ++i) {

@@ -26,6 +26,7 @@ class Event : public std::enable_shared_from_this<Event> {
   KernelID kid = 0;
   KernelID pipeline_kid = 0;  // For lazy promotion
   uint8_t opcode = 0;         // For lazy promotion
+  bool is_scalar = false;     // Prevent fusion of scalar ops for now
 
   std::variant<std::monostate, detail::VectorDescRef> res;
 

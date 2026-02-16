@@ -15,6 +15,15 @@ class DPUBinaryOp(DPUOp):
     def make(name, symbol):
         return lambda type, kid: DPUBinaryOp(name, symbol, type, kid)
 
+class DPUBinaryScalarOp(DPUOp):    
+    def generate_macro(self, out):
+        out.write(f"DEFINE_BINARY_SCALAR_KERNEL({self.type}, {self.name}, {self.symbol})\n")
+    def kernel_name(self):
+        return f"binary_scalar_{self.type}_{self.name}"
+    @staticmethod
+    def make(name, symbol):
+        return lambda type, kid: DPUBinaryScalarOp(name, symbol, type, kid)
+
 
 class DPUUnaryOp(DPUOp):
     def generate_macro(self, out):
@@ -47,13 +56,14 @@ class DPUReduceOp(DPUOp):
 def declare_unary_op(name, symbol):
     return lambda type, kid: DPUUnaryOp(name, symbol, type, kid)
 
-categories = ['Binary', 'Unary', 'Reduction']
+categories = ['Binary', 'Unary', 'Reduction', 'BinaryScalar']
 
 ops = [
     DPUBinaryOp.make('add', '+'),
     DPUBinaryOp.make('sub', '-'),
     DPUBinaryOp.make('mul', '*'),
     DPUBinaryOp.make('div', '/'),
+    DPUBinaryOp.make('asr', '>>'),
 
 
     DPUUnaryOp.make('negate', 'NEGATE'),
@@ -86,6 +96,16 @@ for type in types:
     for op in ops:
         if isinstance(op('int32_t', 0), DPUBinaryOp):
              op_instance = op(type, kernel_id)
+             all_ops.append((kernel_id, op_instance))
+             group.append(op_instance)
+             kernel_id += 1
+    
+    # Binary Scalar Ops
+    for op in ops:
+        if isinstance(op('int32_t', 0), DPUBinaryOp):
+             # Create a scalar version of the binary op
+             base_op = op('int32_t', 0)
+             op_instance = DPUBinaryScalarOp(base_op.name + "_scalar", base_op.symbol, type, kernel_id)
              all_ops.append((kernel_id, op_instance))
              group.append(op_instance)
              kernel_id += 1
@@ -127,6 +147,7 @@ pipeline_ops = [
     ('sub', 'SUB'),
     ('mul', 'MUL'),
     ('div', 'DIV'),
+    ('asr', 'ASR'),
     # Reduction 
     ('min', 'MIN'),
     ('max', 'MAX'),
@@ -156,7 +177,7 @@ with open("common/opcodes.h", "w") as out:
     # Generate classification macros
     out.write('#define IS_OP_STACK(op) ((op) >= OP_PUSH_INPUT && (op) <= OP_PUSH_OPERAND_7)\n')
     out.write('#define IS_OP_UNARY(op) ((op) >= OP_NEGATE && (op) <= OP_ABS)\n')
-    out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_DIV)\n')
+    out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_ASR)\n')
     out.write('#define IS_OP_REDUCTION(op) ((op) >= OP_MIN && (op) <= OP_PRODUCT)\n\n')
 
     out.write('#endif // OPCODES_H\n')
@@ -232,12 +253,16 @@ with open("host/kernelids.h", "w") as out:
         out.write(f'    KERNEL_TYPE_{t.upper()},\n')
     out.write('};\n')
 
-    out.write(f'enum KernelOperator {{\n')
+    out.write(f"enum KernelOperator {{\n")
     for op in ops: # iterating over original ops list to get names
         fake = op('float', 0)
-        out.write(f'    KERNEL_OP_{fake.name.upper()},\n')
-    out.write(f'    KERNEL_OP_PIPELINE,\n')
-    out.write('};\n')
+        out.write(f"    KERNEL_OP_{fake.name.upper()},\n")
+    for op in ops:
+        if isinstance(op('float', 0), DPUBinaryOp):
+            fake = op('float', 0)
+            out.write(f"    KERNEL_OP_{fake.name.upper()}_SCALAR,\n")
+    out.write(f"    KERNEL_OP_PIPELINE,\n")
+    out.write("};\n")
 
     out.write('struct KernelInfo {\n')
     out.write('    int id;\n')
@@ -258,6 +283,9 @@ with open("host/kernelids.h", "w") as out:
             op_enum = 'KERNEL_OP_PIPELINE'
         elif isinstance(op, DPUReduceOp):
             category = 'KERNEL_REDUCTION'
+            op_enum = f'KERNEL_OP_{op.name.upper()}'
+        elif isinstance(op, DPUBinaryScalarOp):
+            category = 'KERNEL_BINARY_SCALAR'
             op_enum = f'KERNEL_OP_{op.name.upper()}'
         else:
             category = 'KERNEL_UNKNOWN'

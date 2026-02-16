@@ -12,7 +12,7 @@
 
 #ifdef __dpu__
 #include <config.h>
-extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][5 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
 #endif
 
 typedef uint32_t KernelID;
@@ -21,7 +21,8 @@ typedef uint32_t KernelID;
 enum KernelCategory {
     KERNEL_UNARY = 0,
     KERNEL_BINARY = 1,
-    KERNEL_REDUCTION = 2
+    KERNEL_REDUCTION = 2,
+    KERNEL_BINARY_SCALAR = 3
 };
 
 #include "opcodes.h"
@@ -44,6 +45,11 @@ typedef struct {
             uint32_t rhs_offset;
             uint32_t res_offset;
         } binary;          // 12
+        struct {           // binary scalar ops
+            uint32_t lhs_offset;
+            uint32_t rhs_scalar;
+            uint32_t res_offset;
+        } binary_scalar;
         struct {           // unary ops
             uint32_t rhs_offset;
             uint32_t res_offset;

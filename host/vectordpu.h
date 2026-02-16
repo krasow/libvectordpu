@@ -63,6 +63,14 @@ class dpu_vector {
   dpu_vector<T>& operator-=(const dpu_vector<T>& other);
   dpu_vector<T>& operator*=(const dpu_vector<T>& other);
   dpu_vector<T>& operator/=(const dpu_vector<T>& other);
+  
+  dpu_vector<T>& operator+=(T scalar);
+  dpu_vector<T>& operator-=(T scalar);
+  dpu_vector<T>& operator*=(T scalar);
+  dpu_vector<T>& operator/=(T scalar);
+  dpu_vector<T>& operator>>=(T scalar);
+
+  dpu_vector<T> operator-() const;
 
 #if PIPELINE
   dpu_vector<T>& operator=(const pipeline_result<T>& other);
@@ -108,6 +116,8 @@ struct pipeline_result {
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
                    KernelID kernel_id, uint8_t opcode, KernelID pipeline_kid);
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+                          KernelID kernel_id, uint8_t opcode, KernelID pipeline_kid);
 void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
                   uint8_t opcode, KernelID pipeline_kid);
 void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id,
