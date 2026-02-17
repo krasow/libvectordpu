@@ -108,12 +108,13 @@ void DpuRuntime::shutdown() {
   logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
-  std::cout << "[runtime] Waiting for pending events..." << std::endl;
-  while (event_queue_->has_pending()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  if (event_queue_->has_pending()) {
+    std::cout << "[runtime] Flushing pending events..." << std::endl;
+    event_queue_->process_events(UINT64_MAX);
   }
 
-  std::cout << "[runtime] Waiting for active events and callbacks..." << std::endl;
+  std::cout << "[runtime] Waiting for active events and callbacks..."
+            << std::endl;
   while (true) {
     {
       std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
@@ -127,14 +128,8 @@ void DpuRuntime::shutdown() {
   std::cout << "[runtime] Freeing DPU set..." << std::endl;
   if (initialized_) {
     DPU_ASSERT(dpu_free(*dpu_set_));
+    initialized_ = false;
   }
-
-  std::cout << "[runtime] Resetting components..." << std::endl;
-  event_queue_.reset();
-  allocator_.reset();
-  logger_.reset();
-  dpu_set_ = nullptr;
-  initialized_ = false;
 
   std::cout << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();

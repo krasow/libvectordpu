@@ -186,12 +186,12 @@ vector<T> dpu_vector<T>::to_cpu() {
 template <typename T>
 T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
   // block and send to cpu
-  auto a = da.to_cpu(); 
+  auto a = da.to_cpu();
 
   // to_cpu doesn't need to be explicitly traced as its traced internally
   // it confuses the trace imo
   uint64_t flow_id =
-    (da.data_desc_ref() ? da.data_desc_ref()->last_producer_id : 0);
+      (da.data_desc_ref() ? da.data_desc_ref()->last_producer_id : 0);
   trace::reduction_cpu _trace(flow_id);
 
   auto& runtime = DpuRuntime::get();
@@ -358,9 +358,10 @@ dpu_vector<T> operator>>(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  detail::launch_binary_scalar(
-      res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op, OpInfo<T>::universal_pipeline);
+  detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
+                               static_cast<uint32_t>(rhs),
+                               OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op,
+                               OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -371,9 +372,10 @@ dpu_vector<T> operator+(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  detail::launch_binary_scalar(
-      res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op, OpInfo<T>::universal_pipeline);
+  detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
+                               static_cast<uint32_t>(rhs),
+                               OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op,
+                               OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -389,9 +391,10 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  detail::launch_binary_scalar(
-      res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op, OpInfo<T>::universal_pipeline);
+  detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
+                               static_cast<uint32_t>(rhs),
+                               OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op,
+                               OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -402,9 +405,10 @@ dpu_vector<T> operator*(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  detail::launch_binary_scalar(
-      res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op, OpInfo<T>::universal_pipeline);
+  detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
+                               static_cast<uint32_t>(rhs),
+                               OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op,
+                               OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -420,9 +424,10 @@ dpu_vector<T> operator/(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  detail::launch_binary_scalar(
-      res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op, OpInfo<T>::universal_pipeline);
+  detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
+                               static_cast<uint32_t>(rhs),
+                               OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op,
+                               OpInfo<T>::universal_pipeline);
   return res;
 }
 

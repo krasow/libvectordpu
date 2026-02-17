@@ -78,7 +78,7 @@
       for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {                       \
         if (uses_op[k]) {                                                     \
           __mram_ptr TYPE *p =                                                \
-               (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]);         \
+              (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]);          \
           bool found = false;                                                 \
           if (uses_input && p == in_ptr) {                                    \
             op_blks[k] = input_blk;                                           \
@@ -153,7 +153,7 @@
                 break;                                                        \
               case OP_DIV_SCALAR:                                             \
                 for (i = 0; i < b_e; i++)                                     \
-                  if (scalar != (TYPE)0) s1[i] /= scalar;                    \
+                  if (scalar != (TYPE)0) s1[i] /= scalar;                     \
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
                 break;                                                        \
@@ -164,8 +164,8 @@
         }                                                                     \
         if (IS_OP_STACK(op)) {                                                \
           st_ptr[sp] = (op == OP_PUSH_INPUT)                                  \
-                            ? input_blk                                       \
-                            : op_blks[op - OP_PUSH_OPERAND_0];                \
+                           ? input_blk                                        \
+                           : op_blks[op - OP_PUSH_OPERAND_0];                 \
           st_is_temp[sp] = false;                                             \
           sp++;                                                               \
         } else if (IS_OP_UNARY(op)) {                                         \
@@ -175,14 +175,16 @@
             if (op == OP_NEGATE)                                              \
               for (i = 0; i < b_e; i++) dest[i] = -s[i];                      \
             else                                                              \
-              for (i = 0; i < b_e; i++) dest[i] = (s[i] < (TYPE)0) ? -s[i] : s[i]; \
+              for (i = 0; i < b_e; i++)                                       \
+                dest[i] = (s[i] < (TYPE)0) ? -s[i] : s[i];                    \
             st_ptr[sp - 1] = dest;                                            \
             st_is_temp[sp - 1] = true;                                        \
           } else {                                                            \
             if (op == OP_NEGATE)                                              \
               for (i = 0; i < b_e; i++) s[i] = -s[i];                         \
             else                                                              \
-              for (i = 0; i < b_e; i++) s[i] = (s[i] < (TYPE)0) ? -s[i] : s[i]; \
+              for (i = 0; i < b_e; i++)                                       \
+                s[i] = (s[i] < (TYPE)0) ? -s[i] : s[i];                       \
           }                                                                   \
         } else if (IS_OP_BINARY(op)) {                                        \
           TYPE *s1 = st_ptr[--sp];                                            \

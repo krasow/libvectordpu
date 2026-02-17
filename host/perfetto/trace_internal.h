@@ -1,19 +1,18 @@
 #pragma once
-#include <string>
+#include <cstdint>
 #include <deque>
 #include <list>
 #include <memory>
-#include <cstdint>
+#include <string>
 
-#include "queue.h"
 #include "config.h"
+#include "queue.h"
 
 std::string operationtype_to_string(Event::OperationType op);
 
 #define DPU_TRACK_ID uint64_t(0x1000)
 #define EVENT_TRACK_BASE uint64_t(0x2000)
 
-#if TRACE == 1
 namespace trace {
 void initialize();
 void shutdown();
@@ -29,6 +28,7 @@ void active_ops_counter(size_t count);
 void ensure_callback_thread_named();
 }  // namespace trace
 
+#if TRACE == 1
 #define TRACE_INIT() trace::initialize()
 #define TRACE_SHUTDOWN() trace::shutdown()
 #else

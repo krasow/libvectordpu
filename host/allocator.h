@@ -11,8 +11,9 @@ using std::vector;
 
 #define DPU_BROADCAST (-1)
 
-#include "vectordesc.h"
 #include <stdexcept>
+
+#include "vectordesc.h"
 
 class DpuOOMException : public std::runtime_error {
  public:

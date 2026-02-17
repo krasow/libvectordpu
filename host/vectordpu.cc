@@ -38,7 +38,8 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  [[maybe_unused]] size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  [[maybe_unused]] size_t logical_size =
+      desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   trace::scoped_event trace_scoped("transfer", "vec_xfer_to_dpu");
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
@@ -61,7 +62,8 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  [[maybe_unused]] size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  [[maybe_unused]] size_t logical_size =
+      desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   trace::scoped_event trace_scoped("transfer", "vec_xfer_from_dpu");
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,

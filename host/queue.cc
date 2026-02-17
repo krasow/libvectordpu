@@ -157,9 +157,10 @@ bool EventQueue::process_next() {
           detail::internal_launch_universal_pipeline(
               e->output, (e->inputs.empty() ? nullptr : e->inputs[0]),
               e->rpn_ops,
-              (e->inputs.size() > 1 ? std::vector<detail::VectorDescRef>(
-                                          e->inputs.begin() + 1, e->inputs.end())
-                                    : std::vector<detail::VectorDescRef>()),
+              (e->inputs.size() > 1
+                   ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
+                                                        e->inputs.end())
+                   : std::vector<detail::VectorDescRef>()),
               e->kid);
         } else if (e->cb) {
           e->cb();
@@ -223,7 +224,7 @@ void EventQueue::process_events(size_t wait_for_id) {
       std::lock_guard<std::mutex> lock(mtx_);
       if (operations_.empty() && running_events_.empty()) break;
     }
-    if (!progress)  {
+    if (!progress) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
@@ -325,7 +326,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
               last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
             } else {
               last_rpn.push_back(OP_PUSH_INPUT);
-              if (last->inputs.size() > 1) last_rpn.push_back(OP_PUSH_OPERAND_0);
+              if (last->inputs.size() > 1)
+                last_rpn.push_back(OP_PUSH_OPERAND_0);
               last_rpn.push_back(last->opcode);
             }
           }
@@ -335,7 +337,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
           if (e_rpn.empty()) {
             if (e->is_scalar) {
               e_rpn.push_back(e->opcode);
-              const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
+              const uint8_t* p =
+                  reinterpret_cast<const uint8_t*>(&e->scalar_value);
               e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
             } else {
               e_rpn.push_back(OP_PUSH_INPUT);
