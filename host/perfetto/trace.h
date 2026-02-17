@@ -54,7 +54,7 @@ void execution_begin_next(std::shared_ptr<Event> next);
 #define TRACE_EXECUTION_END() trace::execution_end()
 #define TRACE_ACTIVE_OPS(count) trace::active_ops_counter(count)
 #define TRACE_CALLBACK_THREAD() trace::ensure_callback_thread_named()
-#define TRACE_EXECUTION_BEGIN_NEXT(next) trace::execution_begin_next(next)
+#define TRACE_EXECUTION_BEGIN_NEXT(next) trace::execution_begin(next)
 
 #else
 #include <cstdint>

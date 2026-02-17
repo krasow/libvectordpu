@@ -314,45 +314,6 @@ void ensure_callback_thread_named() {
     thread_named = true;
   }
 }
-
-void execution_begin_next(std::shared_ptr<Event> next) {
-  auto next_lambda = [next](perfetto::EventContext& ctx) {
-    perfetto::Flow::ProcessScoped(next->id)(ctx);
-    for (size_t dep_id : next->dependencies) {
-      perfetto::Flow::ProcessScoped(dep_id)(ctx);
-    }
-  };
-
-  if (!next->rpn_ops.empty()) {
-    std::string ops_str;
-    for (uint8_t op : next->rpn_ops) {
-      std::string s = opcode_to_string(op);
-      if (s.empty()) continue;
-      if (!ops_str.empty()) ops_str += ", ";
-      ops_str += s;
-    }
-
-    auto event_lambda = [next, next_lambda,
-                         ops_str](perfetto::EventContext& ctx) {
-      next_lambda(ctx);
-      add_event_metadata(ctx, next);
-    };
-
-    TRACE_EVENT_BEGIN("events", perfetto::DynamicString(next->slice_name),
-                      perfetto::Track(DPU_TRACK_ID), "id", next->id,
-                      "fused_ops", perfetto::DynamicString(ops_str),
-                      event_lambda);
-  } else {
-    auto event_lambda = [next, next_lambda](perfetto::EventContext& ctx) {
-      next_lambda(ctx);
-      add_event_metadata(ctx, next);
-    };
-    TRACE_EVENT_BEGIN("events", perfetto::DynamicString(next->slice_name),
-                      perfetto::Track(DPU_TRACK_ID), "id", next->id,
-                      event_lambda);
-  }
-}
-
 }  // namespace trace
 
 #endif

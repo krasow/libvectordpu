@@ -34,7 +34,9 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
   auto vec = std::make_shared<detail::VectorDesc>();
   for (size_t i = 0; i < num_dpus_; i++) {
     size_t sz = (eff + (i < rem ? 1 : 0)) * size_type + reserved;
-    vec->desc.push_back({!lazy ? raw_allocate(i, sz) : 0, (uint32_t)sz});
+    size_t aligned_sz = (sz + 7) & ~7;
+    vec->desc.push_back({!lazy ? raw_allocate(i, aligned_sz) : 0, (uint32_t)sz,
+                         (uint32_t)aligned_sz});
   }
   vec->ptr_allocated = !lazy;
   vec->reserved_bytes = reserved;
@@ -46,9 +48,10 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
 detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
     std::size_t n, std::size_t reserved, std::size_t size_type, bool lazy) {
   size_t sz = std::max((size_t)8, (n / num_dpus_) * size_type) + reserved;
+  size_t aligned_sz = (sz + 7) & ~7;
   auto vec = std::make_shared<detail::VectorDesc>();
-  uint32_t addr = !lazy ? raw_allocate(DPU_BROADCAST, sz) : 0;
-  vec->desc.assign(num_dpus_, {addr, (uint32_t)sz});
+  uint32_t addr = !lazy ? raw_allocate(DPU_BROADCAST, aligned_sz) : 0;
+  vec->desc.assign(num_dpus_, {addr, (uint32_t)sz, (uint32_t)aligned_sz});
   vec->ptr_allocated = !lazy;
   vec->reserved_bytes = reserved;
   vec->element_size = size_type;
@@ -60,11 +63,11 @@ void allocator::realize_allocation(detail::VectorDescRef data) {
   if (data->ptr_allocated) return;
   std::lock_guard<std::mutex> lock(this->lock);
   if (is_synchronized_) {
-    uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].size_bytes);
+    uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].allocated_bytes);
     for (auto& s : data->desc) s.ptr = addr;
   } else {
     for (size_t i = 0; i < num_dpus_; i++)
-      data->desc[i].ptr = raw_allocate(i, data->desc[i].size_bytes);
+      data->desc[i].ptr = raw_allocate(i, data->desc[i].allocated_bytes);
   }
   data->ptr_allocated = true;
 }
@@ -92,7 +95,8 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
   }
 
   uint32_t& off = (id == DPU_BROADCAST) ? broadcast_offset_ : offsets_[id];
-  if (id == DPU_BROADCAST) off = *std::max_element(offsets_.begin(), offsets_.end());
+  if (id == DPU_BROADCAST)
+    off = *std::max_element(offsets_.begin(), offsets_.end());
   if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id]))
     throw std::runtime_error("DPU OOM");
 
@@ -111,12 +115,13 @@ void allocator::deallocate_upmem_vector(detail::VectorDesc* data) {
   data->ptr_allocated = false;
   std::lock_guard<std::mutex> lock(this->lock);
   if (is_synchronized_ && !data->desc.empty()) {
-    raw_deallocate(DPU_BROADCAST, data->desc[0].ptr, data->desc[0].size_bytes);
+    raw_deallocate(DPU_BROADCAST, data->desc[0].ptr,
+                   data->desc[0].allocated_bytes);
     return;
   }
   is_synchronized_ = false;
   for (size_t i = 0; i < num_dpus_; i++)
-    raw_deallocate(i, data->desc[i].ptr, data->desc[i].size_bytes);
+    raw_deallocate(i, data->desc[i].ptr, data->desc[i].allocated_bytes);
 }
 
 void allocator::deallocate_upmem_vector_broadcast(detail::VectorDesc* data) {

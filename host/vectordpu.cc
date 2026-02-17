@@ -38,10 +38,11 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   TRACE_EVENT("transfer", "vec_xfer_to_dpu", "mram_offset", mram_location,
-              "bytes_per_dpu", xfer_size, "element_size", desc->element_size,
-              "total_bytes", xfer_size * runtime.num_dpus());
+              "bytes_per_dpu", logical_size, "element_size", desc->element_size,
+              "total_bytes", logical_size * runtime.num_dpus());
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -62,10 +63,11 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  size_t xfer_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   TRACE_EVENT("transfer", "vec_xfer_from_dpu", "mram_offset", mram_location,
-              "bytes_per_dpu", xfer_size, "element_size", desc->element_size,
-              "total_bytes", xfer_size * runtime.num_dpus());
+              "bytes_per_dpu", logical_size, "element_size", desc->element_size,
+              "total_bytes", logical_size * runtime.num_dpus());
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
                             DPU_MRAM_HEAP_POINTER_NAME, mram_location,
                             xfer_size, DPU_XFER_ASYNC));
@@ -281,14 +283,11 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   auto& event_queue = runtime.get_event_queue();
 
 #if PIPELINE
-  (void)pipeline_kid;
-
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_unary, res, rhs, kernel_id));
   e->pipeline_kid = pipeline_kid;
 #else
-  (void)opcode;
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_unary, res, rhs, kernel_id);
   std::shared_ptr<Event> e =
@@ -346,7 +345,6 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
   auto& event_queue = runtime.get_event_queue();
 
 #if PIPELINE
-  (void)pipeline_kid;
   assert(lhs->num_elements == rhs->num_elements);
 
   std::shared_ptr<Event> e = std::make_shared<Event>(
@@ -381,8 +379,6 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   auto& event_queue = runtime.get_event_queue();
 
 #if PIPELINE
-  (void)pipeline_kid;
-
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_binary_scalar, res, lhs, scalar, kernel_id));
@@ -415,8 +411,6 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   auto& event_queue = runtime.get_event_queue();
 
 #if PIPELINE
-  (void)pipeline_kid;
-
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_reduction, res, rhs, kernel_id));
@@ -425,8 +419,6 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   // Mark result description as reduction synchronously
   res->is_reduction_result = true;
   res->reduction_rid = static_cast<KernelID>(opcode);
-
-  event_queue.submit(e);
 #else
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_reduction, res, rhs, kernel_id);

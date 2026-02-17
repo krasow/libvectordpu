@@ -1,5 +1,5 @@
 #pragma once
-
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <list>
@@ -42,11 +42,11 @@ class Event : public std::enable_shared_from_this<Event> {
   size_t id = 0;
   std::string slice_name;
   std::set<size_t> dependencies;
-  bool finished = false;
+  std::atomic<bool> finished{false};
   bool started = false;
 
   void add_completion_callback(std::shared_ptr<Event> self);
-  void mark_finished() { this->finished = true; }
+  void mark_finished() { this->finished.store(true); }
   bool operator==(const Event& other) const { return this->id == other.id; }
 };
 
@@ -59,7 +59,6 @@ class EventQueue {
 
   void add_fence(std::shared_ptr<Event> e);
 
-  void wait();
   bool process_next();
   void process_events(size_t wait_for_id);
   void debug_print_queue();
@@ -85,11 +84,15 @@ class EventQueue {
   }
   size_t size() const { return operations_.size(); }
 
+  size_t get_last_finished_id() const { return last_finished_id_.load(); }
+
   std::list<std::shared_ptr<Event>>& get_active_events() {
     return running_events_;
   }
 
   std::mutex& get_mutex() { return mtx_; }
+
+  std::atomic<size_t> last_finished_id_{0};
 
  private:
   std::mutex mtx_;

@@ -23,8 +23,6 @@
 
   TRACE_CALLBACK_THREAD();
 
-  me->mark_finished(/* true */);
-
   auto& runtime = DpuRuntime::get();
   auto& queue = runtime.get_event_queue();
   auto& events = queue.get_active_events();
@@ -32,11 +30,23 @@
 
   {
     std::lock_guard<std::mutex> lock(mtx);
-    TRACE_EXECUTION_END();
-    events.remove(me);
-    if (!events.empty()) {
-      auto next = events.front();
-      TRACE_EXECUTION_BEGIN_NEXT(next);
+    me->mark_finished();
+
+    while (!events.empty() && events.front()->finished) {
+      // The event at the front of the list is the one currently "active" in
+      // tracing.
+      auto e = events.front();
+      queue.last_finished_id_.store(e->id);
+      TRACE_EXECUTION_END();
+      events.pop_front();
+
+      // If there's a next event, start its trace slice.
+      if (!events.empty()) {
+        auto next = events.front();
+        TRACE_EXECUTION_BEGIN(next);
+        // If 'next' is also finished, the loop will continue and end its slice
+        // immediately.
+      }
     }
   }
 
@@ -105,11 +115,13 @@ bool EventQueue::process_next() {
 
   TRACE_INQUEUE_END(e);
 
-  e->slice_name = operationtype_to_string(e->op);
-  if (e->op == Event::OperationType::COMPUTE) {
-    e->slice_name = kernel_id_to_string(e->kid);
-    if (!e->rpn_ops.empty()) {
-      e->slice_name += " (Fused)";
+  if (e->slice_name.empty()) {
+    e->slice_name = operationtype_to_string(e->op);
+    if (e->op == Event::OperationType::COMPUTE) {
+      e->slice_name = kernel_id_to_string(e->kid);
+      if (!e->rpn_ops.empty()) {
+        e->slice_name += " (Fused)";
+      }
     }
   }
 
@@ -172,21 +184,19 @@ bool EventQueue::process_next() {
 
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
-    bool made_progress = this->process_next();
-    if (this->get_curr_event_id() > wait_for_id) {
-      break;
-    }
-    // check if wait_for_id event has completed
-    if (this->get_curr_event_id() == wait_for_id &&
-        this->get_curr_event() != nullptr && this->get_curr_event()->finished) {
+    this->process_next();
+
+    if (this->get_last_finished_id() >= wait_for_id) {
       break;
     }
 
-    // exit if no more events to process
-    if (operations_.empty() && running_events_.empty()) break;
+    // exit if no more events to process and everything is finished
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (operations_.empty() && running_events_.empty()) break;
+    }
 
-    if (!made_progress)
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 
@@ -384,6 +394,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
             }
 
             TRACE_EVENT_FUSED(e, last, fused_ops);
+            TRACE_INQUEUE_END(e);
           }
         }
       }

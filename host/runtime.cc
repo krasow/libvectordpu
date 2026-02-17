@@ -116,6 +116,16 @@ void DpuRuntime::shutdown() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
+  // Also wait for events that have been launched but not yet finished
+  // (Safely wait for all callbacks to fire so tracing is complete)
+  while (true) {
+    {
+      std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
+      if (event_queue_->get_active_events().empty()) break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
   if (initialized_) {
     DPU_ASSERT(dpu_free(*dpu_set_));
   }

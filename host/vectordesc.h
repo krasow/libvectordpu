@@ -10,7 +10,8 @@
 namespace detail {
 struct VectorSegment {
   uint32_t ptr;
-  uint32_t size_bytes;  // bytes
+  uint32_t size_bytes;       // Logical bytes (used for count)
+  uint32_t allocated_bytes;  // Physical bytes (aligned to 8)
 };
 
 struct VectorDesc {
