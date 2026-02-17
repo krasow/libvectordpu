@@ -90,7 +90,7 @@ int main(void) {
   RUN_TEST(test_chained_operations);
   RUN_TEST(test_int_sum_reduction);
 
-  // RUN_TEST(memory_test);
+  RUN_TEST(memory_test);
 
   // RUN_TEST(test_int_product_reduction);
   // RUN_TEST(test_int_max_reduction);

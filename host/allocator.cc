@@ -25,8 +25,8 @@ detail::VectorDescRef allocator::allocate_upmem_vector(
 
   if (uniform_size) {
     size_t elems_per_dpu = n / num_dpus_;
-    if (elems_per_dpu * size_type < 4) {
-      if (elems_per_dpu * size_type < 8) uniform_size = false;
+    if (elems_per_dpu * size_type < 8) {
+      uniform_size = false;
     }
   }
 
@@ -79,11 +79,6 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
     bool lazy) {
   std::size_t num_dpus = this->num_dpus_;
   size_t elems_per_dpu = n / num_dpus;
-
-  // Ensure 8-byte alignment/minimum size logic
-  if (elems_per_dpu * size_type < 8) {
-    // Ensure 8-byte alignment for MRAM transfers.
-  }
 
   size_t alloc_size = elems_per_dpu * size_type;
   if (alloc_size < 8) alloc_size = 8;
@@ -149,22 +144,30 @@ uint32_t allocator::allocate_broadcast(std::size_t n) {
     } else {
       flist.erase(best_it);
     }
+    total_allocated_bytes_ += n * num_dpus_;
+    TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
     return addr;
   }
 
-  uint32_t addr = ptrs_[0] + broadcast_offset_;
+  // Ensure we use the maximum offset across all DPUs
+  uint32_t max_offset = *std::max_element(offsets_.begin(), offsets_.end());
+  uint32_t addr = ptrs_[0] + max_offset;
 
-  if (broadcast_offset_ + n > sizes_[0]) {
-    throw std::runtime_error("DPU out of memory (broadcast)!");
+  if (max_offset + n > sizes_[0]) {
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[allocator] broadcast out of memory: requested " << n
+                  << " bytes, available " << (sizes_[0] - max_offset)
+                  << " bytes"
+                  << std::endl;
+    throw std::runtime_error("DPU out of memory! (broadcast)");
   }
 
-  broadcast_offset_ += n;
-
-  // Sync offsets for fallback compatibility
+  broadcast_offset_ = max_offset + n;
   std::fill(offsets_.begin(), offsets_.end(), broadcast_offset_);
 
-  TRACE_COUNTER("runtime", "broadcast_offset", broadcast_offset_);
-
+  total_allocated_bytes_ += n * num_dpus_;
+  TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
+  TRACE_COUNTER("runtime", "broadcast_offset", (uint64_t)broadcast_offset_);
   return addr;
 }
 
@@ -202,6 +205,20 @@ void allocator::deallocate_broadcast(uint32_t addr, std::size_t size) {
     inserted->size += next->size;
     flist.erase(next);
   }
+
+  // Retract bump pointer if possible
+  if (!flist.empty()) {
+    auto last = flist.back();
+    if (last.addr + last.size == start_addr_ + broadcast_offset_) {
+      broadcast_offset_ -= last.size;
+      std::fill(offsets_.begin(), offsets_.end(), broadcast_offset_);
+      flist.pop_back();
+      TRACE_COUNTER("runtime", "broadcast_offset", (uint64_t)broadcast_offset_);
+    }
+  }
+
+  total_allocated_bytes_ -= size * num_dpus_;
+  TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
 }
 
 void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
@@ -211,25 +228,15 @@ void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
 
   // Check if we can use optimized broadcast deallocation
   if (!data->desc.empty()) {
-    // We could check all, but if we assume they were created uniformly...
-    // Let's rely on is_synchronized_ and just check if allocation was likely
-    // broadcast If we differ, is_synchronized_ should have been false already.
-    // But let's be safe: unique vectors might have different ptrs?
-    // Actually, allocate_upmem_vector creates uniform ptrs if bump pointer is
-    // sync. But if we ever supported non-uniform, we must check. Checking 1024
-    // items is O(N), but fast memory access. Let's just check if
-    // is_synchronized_.
     if (is_synchronized_) {
-      // If synced, we expect them to be uniform.
-      // Call broadcast dealloc.
-      deallocate_upmem_vector_broadcast(data);
+      deallocate_broadcast(data->desc[0].ptr, data->desc[0].size_bytes);
+      TRACE_EVENT("runtime", "deallocate_upmem_vector_broadcast");
       return;
     }
   }
 
   // Fallback
-  // If we are here, either not synced or empty.
-  is_synchronized_ = false;  // We are entering per-DPU mode (or already were)
+  is_synchronized_ = false;
 
   for (size_t i = 0; i < num_dpus_; ++i) {
     uint32_t addr = data->desc[i].ptr;
@@ -263,6 +270,8 @@ uint32_t allocator::allocate(std::size_t dpu_id, std::size_t n) {
     } else {
       flist.erase(best_it);
     }
+    total_allocated_bytes_ += n;
+    TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
     return addr;
   }
 
@@ -272,11 +281,13 @@ uint32_t allocator::allocate(std::size_t dpu_id, std::size_t n) {
                   << " out of memory: requested " << n << " bytes, available "
                   << (sizes_[dpu_id] - offsets_[dpu_id]) << " bytes"
                   << std::endl;
-    throw std::runtime_error("DPU out of memory!");
+    throw std::runtime_error("DPU out of memory! (non-broadcast)");
   }
 
   uint32_t addr = ptrs_[dpu_id] + offsets_[dpu_id];
   offsets_[dpu_id] += n;
+  total_allocated_bytes_ += n;
+  TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
   return addr;
 }
 
@@ -309,4 +320,22 @@ void allocator::deallocate(std::size_t dpu_id, uint32_t addr, size_t size) {
     inserted->size += next->size;
     flist.erase(next);
   }
+
+  // // Retract bump pointer if possible
+  // if (!flist.empty()) {
+  //   auto last = flist.back();
+  //   if (last.addr + last.size == ptrs_[dpu_id] + offsets_[dpu_id]) {
+  //     offsets_[dpu_id] -= last.size;
+  //     flist.pop_back();
+  //     // If we are still synchronized, we can update the global broadcast_offset
+  //     if (is_synchronized_) {
+  //       broadcast_offset_ = *std::max_element(offsets_.begin(), offsets_.end());
+  //       TRACE_COUNTER("runtime", "broadcast_offset",
+  //                     (uint64_t)broadcast_offset_);
+  //     }
+  //   }
+  // }
+
+  total_allocated_bytes_ -= size;
+  TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
 }

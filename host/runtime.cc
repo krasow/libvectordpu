@@ -116,17 +116,14 @@ void DpuRuntime::shutdown() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
-  // if (initialized_) {
-  //   DPU_ASSERT(dpu_free(dpu_set_));
-  // }
+  if (initialized_) {
+    DPU_ASSERT(dpu_free(*dpu_set_));
+  }
 
   allocator_.reset();
   event_queue_.reset();
   logger_.reset();
   dpu_set_ = nullptr;
-
-  initialized_ = false;
-
   initialized_ = false;
 
   TRACE_SHUTDOWN();

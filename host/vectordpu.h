@@ -107,9 +107,9 @@ class dpu_vector {
 template <typename T>
 struct pipeline_result {
   dpu_vector<T> vec;
-  pipeline_result(dpu_vector<T> v) : vec(v) {}
+  pipeline_result(dpu_vector<T> v) : vec(std::move(v)) {}
   operator T();
-  operator dpu_vector<T>() { return vec; }
+  operator dpu_vector<T>() { return std::move(vec); }
   dpu_vector<T>* operator->() { return &vec; }
 };
 #endif
@@ -127,7 +127,7 @@ void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id,
 
 void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
                             VectorDescRef rhs, KernelID kernel_id);
-void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
+void internal_launch_unary(VectorDescRef res, VectorDescRef lhs,
                            KernelID kernel_id);
 void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
                                KernelID kernel_id);

@@ -63,4 +63,5 @@ class allocator {
   void deallocate(std::size_t dpu_id, uint32_t addr, size_t size);
 
   std::mutex lock;
+  size_t total_allocated_bytes_ = 0;
 };

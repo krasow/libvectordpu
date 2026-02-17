@@ -139,8 +139,10 @@ bool EventQueue::process_next() {
                                         e->inputs.begin() + 1, e->inputs.end())
                                   : std::vector<detail::VectorDescRef>()),
             e->kid);
+        e->inputs.clear();  // Release inputs early
       } else if (e->cb) {
         e->cb();
+        e->inputs.clear();  // Release inputs early
       }
 #else
       if (e->cb) {
@@ -239,6 +241,14 @@ void EventQueue::debug_active_events() {
 }
 void EventQueue::submit(std::shared_ptr<Event> e) {
   std::lock_guard<std::mutex> lock(mtx_);
+  // Implement backpressure: block if queue is too full
+  const size_t MAX_QUEUE_DEPTH = 128;
+  while (operations_.size() >= MAX_QUEUE_DEPTH) {
+    mtx_.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    mtx_.lock();
+  }
+
   e->id = counter_++;
 
   TRACE_EVENT_ENQUEUED(e, operations_, running_events_);

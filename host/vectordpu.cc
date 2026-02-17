@@ -274,28 +274,20 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_unary, res, rhs, kernel_id));
-
-  e->inputs = {rhs};
-  e->output = res;
-  e->kid = kernel_id;
   e->pipeline_kid = pipeline_kid;
-  e->opcode = opcode;
-  e->res = res;
-
-  event_queue.submit(e);
 #else
   (void)opcode;
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_unary, res, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+#endif
   e->inputs = {rhs};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
-#endif
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
@@ -316,7 +308,9 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
       std::make_shared<Event>(Event::OperationType::COMPUTE);
 
   e->inputs = {init};
-  e->inputs.insert(e->inputs.end(), operands.begin(), operands.end());
+  for (auto& op : operands) {
+    if (op) e->inputs.push_back(op);
+  }
   e->output = res;
   e->rpn_ops = ops;
   e->kid = kernel_id;
@@ -347,27 +341,19 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_binary, res, lhs, rhs, kernel_id));
 
-  e->inputs = {lhs, rhs};
-  e->output = res;
-  e->kid = kernel_id;
   e->pipeline_kid = pipeline_kid;
-  e->opcode = opcode;
-  e->res = res;
-
-  event_queue.submit(e);
 #else
-  (void)opcode;
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_binary, res, lhs, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+#endif
   e->inputs = {lhs, rhs};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
-#endif
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
@@ -388,31 +374,21 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_binary_scalar, res, lhs, scalar, kernel_id));
-
-  e->inputs = {lhs};
-  e->output = res;
-  e->kid = kernel_id;
   e->pipeline_kid = pipeline_kid;
-  e->opcode = opcode;
-  e->res = res;
-  e->is_scalar = true;
-
-  event_queue.submit(e);
 #else
-  (void)opcode;
   (void)pipeline_kid;
   auto bound_cb =
       std::bind(internal_launch_binary_scalar, res, lhs, scalar, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
-  e->res = res;
+#endif
   e->inputs = {lhs};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
+  e->res = res;
   e->is_scalar = true;
   event_queue.submit(e);
-#endif
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
@@ -432,32 +408,25 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_reduction, res, rhs, kernel_id));
-
-  e->inputs = {rhs};
-  e->output = res;
-  e->kid = kernel_id;
+  
   e->pipeline_kid = pipeline_kid;
-  e->opcode = opcode;
-  e->res = res;
-
   // Mark result description as reduction synchronously
   res->is_reduction_result = true;
   res->reduction_rid = static_cast<KernelID>(opcode);
 
   event_queue.submit(e);
 #else
-  (void)opcode;
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_reduction, res, rhs, kernel_id);
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
+#endif
   e->inputs = {rhs};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
   e->res = res;
   event_queue.submit(e);
-#endif
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();

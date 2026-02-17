@@ -23,12 +23,10 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, bool lazy,
     }
     runtime.init(nr_dpus);
   }
-
   data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T),
                                                         lazy);
-
 #if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
+  Logger& logger = runtime.get_logger();
   log_allocation(logger, typeid(T), n, debug_name, debug_file, debug_line);
 #endif
 }
@@ -51,29 +49,19 @@ dpu_vector<T>::dpu_vector(dpu_vector&& other) noexcept
       debug_name(other.debug_name),
       debug_file(other.debug_file),
       debug_line(other.debug_line),
-      copied(false) {
-  other.copied = true;
-}
+      copied(true) {}
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
   if (this != &other) {
-    if (!copied && data_) {
-      auto& runtime = DpuRuntime::get();
-#if ENABLE_DPU_LOGGING >= 1
-      Logger& logger = runtime.get_logger();
-      log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
-                       debug_line);
-#endif
-      runtime.get_allocator().deallocate_upmem_vector(data_);
-    }
     data_ = other.data_;
     size_ = other.size_;
     reserved_ = other.reserved_;
     debug_name = other.debug_name;
     debug_file = other.debug_file;
     debug_line = other.debug_line;
-    copied = true;
+    copied = false;
+    other.copied = true;
   }
   return *this;
 }
@@ -81,15 +69,6 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator=(dpu_vector&& other) noexcept {
   if (this != &other) {
-    if (!copied && data_) {
-      auto& runtime = DpuRuntime::get();
-#if ENABLE_DPU_LOGGING >= 1
-      Logger& logger = runtime.get_logger();
-      log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
-                       debug_line);
-#endif
-      runtime.get_allocator().deallocate_upmem_vector(data_);
-    }
     data_ = std::move(other.data_);
     size_ = other.size_;
     reserved_ = other.reserved_;
