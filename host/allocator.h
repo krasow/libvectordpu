@@ -9,6 +9,8 @@
 using std::size_t;
 using std::vector;
 
+#define DPU_BROADCAST (-1)
+
 #include "vectordesc.h"
 
 struct FreeBlock {
@@ -52,15 +54,10 @@ class allocator {
   uint32_t broadcast_offset_ = 0;
   std::list<FreeBlock> broadcast_free_list_;
 
-  // Helper for O(1) broadcast allocation
-  uint32_t allocate_broadcast(std::size_t n);
-  void deallocate_broadcast(uint32_t addr, std::size_t size);
-
-  // Allocate 'n' units on a specific DPU
-  uint32_t allocate(std::size_t dpu_id, std::size_t n);
-
-  // Deallocate a block and merge adjacent free blocks
-  void deallocate(std::size_t dpu_id, uint32_t addr, size_t size);
+  // Internal helpers for raw allocation/deallocation.
+  // dpu_id = DPU_BROADCAST means broadcast.
+  uint32_t raw_allocate(int dpu_id, std::size_t n);
+  void raw_deallocate(int dpu_id, uint32_t addr, size_t size);
 
   std::mutex lock;
   size_t total_allocated_bytes_ = 0;

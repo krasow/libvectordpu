@@ -56,7 +56,7 @@ dpu_vector<T>::dpu_vector(dpu_vector&& other) noexcept
       debug_file(other.debug_file),
       debug_line(other.debug_line),
       copied(false) {
-   // ownership handled by shared_ptr
+  // ownership handled by shared_ptr
 }
 
 template <typename T>
