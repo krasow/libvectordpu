@@ -1,3 +1,4 @@
+#include "perfetto/trace_internal.h"
 #include "perfetto/trace.h"
 
 #include <cstdio>
@@ -18,6 +19,46 @@ std::string operationtype_to_string(Event::OperationType op) {
     default:
       return "UNKNOWN";
   }
+}
+
+void trace::internal_reduction_begin(uint64_t flow_id) {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_BEGIN("events", "reduction_cpu", [flow_id](perfetto::EventContext& ctx) {
+    if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
+  });
+#endif
+}
+
+void trace::internal_reduction_end() {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_END("events");
+#endif
+}
+
+void trace::internal_to_cpu_begin(uint64_t flow_id) {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_BEGIN("transfer", "dpu_vector::to_cpu", [flow_id](perfetto::EventContext& ctx) {
+    if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
+  });
+#endif
+}
+
+void trace::internal_to_cpu_end() {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_END("transfer");
+#endif
+}
+
+void trace::internal_from_cpu_begin() {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_BEGIN("transfer", "dpu_vector::from_cpu");
+#endif
+}
+
+void trace::internal_from_cpu_end() {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  TRACE_EVENT_END("transfer");
+#endif
 }
 
 std::string opcode_to_string(uint8_t op) {

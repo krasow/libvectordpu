@@ -1,7 +1,7 @@
 #include "vectordpu.h"
 
 #include "logger.h"
-#include "perfetto/trace.h"
+#include "perfetto/trace_internal.h"
 #include "vectordesc.h"
 
 #ifndef DPURT

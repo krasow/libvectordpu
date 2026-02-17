@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 #include "logger.h"
-#include "perfetto/trace.h"
+#include "perfetto/trace_internal.h"
 #include "runtime.h"
 
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,

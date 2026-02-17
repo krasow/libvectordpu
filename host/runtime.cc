@@ -14,7 +14,7 @@
 #include <libgen.h>
 #include <limits.h>
 
-#include "perfetto/trace.h"
+#include "perfetto/trace_internal.h"
 #include "runtime.h"
 
 #if TRACE == 1

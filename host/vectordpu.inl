@@ -6,6 +6,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "perfetto/trace.h"
+
 template <typename T>
 dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, bool lazy,
                           std::string_view name, std::source_location loc)
@@ -105,6 +107,7 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
                                       std::source_location loc) {
   dpu_vector<T> vec(cpu_vec.size(), 0, false, name, loc);
+  trace::from_cpu _trace;
   // .data returns a std::pair<vector<uint32_t>, vector<uint32_t>>
   // the first element is vector of pointers to DPU memory per DPU
   // the second element is vector of sizes per DPU
@@ -133,6 +136,10 @@ dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
 
 template <typename T>
 vector<T> dpu_vector<T>::to_cpu() {
+  uint64_t last_pid =
+      (this->data_desc_ref() ? this->data_desc_ref()->last_producer_id : 0);
+  trace::to_cpu _trace(last_pid);
+
   auto desc = this->data_desc_ref();
   // Allocate CPU buffer large enough to hold all data
   size_t total_size = this->size();
@@ -186,6 +193,9 @@ vector<T> dpu_vector<T>::to_cpu() {
 
 template <typename T>
 T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
+  uint64_t flow_id =
+      (da.data_desc_ref() ? da.data_desc_ref()->last_producer_id : 0);
+  trace::reduction_cpu _trace(flow_id);
   // block and send to cpu
   auto a = da.to_cpu();
 

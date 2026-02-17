@@ -5,7 +5,7 @@
 #include <ostream>
 #include <thread>
 
-#include "perfetto/trace.h"
+#include "perfetto/trace_internal.h"
 #include "runtime.h"
 #include "vectordpu.h"
 
