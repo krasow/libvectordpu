@@ -24,7 +24,7 @@ test_error memory_test() {
 
     std::cout << "Running chained operation: res = a + b + c + a + b..."
               << std::endl;
-    
+
     // Without lazy allocation, each '+' allocates an intermediate.
     // tmp1 = a + b (40MB) -> 160MB used
     // tmp2 = tmp1 + c (40MB) -> 200MB used

@@ -157,8 +157,7 @@ uint32_t allocator::allocate_broadcast(std::size_t n) {
     Logger& logger = DpuRuntime::get().get_logger();
     logger.lock() << "[allocator] broadcast out of memory: requested " << n
                   << " bytes, available " << (sizes_[0] - max_offset)
-                  << " bytes"
-                  << std::endl;
+                  << " bytes" << std::endl;
     throw std::runtime_error("DPU out of memory! (broadcast)");
   }
 
@@ -327,10 +326,10 @@ void allocator::deallocate(std::size_t dpu_id, uint32_t addr, size_t size) {
   //   if (last.addr + last.size == ptrs_[dpu_id] + offsets_[dpu_id]) {
   //     offsets_[dpu_id] -= last.size;
   //     flist.pop_back();
-  //     // If we are still synchronized, we can update the global broadcast_offset
-  //     if (is_synchronized_) {
-  //       broadcast_offset_ = *std::max_element(offsets_.begin(), offsets_.end());
-  //       TRACE_COUNTER("runtime", "broadcast_offset",
+  //     // If we are still synchronized, we can update the global
+  //     broadcast_offset if (is_synchronized_) {
+  //       broadcast_offset_ = *std::max_element(offsets_.begin(),
+  //       offsets_.end()); TRACE_COUNTER("runtime", "broadcast_offset",
   //                     (uint64_t)broadcast_offset_);
   //     }
   //   }

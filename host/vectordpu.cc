@@ -408,7 +408,7 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   std::shared_ptr<Event> e = std::make_shared<Event>(
       Event::OperationType::COMPUTE,
       std::bind(internal_launch_reduction, res, rhs, kernel_id));
-  
+
   e->pipeline_kid = pipeline_kid;
   // Mark result description as reduction synchronously
   res->is_reduction_result = true;
