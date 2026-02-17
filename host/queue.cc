@@ -295,8 +295,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
     auto last = operations_.back();
-    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr &&
-        !e->is_scalar && !last->is_scalar) {
+    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr) {
       // Look for dependency: does any input of 'e' match 'last->output'?
       bool dependent = false;
       for (size_t i = 0; i < e->inputs.size(); ++i) {
@@ -312,19 +311,34 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
         // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
         if (dependent) {
           // Promote 'last' RPN if needed to estimate new size
+          // Promote 'last' RPN if needed to estimate new size
           std::vector<uint8_t> last_rpn = last->rpn_ops;
           if (last_rpn.empty()) {
-            last_rpn.push_back(OP_PUSH_INPUT);
-            if (last->inputs.size() > 1) last_rpn.push_back(OP_PUSH_OPERAND_0);
-            last_rpn.push_back(last->opcode);
+            if (last->is_scalar) {
+              last_rpn.push_back(OP_PUSH_INPUT);
+              last_rpn.push_back(last->opcode);
+              const uint8_t* p =
+                  reinterpret_cast<const uint8_t*>(&last->scalar_value);
+              last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
+            } else {
+              last_rpn.push_back(OP_PUSH_INPUT);
+              if (last->inputs.size() > 1) last_rpn.push_back(OP_PUSH_OPERAND_0);
+              last_rpn.push_back(last->opcode);
+            }
           }
 
           // Promote 'e' RPN if needed
           std::vector<uint8_t> e_rpn = e->rpn_ops;
           if (e_rpn.empty()) {
-            e_rpn.push_back(OP_PUSH_INPUT);
-            if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
-            e_rpn.push_back(e->opcode);
+            if (e->is_scalar) {
+              e_rpn.push_back(e->opcode);
+              const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
+              e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
+            } else {
+              e_rpn.push_back(OP_PUSH_INPUT);
+              if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
+              e_rpn.push_back(e->opcode);
+            }
           }
 
           std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
@@ -343,8 +357,14 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 
           std::vector<uint8_t> e_rpn_mapped;
           bool possible = true;
-          for (uint8_t op : e_rpn) {
-            if (op == OP_PUSH_INPUT) {
+          for (size_t k = 0; k < e_rpn.size(); ++k) {
+            uint8_t op = e_rpn[k];
+            if (IS_OP_SCALAR(op)) {
+              e_rpn_mapped.push_back(op);
+              for (int m = 0; m < 4; ++m) {
+                if (++k < e_rpn.size()) e_rpn_mapped.push_back(e_rpn[k]);
+              }
+            } else if (op == OP_PUSH_INPUT) {
               uint8_t push_op = get_operand_push_op(e->inputs[0]);
               if (push_op == 0xFF) {
                 possible = false;

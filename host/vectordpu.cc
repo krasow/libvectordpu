@@ -38,7 +38,7 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  [[maybe_unused]] size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   TRACE_EVENT("transfer", "vec_xfer_to_dpu", "mram_offset", mram_location,
               "bytes_per_dpu", logical_size, "element_size", desc->element_size,
@@ -63,7 +63,7 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
+  [[maybe_unused]] size_t logical_size = desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   TRACE_EVENT("transfer", "vec_xfer_from_dpu", "mram_offset", mram_location,
               "bytes_per_dpu", logical_size, "element_size", desc->element_size,
@@ -395,7 +395,9 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   e->kid = kernel_id;
   e->opcode = opcode;
   e->res = res;
+  e->res = res;
   e->is_scalar = true;
+  e->scalar_value = scalar;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2

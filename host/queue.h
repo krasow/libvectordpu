@@ -28,6 +28,7 @@ class Event : public std::enable_shared_from_this<Event> {
   KernelID pipeline_kid = 0;  // For lazy promotion
   uint8_t opcode = 0;         // For lazy promotion
   bool is_scalar = false;     // Prevent fusion of scalar ops for now
+  uint32_t scalar_value = 0;  // Scalar operand for fusion
   void* host_ptr = nullptr;   // For transfers
   size_t transfer_size = 0;   // For transfers
 

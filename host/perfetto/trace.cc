@@ -38,6 +38,16 @@ std::string opcode_to_string(uint8_t op) {
       return "DIV";
     case OP_ASR:
       return "ASR";
+    case OP_ADD_SCALAR:
+      return "ADD_SCALAR";
+    case OP_SUB_SCALAR:
+      return "SUB_SCALAR";
+    case OP_MUL_SCALAR:
+      return "MUL_SCALAR";
+    case OP_DIV_SCALAR:
+      return "DIV_SCALAR";
+    case OP_ASR_SCALAR:
+      return "ASR_SCALAR";
     case OP_MIN:
       return "MIN";
     case OP_MAX:

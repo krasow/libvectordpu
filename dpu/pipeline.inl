@@ -31,8 +31,13 @@
     /* Pre-scan for operands and reductions */                                \
     bool uses_input = false;                                                  \
     bool uses_op[MAX_PIPELINE_OPERANDS] = {false};                            \
-    for (oi = 0; oi < n_ops; ++oi) {                                          \
+    oi = 0;                                                                   \
+    while (oi < n_ops) {                                                      \
       uint8_t op = args.pipeline.ops[oi];                                     \
+      if (IS_OP_SCALAR(op)) {                                                 \
+        oi += 5; /* Opcode + 4 bytes scalar */                                \
+        continue;                                                             \
+      }                                                                       \
       if (op == OP_PUSH_INPUT)                                                \
         uses_input = true;                                                    \
       else if (op >= OP_PUSH_OPERAND_0 &&                                     \
@@ -42,6 +47,7 @@
         r_op = op;                                                            \
         has_r = true;                                                         \
       }                                                                       \
+      oi++;                                                                   \
     }                                                                         \
                                                                               \
     if (has_r) {                                                              \
@@ -96,8 +102,65 @@
       bool st_is_temp[MAX_PIPELINE_STACK_DEPTH];                              \
       uint32_t sp = 0;                                                        \
                                                                               \
-      for (oi = 0; oi < n_ops; oi++) {                                        \
+      oi = 0;                                                                 \
+      while (oi < n_ops) {                                                    \
         uint8_t op = args.pipeline.ops[oi];                                   \
+        if (IS_OP_SCALAR(op)) {                                               \
+          TYPE *s1 = st_ptr[sp - 1];                                          \
+          int32_t val;                                                        \
+          /* Manually copy 4 bytes to avoid alignment issues */               \
+          uint8_t b0 = args.pipeline.ops[oi + 1];                             \
+          uint8_t b1 = args.pipeline.ops[oi + 2];                             \
+          uint8_t b2 = args.pipeline.ops[oi + 3];                             \
+          uint8_t b3 = args.pipeline.ops[oi + 4];                             \
+          val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));          \
+          TYPE scalar = (TYPE)val;                                            \
+                                                                              \
+          if (!st_is_temp[sp - 1]) {                                          \
+            TYPE *dest = scratch_blks[sp - 1];                                \
+            switch (op) {                                                     \
+              case OP_ADD_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] + scalar;           \
+                break;                                                        \
+              case OP_SUB_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] - scalar;           \
+                break;                                                        \
+              case OP_MUL_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] * scalar;           \
+                break;                                                        \
+              case OP_DIV_SCALAR:                                             \
+                for (i = 0; i < b_e; i++)                                     \
+                  dest[i] = (scalar != 0) ? s1[i] / scalar : (TYPE)0;         \
+                break;                                                        \
+              case OP_ASR_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;          \
+                break;                                                        \
+            }                                                                 \
+            st_ptr[sp - 1] = dest;                                            \
+            st_is_temp[sp - 1] = true;                                        \
+          } else {                                                            \
+            switch (op) {                                                     \
+              case OP_ADD_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) s1[i] += scalar;                    \
+                break;                                                        \
+              case OP_SUB_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) s1[i] -= scalar;                    \
+                break;                                                        \
+              case OP_MUL_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) s1[i] *= scalar;                    \
+                break;                                                        \
+              case OP_DIV_SCALAR:                                             \
+                for (i = 0; i < b_e; i++)                                     \
+                  if (scalar != 0) s1[i] /= scalar;                           \
+                break;                                                        \
+              case OP_ASR_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) s1[i] >>= scalar;                   \
+                break;                                                        \
+            }                                                                 \
+          }                                                                   \
+          oi += 5;                                                            \
+          continue;                                                           \
+        }                                                                     \
         if (IS_OP_STACK(op)) {                                                \
           st_ptr[sp] = (op == OP_PUSH_INPUT)                                  \
                            ? input_blk                                        \
@@ -184,6 +247,7 @@
               break;                                                          \
           }                                                                   \
         }                                                                     \
+        oi++;                                                                 \
       }                                                                       \
       if (!has_r && sp > 0)                                                   \
         mram_write(st_ptr[sp - 1], (__mram_ptr void *)(rs_ptr + blk), b_b);   \

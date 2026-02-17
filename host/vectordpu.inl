@@ -292,7 +292,7 @@ template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator+=(T scalar) {
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
                                static_cast<uint32_t>(scalar),
-                               OpInfo<T>::add_scalar, OpInfo<T>::add_op,
+                               OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -301,7 +301,7 @@ template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator-=(T scalar) {
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
                                static_cast<uint32_t>(scalar),
-                               OpInfo<T>::sub_scalar, OpInfo<T>::sub_op,
+                               OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -310,7 +310,7 @@ template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator*=(T scalar) {
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
                                static_cast<uint32_t>(scalar),
-                               OpInfo<T>::mul_scalar, OpInfo<T>::mul_op,
+                               OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -319,7 +319,7 @@ template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator/=(T scalar) {
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
                                static_cast<uint32_t>(scalar),
-                               OpInfo<T>::div_scalar, OpInfo<T>::div_op,
+                               OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -328,7 +328,7 @@ template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator>>=(T scalar) {
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
                                static_cast<uint32_t>(scalar),
-                               OpInfo<T>::asr_scalar, OpInfo<T>::asr_op,
+                               OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -355,7 +355,7 @@ dpu_vector<T> operator>>(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::asr_scalar, OpInfo<T>::asr_op, OpInfo<T>::universal_pipeline);
+      OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -368,7 +368,7 @@ dpu_vector<T> operator+(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::add_scalar, OpInfo<T>::add_op, OpInfo<T>::universal_pipeline);
+      OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -386,7 +386,7 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::sub_scalar, OpInfo<T>::sub_op, OpInfo<T>::universal_pipeline);
+      OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -399,7 +399,7 @@ dpu_vector<T> operator*(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::mul_scalar, OpInfo<T>::mul_op, OpInfo<T>::universal_pipeline);
+      OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
@@ -417,7 +417,7 @@ dpu_vector<T> operator/(const dpu_vector<T>& lhs, T rhs) {
   res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
-      OpInfo<T>::div_scalar, OpInfo<T>::div_op, OpInfo<T>::universal_pipeline);
+      OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op, OpInfo<T>::universal_pipeline);
   return res;
 }
 
