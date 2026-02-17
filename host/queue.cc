@@ -415,11 +415,15 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 
             // Build descriptive slice name for fused event
             std::string ops_list;
-            for (uint8_t op : last->rpn_ops) {
+            for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
+              uint8_t op = last->rpn_ops[i];
               std::string s = opcode_to_string(op);
               if (s.empty()) continue;
               if (!ops_list.empty()) ops_list += ", ";
               ops_list += s;
+              if (IS_OP_SCALAR(op)) {
+                i += sizeof(uint32_t);
+              }
             }
             last->slice_name = "Fused: [" + ops_list + "]";
 
