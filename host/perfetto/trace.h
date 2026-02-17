@@ -18,6 +18,19 @@ void internal_to_cpu_end();
 void internal_from_cpu_begin();
 void internal_from_cpu_end();
 
+// Opaque hooks for general tracing
+void counter(const char* cat, const char* name, int64_t value);
+void event_begin(const char* cat, const char* name);
+void event_end(const char* cat);
+
+struct scoped_event {
+  const char* category;
+  scoped_event(const char* cat, const char* name) : category(cat) {
+    event_begin(cat, name);
+  }
+  ~scoped_event() { event_end(category); }
+};
+
 // RAII helpers for public template functions in vectordpu.inl.
 // These call the opaque functions above so the user program doesn't need <perfetto.h>.
 struct reduction_cpu {

@@ -21,7 +21,7 @@
   auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
   std::shared_ptr<Event> me = *self_ptr;
 
-  TRACE_CALLBACK_THREAD();
+  trace::ensure_callback_thread_named();
 
   auto& runtime = DpuRuntime::get();
   auto& queue = runtime.get_event_queue();
@@ -39,20 +39,18 @@
       // This tells the host that it's safe to read the results of all merged
       // ops.
       queue.last_finished_id_.store(e->max_id);
-      TRACE_EXECUTION_END();
+      trace::execution_end();
       events.pop_front();
 
       // If there's a next event, start its trace slice.
       if (!events.empty()) {
         auto next = events.front();
-        TRACE_EXECUTION_BEGIN(next);
+        trace::execution_begin(next);
         // If 'next' is also finished, the loop will continue and end its trace
         // slice.
       }
     }
   }
-
-  TRACE_ACTIVE_OPS(queue.get_active_events().size());
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
@@ -62,6 +60,7 @@
 #endif
 
   delete self_ptr;
+  queue.outstanding_callbacks_--;
 
   return DPU_OK;
 }
@@ -70,8 +69,10 @@ void Event::add_completion_callback(std::shared_ptr<Event> self) {
   assert(this->finished == false);
 
   auto& runtime = DpuRuntime::get();
+  auto& queue = runtime.get_event_queue();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
+  queue.outstanding_callbacks_++;
   auto wrapper = new std::shared_ptr<Event>(self);
 
   CHECK_UPMEM(dpu_callback(
@@ -84,8 +85,10 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   assert(e->finished == false);
 
   auto& runtime = DpuRuntime::get();
+  auto& queue = runtime.get_event_queue();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
+  queue.outstanding_callbacks_++;
   auto wrapper = new std::shared_ptr<Event>(std::move(e));
 
   CHECK_UPMEM(dpu_callback(
@@ -118,7 +121,7 @@ bool EventQueue::process_next() {
                 << " phase=started" << std::endl;
 #endif
 
-  TRACE_INQUEUE_END(e);
+  trace::inqueue_end(e);
 
   if (e->slice_name.empty()) {
     e->slice_name = operationtype_to_string(e->op);
@@ -133,12 +136,12 @@ bool EventQueue::process_next() {
   {
     std::lock_guard<std::mutex> lock(mtx_);
     if (running_events_.empty()) {
-      TRACE_EXECUTION_BEGIN(e);
+      trace::execution_begin(e);
     }
     running_events_.push_back(e);
     current_event_ = e;
 
-    TRACE_ACTIVE_OPS(running_events_.size());
+    trace::active_ops_counter(running_events_.size());
   }
 
   try {
@@ -288,8 +291,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   e->id = counter_++;
   e->max_id = e->id;
 
-  TRACE_EVENT_ENQUEUED(e, operations_, running_events_);
-  TRACE_COUNTER("queue", "Pending Ops", (int)operations_.size());
+  trace::event_enqueued(e, operations_, running_events_);
+  trace::active_ops_counter(operations_.size());
 
   bool fused = false;
 #if PIPELINE
@@ -399,6 +402,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
             last->inputs = combined_inputs;
             last->output = e->output;
             last->max_id = std::max(last->max_id, e->id);
+            last->dependencies.insert(e->id);
             fused = true;
 
             // Update dependencies for fused event
@@ -435,19 +439,19 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
                           << std::endl;
 #endif
             std::string fused_ops;
-            if (e_rpn_mapped.size() == 1) {
-              fused_ops = opcode_to_string(e_rpn_mapped[0]);
-            } else {
-              for (uint8_t op : e_rpn_mapped) {
-                std::string s = opcode_to_string(op);
-                if (s.empty()) continue;
-                if (!fused_ops.empty()) fused_ops += ", ";
-                fused_ops += s;
+            for (size_t i = 0; i < e_rpn_mapped.size(); ++i) {
+              uint8_t op = e_rpn_mapped[i];
+              std::string s = opcode_to_string(op);
+              if (s.empty()) continue;
+              if (!fused_ops.empty()) fused_ops += ", ";
+              fused_ops += s;
+              if (IS_OP_SCALAR(op)) {
+                i += sizeof(uint32_t);
               }
             }
 
-            TRACE_EVENT_FUSED(e, last, fused_ops);
-            TRACE_INQUEUE_END(e);
+            trace::event_fused(e, last, fused_ops);
+            trace::inqueue_end(e);
           }
         }
       }

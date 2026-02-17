@@ -53,16 +53,16 @@
     if (has_r) {                                                              \
       switch (r_op) {                                                         \
         case OP_SUM:                                                          \
-          acc = 0;                                                            \
+          acc = (TYPE)0;                                                      \
           break;                                                              \
         case OP_PRODUCT:                                                      \
-          acc = 1;                                                            \
+          acc = (TYPE)1;                                                      \
           break;                                                              \
         case OP_MIN:                                                          \
-          acc = (TYPE)0x7FFFFFFF;                                             \
+          acc = (TYPE)1e30; /* Rough infinity for now */                      \
           break;                                                              \
         case OP_MAX:                                                          \
-          acc = (TYPE)0x80000000;                                             \
+          acc = (TYPE)-1e30;                                                  \
           break;                                                              \
       }                                                                       \
     }                                                                         \
@@ -78,7 +78,7 @@
       for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {                       \
         if (uses_op[k]) {                                                     \
           __mram_ptr TYPE *p =                                                \
-              (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]);          \
+               (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]);         \
           bool found = false;                                                 \
           if (uses_input && p == in_ptr) {                                    \
             op_blks[k] = input_blk;                                           \
@@ -114,7 +114,9 @@
           uint8_t b2 = args.pipeline.ops[oi + 3];                             \
           uint8_t b3 = args.pipeline.ops[oi + 4];                             \
           val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));          \
-          TYPE scalar = (TYPE)val;                                            \
+          TYPE scalar;                                                        \
+          static_assert(sizeof(TYPE) == 4, "Only 32-bit types supported");    \
+          memcpy(&scalar, &val, 4);                                           \
                                                                               \
           if (!st_is_temp[sp - 1]) {                                          \
             TYPE *dest = scratch_blks[sp - 1];                                \
@@ -130,10 +132,10 @@
                 break;                                                        \
               case OP_DIV_SCALAR:                                             \
                 for (i = 0; i < b_e; i++)                                     \
-                  dest[i] = (scalar != 0) ? s1[i] / scalar : (TYPE)0;         \
+                  dest[i] = (scalar != (TYPE)0) ? s1[i] / scalar : (TYPE)0;   \
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
-                for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;          \
+                /* Shift only for integers */                                 \
                 break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
@@ -151,10 +153,9 @@
                 break;                                                        \
               case OP_DIV_SCALAR:                                             \
                 for (i = 0; i < b_e; i++)                                     \
-                  if (scalar != 0) s1[i] /= scalar;                           \
+                  if (scalar != (TYPE)0) s1[i] /= scalar;                    \
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
-                for (i = 0; i < b_e; i++) s1[i] >>= scalar;                   \
                 break;                                                        \
             }                                                                 \
           }                                                                   \
@@ -163,8 +164,8 @@
         }                                                                     \
         if (IS_OP_STACK(op)) {                                                \
           st_ptr[sp] = (op == OP_PUSH_INPUT)                                  \
-                           ? input_blk                                        \
-                           : op_blks[op - OP_PUSH_OPERAND_0];                 \
+                            ? input_blk                                       \
+                            : op_blks[op - OP_PUSH_OPERAND_0];                \
           st_is_temp[sp] = false;                                             \
           sp++;                                                               \
         } else if (IS_OP_UNARY(op)) {                                         \
@@ -174,14 +175,14 @@
             if (op == OP_NEGATE)                                              \
               for (i = 0; i < b_e; i++) dest[i] = -s[i];                      \
             else                                                              \
-              for (i = 0; i < b_e; i++) dest[i] = (s[i] < 0) ? -s[i] : s[i];  \
+              for (i = 0; i < b_e; i++) dest[i] = (s[i] < (TYPE)0) ? -s[i] : s[i]; \
             st_ptr[sp - 1] = dest;                                            \
             st_is_temp[sp - 1] = true;                                        \
           } else {                                                            \
             if (op == OP_NEGATE)                                              \
               for (i = 0; i < b_e; i++) s[i] = -s[i];                         \
             else                                                              \
-              for (i = 0; i < b_e; i++) s[i] = (s[i] < 0) ? -s[i] : s[i];     \
+              for (i = 0; i < b_e; i++) s[i] = (s[i] < (TYPE)0) ? -s[i] : s[i]; \
           }                                                                   \
         } else if (IS_OP_BINARY(op)) {                                        \
           TYPE *s1 = st_ptr[--sp];                                            \
@@ -200,10 +201,9 @@
                 break;                                                        \
               case OP_DIV:                                                    \
                 for (i = 0; i < b_e; i++)                                     \
-                  dest[i] = (s1[i] != 0) ? s2[i] / s1[i] : (TYPE)0;           \
+                  dest[i] = (s1[i] != (TYPE)0) ? s2[i] / s1[i] : (TYPE)0;     \
                 break;                                                        \
               case OP_ASR:                                                    \
-                for (i = 0; i < b_e; i++) dest[i] = s2[i] >> s1[i];           \
                 break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
@@ -221,10 +221,9 @@
                 break;                                                        \
               case OP_DIV:                                                    \
                 for (i = 0; i < b_e; i++)                                     \
-                  if (s1[i] != 0) s2[i] /= s1[i];                             \
+                  if (s1[i] != (TYPE)0) s2[i] /= s1[i];                       \
                 break;                                                        \
               case OP_ASR:                                                    \
-                for (i = 0; i < b_e; i++) s2[i] >>= s1[i];                    \
                 break;                                                        \
             }                                                                 \
           }                                                                   \

@@ -1,5 +1,21 @@
-#include "perfetto/trace_internal.h"
 #include "perfetto/trace.h"
+#include "perfetto/trace_internal.h"
+
+#if TRACE == 1 && __has_include(<perfetto.h>)
+#include <perfetto.h>
+
+PERFETTO_DEFINE_CATEGORIES(
+    perfetto::Category("runtime").SetDescription(
+        "Events related to runtime init and shutdown"),
+    perfetto::Category("queue").SetDescription(
+        "Events related to the event queue"),
+    perfetto::Category("transfer")
+        .SetDescription("Events related to MRAM transfers"),
+    perfetto::Category("events").SetDescription(
+        "Actual operation execution events"));
+
+PERFETTO_TRACK_EVENT_STATIC_STORAGE();
+#endif
 
 #include <cstdio>
 #include <vector>
@@ -58,6 +74,36 @@ void trace::internal_from_cpu_begin() {
 void trace::internal_from_cpu_end() {
 #if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_EVENT_END("transfer");
+#endif
+}
+
+void trace::counter(const char* cat, const char* name, int64_t value) {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  if (std::string(cat) == "runtime") {
+    TRACE_COUNTER("runtime", perfetto::DynamicString(name), value);
+  } else if (std::string(cat) == "queue") {
+    TRACE_COUNTER("queue", perfetto::DynamicString(name), value);
+  }
+#endif
+}
+
+void trace::event_begin(const char* cat, const char* name) {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  if (std::string(cat) == "runtime") {
+    TRACE_EVENT_BEGIN("runtime", perfetto::DynamicString(name));
+  } else if (std::string(cat) == "queue") {
+    TRACE_EVENT_BEGIN("queue", perfetto::DynamicString(name));
+  }
+#endif
+}
+
+void trace::event_end(const char* cat) {
+#if TRACE == 1 && __has_include(<perfetto.h>)
+  if (std::string(cat) == "runtime") {
+    TRACE_EVENT_END("runtime");
+  } else if (std::string(cat) == "queue") {
+    TRACE_EVENT_END("queue");
+  }
 #endif
 }
 
@@ -246,7 +292,9 @@ void initialize() {
 
 void shutdown() {
   if (tracing_session_) {
+    std::cout << "[trace] Stopping tracing session..." << std::endl;
     tracing_session_->StopBlocking();
+    std::cout << "[trace] Reading trace data..." << std::endl;
     std::vector<char> trace_data = tracing_session_->ReadTraceBlocking();
 
     std::ofstream out("trace.perfetto-trace", std::ios::binary);
@@ -255,7 +303,9 @@ void shutdown() {
 
     std::cout << "Trace written to trace.perfetto-trace (" << trace_data.size()
               << " bytes)" << std::endl;
+    std::cout << "[trace] Resetting tracing session..." << std::endl;
     tracing_session_.reset();
+    std::cout << "[trace] Tracing session reset complete." << std::endl;
   }
 }
 
@@ -263,8 +313,11 @@ void event_enqueued(std::shared_ptr<Event> e,
                     const std::deque<std::shared_ptr<Event>>& ops,
                     const std::list<std::shared_ptr<Event>>& running) {
   TRACE_EVENT_INSTANT("queue", "EventEnqueued",
-                      perfetto::Track(EVENT_TRACK_BASE + e->id), "type",
-                      operationtype_to_string(e->op), "id", e->id);
+                      perfetto::Track(EVENT_TRACK_BASE + e->id),
+                      [e](perfetto::EventContext& ctx) {
+                        perfetto::Flow::ProcessScoped(e->id)(ctx);
+                      },
+                      "type", operationtype_to_string(e->op), "id", e->id);
 
   // Calculate what we are waiting on (Running + Queued)
   std::string waiting_on;
@@ -292,6 +345,9 @@ void event_enqueued(std::shared_ptr<Event> e,
 
   TRACE_EVENT_BEGIN("queue", perfetto::DynamicString(in_queue_name),
                     perfetto::Track(EVENT_TRACK_BASE + e->id), "id", e->id,
+                    [e](perfetto::EventContext& ctx) {
+                      perfetto::Flow::ProcessScoped(e->id)(ctx);
+                    },
                     "waiting_on_details", waiting_on, "queue_depth",
                     (int)ops.size());
 }
@@ -322,11 +378,15 @@ void execution_begin(std::shared_ptr<Event> e) {
 
   if (!e->rpn_ops.empty()) {
     std::string ops_str;
-    for (uint8_t op : e->rpn_ops) {
+    for (size_t i = 0; i < e->rpn_ops.size(); ++i) {
+      uint8_t op = e->rpn_ops[i];
       std::string s = opcode_to_string(op);
       if (s.empty()) continue;
       if (!ops_str.empty()) ops_str += ", ";
       ops_str += s;
+      if (IS_OP_SCALAR(op)) {
+        i += sizeof(uint32_t);
+      }
     }
 
     auto event_lambda = [e, base_lambda, ops_str](perfetto::EventContext& ctx) {

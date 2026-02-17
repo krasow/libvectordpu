@@ -14,12 +14,10 @@
 #include <libgen.h>
 #include <limits.h>
 
-#include "perfetto/trace_internal.h"
+#include "perfetto/trace.h"
 #include "runtime.h"
 
-#if TRACE == 1
-PERFETTO_TRACK_EVENT_STATIC_STORAGE();
-#endif
+// (Moved to trace.cc)
 
 allocator& DpuRuntime::get_allocator() { return *allocator_; }
 EventQueue& DpuRuntime::get_event_queue() { return *event_queue_; }
@@ -54,7 +52,7 @@ void DpuRuntime::init(uint32_t num_dpus) {
   if (initialized_) return;  // idempotent
   TRACE_INIT();
 
-  TRACE_EVENT("runtime", "DpuRuntime::init");
+  trace::scoped_event trace_scoped("runtime", "DpuRuntime::init");
 
   num_dpus_ = num_dpus;
   logger_ = std::make_unique<Logger>();
@@ -104,39 +102,43 @@ void DpuRuntime::init(uint32_t num_dpus) {
 void DpuRuntime::shutdown() {
   if (!initialized_) return;
 
-  TRACE_EVENT("runtime", "DpuRuntime::shutdown");
+  trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
 
 #if ENABLE_DPU_LOGGING == 1
   logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
+  std::cout << "[runtime] Waiting for pending events..." << std::endl;
   while (event_queue_->has_pending()) {
-    logger_->lock() << "[runtime] Waiting for pending events to complete..."
-                    << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  // Also wait for events that have been launched but not yet finished
-  // (Safely wait for all callbacks to fire so tracing is complete)
+  std::cout << "[runtime] Waiting for active events and callbacks..." << std::endl;
   while (true) {
     {
       std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
-      if (event_queue_->get_active_events().empty()) break;
+      if (event_queue_->get_active_events().empty() &&
+          event_queue_->outstanding_callbacks_.load() == 0)
+        break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
+  std::cout << "[runtime] Freeing DPU set..." << std::endl;
   if (initialized_) {
     DPU_ASSERT(dpu_free(*dpu_set_));
   }
 
+  std::cout << "[runtime] Resetting components..." << std::endl;
   event_queue_.reset();
   allocator_.reset();
   logger_.reset();
   dpu_set_ = nullptr;
   initialized_ = false;
 
+  std::cout << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();
+  std::cout << "[runtime] Shutdown complete." << std::endl;
 }
 
 void DpuRuntime::debug_read_dpu_log() {

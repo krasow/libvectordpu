@@ -95,6 +95,7 @@ class EventQueue {
   std::mutex& get_mutex() { return mtx_; }
 
   std::atomic<size_t> last_finished_id_{0};
+  std::atomic<int> outstanding_callbacks_{0};
 
  private:
   std::mutex mtx_;

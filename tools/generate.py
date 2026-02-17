@@ -96,6 +96,8 @@ for type in types:
     for op in ops:
         if isinstance(op('int32_t', 0), DPUBinaryOp):
              op_instance = op(type, kernel_id)
+             if op_instance.name == 'asr' and type != 'int32_t':
+                 continue
              all_ops.append((kernel_id, op_instance))
              group.append(op_instance)
              kernel_id += 1
@@ -105,6 +107,8 @@ for type in types:
         if isinstance(op('int32_t', 0), DPUBinaryOp):
              # Create a scalar version of the binary op
              base_op = op('int32_t', 0)
+             if base_op.name == 'asr' and type != 'int32_t':
+                 continue
              op_instance = DPUBinaryScalarOp(base_op.name + "_scalar", base_op.symbol, type, kernel_id)
              all_ops.append((kernel_id, op_instance))
              group.append(op_instance)

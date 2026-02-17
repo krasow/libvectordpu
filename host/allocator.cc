@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 #include "logger.h"
-#include "perfetto/trace_internal.h"
+#include "perfetto/trace.h"
 #include "runtime.h"
 
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
@@ -90,7 +90,7 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
     } else
       fl.erase(best);
     total_allocated_bytes_ += n * (id == DPU_BROADCAST ? num_dpus_ : 1);
-    TRACE_COUNTER("runtime", "total_bytes", total_allocated_bytes_);
+    trace::counter("runtime", "total_bytes", total_allocated_bytes_);
     return addr;
   }
 
@@ -106,7 +106,7 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
     std::fill(offsets_.begin(), offsets_.end(), off);
   }
   total_allocated_bytes_ += n * (id == DPU_BROADCAST ? num_dpus_ : 1);
-  TRACE_COUNTER("runtime", "total_bytes", total_allocated_bytes_);
+  trace::counter("runtime", "total_bytes", total_allocated_bytes_);
   return addr;
 }
 
@@ -155,5 +155,5 @@ void allocator::raw_deallocate(int id, uint32_t addr, size_t sz) {
     std::fill(offsets_.begin(), offsets_.end(), off);
   }
   total_allocated_bytes_ -= sz * (id == DPU_BROADCAST ? num_dpus_ : 1);
-  TRACE_COUNTER("runtime", "total_bytes", total_allocated_bytes_);
+  trace::counter("runtime", "total_bytes", total_allocated_bytes_);
 }
