@@ -12,6 +12,12 @@ using std::vector;
 #define DPU_BROADCAST (-1)
 
 #include "vectordesc.h"
+#include <stdexcept>
+
+class DpuOOMException : public std::runtime_error {
+ public:
+  DpuOOMException() : std::runtime_error("DPU OOM") {}
+};
 
 struct FreeBlock {
   uint32_t addr;

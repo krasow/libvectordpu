@@ -536,7 +536,7 @@ pipeline_result<T>::operator T() {
 // Unary operators
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a) {
-  dpu_vector<T> res(a.size());
+  dpu_vector<T> res(a.size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
@@ -549,7 +549,7 @@ dpu_vector<T> operator-(const dpu_vector<T>& a) {
 
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a) {
-  dpu_vector<T> res(a.size());
+  dpu_vector<T> res(a.size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
   res.data_desc_ref()->debug_name = "intermediate";
   res.data_desc_ref()->debug_file = __FILE__;

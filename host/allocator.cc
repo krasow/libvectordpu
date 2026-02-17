@@ -98,7 +98,7 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
   if (id == DPU_BROADCAST)
     off = *std::max_element(offsets_.begin(), offsets_.end());
   if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id]))
-    throw std::runtime_error("DPU OOM");
+    throw DpuOOMException();
 
   uint32_t addr = ptrs_[0] + off;
   off += n;

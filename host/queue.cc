@@ -94,12 +94,15 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
                              DPU_CALLBACK_SINGLE_CALL)));
 }
 
+constexpr bool NO_PROGRESS = false;
+constexpr bool YES_PROGRESS = true;
+
 bool EventQueue::process_next() {
   std::shared_ptr<Event> e;
   {
     std::lock_guard<std::mutex> lock(mtx_);
     if (operations_.empty()) {
-      return false;
+      return NO_PROGRESS;
     }
     e = operations_.front();
     operations_.pop_front();
@@ -138,53 +141,75 @@ bool EventQueue::process_next() {
     TRACE_ACTIVE_OPS(running_events_.size());
   }
 
-  switch (e->op) {
-    case Event::OperationType::FENCE:
-      this->add_fence(e);
-      break;
-    case Event::OperationType::COMPUTE:
-      e->started = true;
+  try {
+    switch (e->op) {
+      case Event::OperationType::FENCE:
+        this->add_fence(e);
+        break;
+      case Event::OperationType::COMPUTE:
+        e->started = true;
 #if PIPELINE
-      if (!e->rpn_ops.empty()) {
-        // Automatic fusion or manual RPN pipeline
-        detail::internal_launch_universal_pipeline(
-            e->output, (e->inputs.empty() ? nullptr : e->inputs[0]), e->rpn_ops,
-            (e->inputs.size() > 1 ? std::vector<detail::VectorDescRef>(
-                                        e->inputs.begin() + 1, e->inputs.end())
-                                  : std::vector<detail::VectorDescRef>()),
-            e->kid);
-      } else if (e->cb) {
-        e->cb();
-      }
+        if (!e->rpn_ops.empty()) {
+          // Automatic fusion or manual RPN pipeline
+          detail::internal_launch_universal_pipeline(
+              e->output, (e->inputs.empty() ? nullptr : e->inputs[0]),
+              e->rpn_ops,
+              (e->inputs.size() > 1 ? std::vector<detail::VectorDescRef>(
+                                          e->inputs.begin() + 1, e->inputs.end())
+                                    : std::vector<detail::VectorDescRef>()),
+              e->kid);
+        } else if (e->cb) {
+          e->cb();
+        }
 #else
-      if (e->cb) {
-        e->cb();
-      }
+        if (e->cb) {
+          e->cb();
+        }
 #endif
-      e->add_completion_callback(e);
-      break;
-    case Event::OperationType::DPU_TRANSFER:
-      e->started = true;
-      e->cb();
-      e->add_completion_callback(e);
-      break;
-    case Event::OperationType::HOST_TRANSFER:
-      e->started = true;
-      e->cb();
-      e->add_completion_callback(e);
-      break;
-    default:
-      assert(false && "Unknown event type");
+        e->add_completion_callback(e);
+        break;
+      case Event::OperationType::DPU_TRANSFER:
+        e->started = true;
+        e->cb();
+        e->add_completion_callback(e);
+        break;
+      case Event::OperationType::HOST_TRANSFER:
+        e->started = true;
+        e->cb();
+        e->add_completion_callback(e);
+        break;
+      default:
+        assert(false && "Unknown event type");
+    }
+  } catch (const DpuOOMException& ex) {
+#if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-oom] OOM detected for event id=" << e->id
+                  << ". Throttling..." << std::endl;
+#endif
+    // reset event state
+    e->started = false;
+
+    // remove from running_events_ and push back to front of operations_
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      running_events_.remove(e);
+      operations_.push_front(e);
+      // reset current event since we are backing off
+      if (current_event_ == e) current_event_ = nullptr;
+    }
+    // no progress as we caught an exception
+    return NO_PROGRESS;
   }
 
   debug_active_events();
   debug_print_queue();
-  return true;
+  return YES_PROGRESS;
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
-    this->process_next();
+    bool progress = this->process_next();
 
     if (this->get_last_finished_id() >= wait_for_id) {
       break;
@@ -195,8 +220,9 @@ void EventQueue::process_events(size_t wait_for_id) {
       std::lock_guard<std::mutex> lock(mtx_);
       if (operations_.empty() && running_events_.empty()) break;
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (!progress)  {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 }
 
