@@ -376,8 +376,8 @@ void event_fused(std::shared_ptr<Event> e, std::shared_ptr<Event> into,
       "queue",
       perfetto::DynamicString("Fused [" + fused_ops + "] into #" +
                               std::to_string(into->id)),
-      perfetto::Track(EVENT_TRACK_BASE + e->id),
-      "into_id", into->id, "new_ops_count", (int)into->rpn_ops.size());
+      perfetto::Track(EVENT_TRACK_BASE + e->id), "into_id", into->id,
+      "new_ops_count", (int)into->rpn_ops.size());
   TRACE_EVENT_END("queue", perfetto::Track(EVENT_TRACK_BASE + e->id));
 #else
   (void)e;
