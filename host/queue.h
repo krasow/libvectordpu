@@ -44,6 +44,7 @@ class Event : public std::enable_shared_from_this<Event> {
   std::set<size_t> dependencies;
   std::atomic<bool> finished{false};
   bool started = false;
+  size_t max_id = 0;  // The highest ID represented by this event (if fused)
 
   void add_completion_callback(std::shared_ptr<Event> self);
   void mark_finished() { this->finished.store(true); }

@@ -33,10 +33,12 @@
     me->mark_finished();
 
     while (!events.empty() && events.front()->finished) {
-      // The event at the front of the list is the one currently "active" in
-      // tracing.
+      // The event at the front of the list is the one currently "active"
       auto e = events.front();
-      queue.last_finished_id_.store(e->id);
+      // Mark this event (and any events merged into it) as finished.
+      // This tells the host that it's safe to read the results of all merged
+      // ops.
+      queue.last_finished_id_.store(e->max_id);
       TRACE_EXECUTION_END();
       events.pop_front();
 
@@ -44,8 +46,8 @@
       if (!events.empty()) {
         auto next = events.front();
         TRACE_EXECUTION_BEGIN(next);
-        // If 'next' is also finished, the loop will continue and end its slice
-        // immediately.
+        // If 'next' is also finished, the loop will continue and end its trace
+        // slice.
       }
     }
   }
@@ -151,10 +153,8 @@ bool EventQueue::process_next() {
                                         e->inputs.begin() + 1, e->inputs.end())
                                   : std::vector<detail::VectorDescRef>()),
             e->kid);
-        e->inputs.clear();  // Release inputs early
       } else if (e->cb) {
         e->cb();
-        e->inputs.clear();  // Release inputs early
       }
 #else
       if (e->cb) {
@@ -260,8 +260,10 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   }
 
   e->id = counter_++;
+  e->max_id = e->id;
 
   TRACE_EVENT_ENQUEUED(e, operations_, running_events_);
+  TRACE_COUNTER("queue", "Pending Ops", (int)operations_.size());
 
   bool fused = false;
 #if PIPELINE
@@ -350,6 +352,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
                                  e_rpn_mapped.end());
             last->inputs = combined_inputs;
             last->output = e->output;
+            last->max_id = std::max(last->max_id, e->id);
             fused = true;
 
             // Update dependencies for fused event
