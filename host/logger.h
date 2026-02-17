@@ -52,6 +52,10 @@ void log_allocation(Logger& logger, const std::type_info& type, uint32_t n,
                     std::string_view debug_name, const char* debug_file,
                     int debug_line, bool is_allocation = true);
 
+void log_allocation(Logger& logger, const char* type_name, uint32_t n,
+                    std::string_view debug_name, const char* debug_file,
+                    int debug_line, bool is_allocation = true);
+
 #define log_deallocation(logger, type, n, debug_name, debug_file, debug_line) \
   log_allocation(logger, type, n, debug_name, debug_file, debug_line, false)
 

@@ -120,8 +120,8 @@ void DpuRuntime::shutdown() {
     DPU_ASSERT(dpu_free(*dpu_set_));
   }
 
-  allocator_.reset();
   event_queue_.reset();
+  allocator_.reset();
   logger_.reset();
   dpu_set_ = nullptr;
   initialized_ = false;

@@ -1,5 +1,6 @@
 #include "vectordpu.h"
 
+#include "logger.h"
 #include "perfetto/trace.h"
 #include "vectordesc.h"
 
@@ -10,6 +11,17 @@
 #endif
 
 namespace detail {
+VectorDesc::~VectorDesc() {
+  if (ptr_allocated) {
+    auto& runtime = DpuRuntime::get();
+#if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = runtime.get_logger();
+    log_deallocation(logger, type_name, num_elements,
+                     (debug_name ? debug_name : ""), debug_file, debug_line);
+#endif
+    runtime.get_allocator().deallocate_upmem_vector(this);
+  }
+}
 
 void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();

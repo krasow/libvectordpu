@@ -25,6 +25,10 @@ dpu_vector<T>::dpu_vector(uint32_t n, uint32_t reserved, bool lazy,
   }
   data_ = runtime.get_allocator().allocate_upmem_vector(n, reserved, sizeof(T),
                                                         lazy);
+  data_->type_name = typeid(T).name();
+  data_->debug_name = debug_name;
+  data_->debug_file = debug_file;
+  data_->debug_line = debug_line;
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = runtime.get_logger();
   log_allocation(logger, typeid(T), n, debug_name, debug_file, debug_line);
@@ -39,7 +43,9 @@ dpu_vector<T>::dpu_vector(const dpu_vector& other)
       debug_name(other.debug_name),
       debug_file(other.debug_file),
       debug_line(other.debug_line),
-      copied(true) {}
+      copied(false) {
+  other.copied = true;
+}
 
 template <typename T>
 dpu_vector<T>::dpu_vector(dpu_vector&& other) noexcept
@@ -49,7 +55,9 @@ dpu_vector<T>::dpu_vector(dpu_vector&& other) noexcept
       debug_name(other.debug_name),
       debug_file(other.debug_file),
       debug_line(other.debug_line),
-      copied(true) {}
+      copied(false) {
+   // ownership handled by shared_ptr
+}
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
@@ -60,8 +68,6 @@ dpu_vector<T>& dpu_vector<T>::operator=(const dpu_vector& other) {
     debug_name = other.debug_name;
     debug_file = other.debug_file;
     debug_line = other.debug_line;
-    copied = false;
-    other.copied = true;
   }
   return *this;
 }
@@ -75,24 +81,12 @@ dpu_vector<T>& dpu_vector<T>::operator=(dpu_vector&& other) noexcept {
     debug_name = other.debug_name;
     debug_file = other.debug_file;
     debug_line = other.debug_line;
-    copied = false;
-    other.copied = true;
   }
   return *this;
 }
 
 template <typename T>
-dpu_vector<T>::~dpu_vector() {
-  if (!copied && data_) {
-    auto& runtime = DpuRuntime::get();
-#if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = runtime.get_logger();
-    log_deallocation(logger, typeid(T), size_, debug_name, debug_file,
-                     debug_line);
-#endif
-    runtime.get_allocator().deallocate_upmem_vector(data_);
-  }
-}
+dpu_vector<T>::~dpu_vector() {}
 
 template <typename T>
 void dpu_vector<T>::add_fence() {
@@ -342,6 +336,10 @@ dpu_vector<T>& dpu_vector<T>::operator>>=(T scalar) {
 template <typename T>
 dpu_vector<T> dpu_vector<T>::operator-() const {
   dpu_vector<T> res(this->size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_unary(res.data_desc_ref(), this->data_desc_ref(),
                        OpInfo<T>::negate, OpInfo<T>::negate_op,
                        OpInfo<T>::universal_pipeline);
@@ -351,6 +349,10 @@ dpu_vector<T> dpu_vector<T>::operator-() const {
 template <typename T>
 dpu_vector<T> operator>>(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
       OpInfo<T>::asr_scalar, OpInfo<T>::asr_op, OpInfo<T>::universal_pipeline);
@@ -360,6 +362,10 @@ dpu_vector<T> operator>>(const dpu_vector<T>& lhs, T rhs) {
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
       OpInfo<T>::add_scalar, OpInfo<T>::add_op, OpInfo<T>::universal_pipeline);
@@ -374,6 +380,10 @@ dpu_vector<T> operator+(T lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
       OpInfo<T>::sub_scalar, OpInfo<T>::sub_op, OpInfo<T>::universal_pipeline);
@@ -383,6 +393,10 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, T rhs) {
 template <typename T>
 dpu_vector<T> operator*(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
       OpInfo<T>::mul_scalar, OpInfo<T>::mul_op, OpInfo<T>::universal_pipeline);
@@ -397,6 +411,10 @@ dpu_vector<T> operator*(T lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator/(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_binary_scalar(
       res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint32_t>(rhs),
       OpInfo<T>::div_scalar, OpInfo<T>::div_op, OpInfo<T>::universal_pipeline);
@@ -423,6 +441,10 @@ pipeline_result<T> dpu_vector<T>::pipeline(
     const std::vector<uint8_t>& ops,
     const std::vector<dpu_vector<T>>& operands) {
   dpu_vector<T> res(this->size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "pipeline_intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   std::vector<uint8_t> rpn_ops;
   // Check if it already looks like RPN (starts with a PUSH)
   // PUSH_INPUT=11, PUSH_OPERAND_X=12-19
@@ -515,6 +537,10 @@ pipeline_result<T>::operator T() {
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(),
                        OpInfo<T>::negate, OpInfo<T>::negate_op,
                        OpInfo<T>::universal_pipeline);
@@ -524,6 +550,10 @@ dpu_vector<T> operator-(const dpu_vector<T>& a) {
 template <typename T>
 dpu_vector<T> abs(const dpu_vector<T>& a) {
   dpu_vector<T> res(a.size());
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
   detail::launch_unary(res.data_desc_ref(), a.data_desc_ref(), OpInfo<T>::abs,
                        OpInfo<T>::abs_op, OpInfo<T>::universal_pipeline);
   return res;
@@ -534,6 +564,10 @@ T sum(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
+  buf.data_desc_ref()->type_name = typeid(T).name();
+  buf.data_desc_ref()->debug_name = "reduction_buffer";
+  buf.data_desc_ref()->debug_file = __FILE__;
+  buf.data_desc_ref()->debug_line = __LINE__;
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::sum, OpInfo<T>::sum_op,
                            OpInfo<T>::universal_pipeline);
@@ -545,6 +579,10 @@ T product(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
+  buf.data_desc_ref()->type_name = typeid(T).name();
+  buf.data_desc_ref()->debug_name = "reduction_buffer";
+  buf.data_desc_ref()->debug_file = __FILE__;
+  buf.data_desc_ref()->debug_line = __LINE__;
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::product, OpInfo<T>::product_op,
                            OpInfo<T>::universal_pipeline);
@@ -556,6 +594,10 @@ T min(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(), runtime.num_tasklets() * sizeof(size_t),
                     true);
+  buf.data_desc_ref()->type_name = typeid(T).name();
+  buf.data_desc_ref()->debug_name = "reduction_buffer";
+  buf.data_desc_ref()->debug_file = __FILE__;
+  buf.data_desc_ref()->debug_line = __LINE__;
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::min, OpInfo<T>::min_op,
                            OpInfo<T>::universal_pipeline);
@@ -567,6 +609,10 @@ T max(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
+  buf.data_desc_ref()->type_name = typeid(T).name();
+  buf.data_desc_ref()->debug_name = "reduction_buffer";
+  buf.data_desc_ref()->debug_file = __FILE__;
+  buf.data_desc_ref()->debug_line = __LINE__;
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::max, OpInfo<T>::max_op,
                            OpInfo<T>::universal_pipeline);

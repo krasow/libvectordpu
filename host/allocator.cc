@@ -170,7 +170,7 @@ uint32_t allocator::allocate_broadcast(std::size_t n) {
   return addr;
 }
 
-void allocator::deallocate_upmem_vector_broadcast(detail::VectorDescRef data) {
+void allocator::deallocate_upmem_vector_broadcast(detail::VectorDesc* data) {
   std::size_t alloc_size = data->desc[0].size_bytes;  // Uniform size
   uint32_t addr = data->desc[0].ptr;                  // Uniform address
 
@@ -220,8 +220,9 @@ void allocator::deallocate_broadcast(uint32_t addr, std::size_t size) {
   TRACE_COUNTER("runtime", "allocated_bytes", total_allocated_bytes_);
 }
 
-void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
+void allocator::deallocate_upmem_vector(detail::VectorDesc* data) {
   if (!data->ptr_allocated) return;  // Nothing to do if never realized
+  data->ptr_allocated = false;
 
   std::lock_guard<std::mutex> lock(this->lock);
 

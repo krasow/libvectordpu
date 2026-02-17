@@ -28,6 +28,11 @@ struct VectorDesc {
   bool ptr_allocated =
       true;  // Default to true for backwards/eager compatibility
   size_t last_producer_id = 0;
+  const char* type_name = nullptr;
+  const char* debug_name = nullptr;
+  const char* debug_file = nullptr;
+  int debug_line = -1;
+  virtual ~VectorDesc();
 };
 
 using VectorDescRef = std::shared_ptr<VectorDesc>;
