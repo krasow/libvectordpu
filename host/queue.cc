@@ -281,11 +281,15 @@ void EventQueue::debug_active_events() {
 }
 void EventQueue::submit(std::shared_ptr<Event> e) {
   std::lock_guard<std::mutex> lock(mtx_);
-  // Implement backpressure: block if queue is too full
-  const size_t MAX_QUEUE_DEPTH = 128;
-  while (operations_.size() >= MAX_QUEUE_DEPTH) {
+  // Backpressure: block if total in-flight events (pending + running) exceed limit.
+  // Running events hold shared_ptr<VectorDesc> references that prevent DPU MRAM
+  // deallocation, so we must count them too—not just the pending operations_ queue.
+  while (operations_.size() + running_events_.size() >= max_queue_depth_) {
     mtx_.unlock();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // Actively drain: process pending events so their callbacks can fire,
+    // releasing VectorDescRef shared_ptrs and freeing DPU MRAM.
+    this->process_next();
+    std::this_thread::yield();
     mtx_.lock();
   }
 

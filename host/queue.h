@@ -54,10 +54,14 @@ class Event : public std::enable_shared_from_this<Event> {
 
 class EventQueue {
  public:
+  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 64;
+
   EventQueue() = default;
   ~EventQueue() = default;
 
   void submit(std::shared_ptr<Event> e);
+  void set_max_queue_depth(size_t depth) { max_queue_depth_ = depth; }
+  size_t max_queue_depth() const { return max_queue_depth_; }
 
   void add_fence(std::shared_ptr<Event> e);
 
@@ -100,6 +104,7 @@ class EventQueue {
  private:
   std::mutex mtx_;
   size_t counter_ = 1;
+  size_t max_queue_depth_ = DEFAULT_MAX_QUEUE_DEPTH;
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;
