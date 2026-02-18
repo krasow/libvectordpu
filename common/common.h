@@ -12,7 +12,7 @@
 
 #ifdef __dpu__
 #include <config.h>
-extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE];
 #endif
 
 typedef uint32_t KernelID;

@@ -189,11 +189,16 @@ static std::string get_pipeline_breakdown(const Event& e) {
   std::string breakdown;
   std::vector<std::string> stack;
   int op_idx = 1;
-  for (uint8_t op : e.rpn_ops) {
+  const uint8_t* ops = e.rpn_ops.data();
+  size_t size = e.rpn_ops.size();
+
+  for (size_t i = 0; i < size; ++i) {
+    uint8_t op = ops[i];
     if (op == OP_PUSH_INPUT) {
       stack.push_back("In[0]");
     } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
-      stack.push_back("In[" + std::to_string(op - OP_PUSH_OPERAND_0 + 1) + "]");
+      stack.push_back("In[" + std::to_string(op - OP_PUSH_OPERAND_0 + 1) +
+                      "]");
     } else if (IS_OP_UNARY(op)) {
       if (stack.size() < 1) {
         breakdown += "!!STK_ERR!!\n";
@@ -217,6 +222,27 @@ static std::string get_pipeline_breakdown(const Event& e) {
       std::string res = "st[" + std::to_string(stack.size()) + "]";
       breakdown += std::to_string(op_idx++) + ". " + res + " = " +
                    opcode_to_string(op) + "(" + s1 + ", " + s2 + ")\n";
+      stack.push_back(res);
+    } else if (IS_OP_SCALAR(op)) {
+      if (stack.size() < 1) {
+        breakdown += "!!STK_ERR!!\n";
+        break;
+      }
+      // Extract scalar
+      if (i + sizeof(uint32_t) >= size) {
+        breakdown += "!!SCALAR_ERR!!\n";
+        break;
+      }
+      uint32_t scalar;
+      memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
+      i += sizeof(uint32_t);
+
+      std::string s1 = stack.back();
+      stack.pop_back();
+      std::string res = "st[" + std::to_string(stack.size()) + "]";
+      breakdown += std::to_string(op_idx++) + ". " + res + " = " +
+                   opcode_to_string(op) + "(" + s1 + ", " +
+                   std::to_string(scalar) + ")\n";
       stack.push_back(res);
     } else if (IS_OP_REDUCTION(op)) {
       if (stack.size() < 1) {
