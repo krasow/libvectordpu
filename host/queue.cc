@@ -8,6 +8,7 @@
 #include "perfetto/trace_internal.h"
 #include "runtime.h"
 #include "vectordpu.h"
+#include "jit.h"
 
 #ifndef DPURT
 #define DPURT
@@ -140,6 +141,74 @@ bool EventQueue::process_next() {
     current_event_ = e;
 
     trace::active_ops_counter(running_events_.size());
+  }
+
+#if JIT
+  // Automatic JIT for fused pipelines
+  if (e->op == Event::OperationType::COMPUTE && !e->rpn_ops.empty() && 
+      e->jit_binary_path.empty()) {
+    const char* type_name = "int32_t"; // Default
+    if (e->output && e->output->type_name) {
+        // Map common mangled names or typeid().name() to C types
+        std::string tn = e->output->type_name;
+        if (tn == "i" || tn == "int") type_name = "int32_t";
+        else if (tn == "j" || tn == "uint32_t") type_name = "uint32_t";
+        else if (tn == "f" || tn == "float") type_name = "float";
+        else if (tn == "d" || tn == "double") type_name = "double";
+        else type_name = e->output->type_name;
+    }
+    
+    #if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-jit] Automatically JIT-compiling fused event id=" << e->id 
+                  << " for type=" << type_name << std::endl;
+    #endif
+    
+    e->jit_binary_path = jit_compile(e->rpn_ops, type_name);
+  }
+#endif
+
+  // JIT Binary Handling
+  std::string required_binary;
+  if (!e->jit_binary_path.empty()) {
+    required_binary = e->jit_binary_path;
+  } else {
+    // Default binary
+    required_binary = DpuRuntime::get().get_default_binary_path();
+  }
+
+  // Check if we need to switch binaries
+  if (!required_binary.empty() && required_binary != current_binary_path_) {
+#if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-jit] Switching binary to " << required_binary
+                  << " (was " << current_binary_path_ << ")" << std::endl;
+#endif
+
+    // Wait for all running events to complete before swapping
+    // We need to wait until running_events_ is empty (except for current 'e'
+    // which is in it now) Actually 'e' is in running_events_ now. We should
+    // probably wait for *other* events. But 'e' hasn't started on DPU yet.
+
+    // Spin wait for previous events to finish
+    while (true) {
+      {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (running_events_.size() <= 1) {  // Only 'e' is in running_events_
+          // Sanity check: e must be the only one
+          if (running_events_.front() == e) break;
+        }
+      }
+      std::this_thread::yield();
+    }
+
+    // Load new binary
+    dpu_set_t& dpu_set = DpuRuntime::get().dpu_set();
+    DPU_ASSERT(dpu_load(dpu_set, required_binary.c_str(), nullptr));
+    current_binary_path_ = required_binary;
+  } else if (current_binary_path_.empty()) {
+    // First run, assumed initialized by runtime but let's track it
+    current_binary_path_ = DpuRuntime::get().get_default_binary_path();
   }
 
   try {

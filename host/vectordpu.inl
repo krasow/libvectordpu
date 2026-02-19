@@ -447,6 +447,49 @@ pipeline_result<T> dpu_vector<T>::pipeline(const std::vector<uint8_t>& ops) {
 
 #if PIPELINE
 template <typename T>
+std::vector<uint8_t> dpu_vector<T>::prepare_rpn(
+    const std::vector<uint8_t>& ops) {
+  std::vector<uint8_t> rpn_ops;
+  bool is_rpn = !ops.empty() && (ops[0] >= OP_PUSH_INPUT);
+  if (is_rpn) {
+    rpn_ops = ops;
+  } else {
+    // Check if ops are already RPN (contain PUSH instructions)
+    bool is_raw_rpn = false;
+    for (uint8_t op : ops) {
+      if (op == OP_PUSH_INPUT ||
+          (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7)) {
+        is_raw_rpn = true;
+        break;
+      }
+    }
+
+    if (is_raw_rpn) {
+      rpn_ops = ops;
+    } else {
+      // Translate Linear -> RPN
+      if (!ops.empty()) {
+        rpn_ops.push_back(OP_PUSH_INPUT);
+        size_t next_operand = 0;
+        for (uint8_t op : ops) {
+          bool is_binary = (op >= OP_ADD && op <= OP_DIV);
+          if (is_binary) {
+            if (next_operand < MAX_PIPELINE_OPERANDS) {
+              rpn_ops.push_back(OP_PUSH_OPERAND_0 + next_operand);
+              next_operand++;
+            }
+          }
+          rpn_ops.push_back(op);
+        }
+      }
+    }
+  }
+  return rpn_ops;
+}
+#endif
+
+#if PIPELINE
+template <typename T>
 pipeline_result<T> dpu_vector<T>::pipeline(
     const std::vector<uint8_t>& ops,
     const std::vector<dpu_vector<T>>& operands) {
@@ -455,32 +498,7 @@ pipeline_result<T> dpu_vector<T>::pipeline(
   res.data_desc_ref()->debug_name = "pipeline_intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
-  std::vector<uint8_t> rpn_ops;
-  // Check if it already looks like RPN (starts with a PUSH)
-  // PUSH_INPUT=11, PUSH_OPERAND_X=12-19
-  bool is_rpn = !ops.empty() && (ops[0] >= OP_PUSH_INPUT);
-
-  if (is_rpn) {
-    rpn_ops = ops;
-  } else {
-    // Translate Linear -> RPN
-    if (!ops.empty()) {
-      rpn_ops.push_back(OP_PUSH_INPUT);  // OP_PUSH_INPUT
-      size_t next_operand = 0;
-      for (uint8_t op : ops) {
-        // ADD=3, SUB=4, MUL=5, DIV=6
-        bool is_binary = (op >= OP_ADD && op <= OP_DIV);
-        if (is_binary) {
-          if (next_operand < MAX_PIPELINE_OPERANDS) {
-            rpn_ops.push_back(OP_PUSH_OPERAND_0 +
-                              next_operand);  // OP_PUSH_OPERAND_0..7
-            next_operand++;
-          }
-        }
-        rpn_ops.push_back(op);
-      }
-    }
-  }
+  std::vector<uint8_t> rpn_ops = prepare_rpn(ops);
 
   std::vector<detail::VectorDescRef> operand_refs;
   for (const auto& op : operands) {
@@ -490,6 +508,64 @@ pipeline_result<T> dpu_vector<T>::pipeline(
   detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
                                     rpn_ops, operand_refs,
                                     OpInfo<T>::universal_pipeline);
+  return res;
+}
+#endif
+
+#if JIT
+#include "jit.h"
+
+template <typename T>
+pipeline_result<T> dpu_vector<T>::jit(const std::vector<uint8_t>& ops) {
+  return jit(ops, {});
+}
+
+template <typename T>
+pipeline_result<T> dpu_vector<T>::jit(
+    const std::vector<uint8_t>& ops,
+    const std::vector<dpu_vector<T>>& operands) {
+  dpu_vector<T> res(this->size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "jit_result";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
+
+  std::vector<uint8_t> rpn_ops = prepare_rpn(ops);
+
+  // Compiler invocation
+  const char* tname;
+  if (std::is_same<T, int>::value) {
+    tname = "int32_t";
+  } else if (std::is_same<T, uint32_t>::value) {
+    tname = "uint32_t";
+  } else {
+    tname = typeid(T).name();
+  }
+  std::string binary_path = jit_compile(rpn_ops, tname);
+  std::vector<detail::VectorDescRef> operand_refs;
+  for (const auto& op : operands) {
+    operand_refs.push_back(op.data_desc_ref());
+  }
+
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE);
+
+  e->jit_binary_path = binary_path;
+  e->slice_name = "JIT Kernel";
+
+  // Reuse the pipeline arguments structure
+  e->output = res.data_desc_ref();
+  e->inputs.push_back(this->data_desc_ref());
+  e->inputs.insert(e->inputs.end(), operand_refs.begin(), operand_refs.end());
+  e->rpn_ops = rpn_ops;
+  e->kid = 0;  // JIT kernel doesn't use standard IDs
+  e->pipeline_kid = 0;
+
+  event_queue.submit(e);
+
   return res;
 }
 #endif

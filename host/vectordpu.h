@@ -91,7 +91,9 @@ class dpu_vector {
 
   const char* debug_file = nullptr;
   int debug_line = -1;
-  bool copied = false;
+  mutable bool copied = false;
+
+  static std::vector<uint8_t> prepare_rpn(const std::vector<uint8_t>& ops);
 
  public:
 #if PIPELINE
@@ -100,6 +102,11 @@ class dpu_vector {
                               const std::vector<dpu_vector<T>>& operands);
   T pipeline_reduce(const std::vector<uint8_t>& ops,
                     const std::vector<dpu_vector<T>>& operands = {});
+#endif
+#if JIT
+  pipeline_result<T> jit(const std::vector<uint8_t>& ops);
+  pipeline_result<T> jit(const std::vector<uint8_t>& ops,
+                         const std::vector<dpu_vector<T>>& operands);
 #endif
 };
 

@@ -32,6 +32,9 @@ class Event : public std::enable_shared_from_this<Event> {
   void* host_ptr = nullptr;   // For transfers
   size_t transfer_size = 0;   // For transfers
 
+  // JIT
+  std::string jit_binary_path;
+
   std::variant<std::monostate, detail::VectorDescRef> res;
 
   Event(OperationType t) : op(t), res(std::monostate()) {}
@@ -108,4 +111,5 @@ class EventQueue {
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;
+  std::string current_binary_path_;
 };

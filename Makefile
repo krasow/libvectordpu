@@ -9,6 +9,13 @@ LOGGING ?= 0
 
 # this option enables experimental pipeline and fusion features
 PIPELINE ?= 0
+# this option enables JIT compilation of pipeline kernels
+JIT ?= 0
+
+# JIT requires pipeline logic to dispatch events correctly
+ifeq ($(JIT),1)
+  PIPELINE := 1
+endif
 
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
@@ -59,8 +66,12 @@ ifeq ($(DEBUG),1)
   BUILD_TYPE := debug
 else
   CXXFLAGS += -O3 -DNDEBUG
+  CXXFLAGS += -O3 -DNDEBUG
   BUILD_TYPE := release
 endif
+
+# Debian 10 / GCC 8 requirement for filesystem
+LDFLAGS += -lstdc++fs
 
 ifeq ($(TRACE),1)
   CXXFLAGS += -pthread -I$(PERFETTO_HOME)/include
@@ -87,9 +98,16 @@ $(GENERATED_TARGETS): tools/generate.py
 	@echo "Generating kernel headers..."
 	python3 tools/generate.py
 
-make_header: tools/generate_config.py 
+
+# Explicit rule for config.h
+common/config.h: tools/generate_config.py $(CONFIG_STAMP)
 	@echo "Generating config header..."
 	python3 tools/generate_config.py
+
+$(CONFIG_STAMP):
+	@$(MAKE) reconfigure
+
+make_header: common/config.h
 
 reconfigure:
 	@echo "NR_TASKLETS=$(NR_TASKLETS)" > $(CONFIG_STAMP)
@@ -100,6 +118,7 @@ reconfigure:
 	@echo "ENABLE_DPU_PRINTING=$(ENABLE_DPU_PRINTING)" >> $(CONFIG_STAMP)
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
 	@echo "PIPELINE=$(PIPELINE)" >> $(CONFIG_STAMP)
+	@echo "JIT=$(JIT)" >> $(CONFIG_STAMP)
 	@echo "TRACE=$(TRACE)" >> $(CONFIG_STAMP)
 	@echo "PERFETTO_HOME=$(PERFETTO_HOME)" >> $(CONFIG_STAMP)
 
@@ -119,10 +138,10 @@ config_check: cache_old reconfigure make_header
 		rm -f $(CONFIG_STAMP).old; \
 	fi
 
-${HOST_TARGET}: ${HOST_SOURCES} ${HOST_HEADERS} ${COMMON_HEADERS}
+${HOST_TARGET}: ${HOST_SOURCES} ${HOST_HEADERS} ${COMMON_HEADERS} $(GENERATED_TARGETS)
 	$(CXX) -std=${CXX_STANDARD} -shared -fPIC -o $@ ${HOST_SOURCES} ${HOST_FLAGS} $(LDFLAGS)
 
-${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS} ${COMMON_HEADERS}
+${DPU_TARGET}: ${DPU_SOURCES} ${DPU_HEADERS} ${COMMON_HEADERS} $(GENERATED_TARGETS)
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_SOURCES}
 
 $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
