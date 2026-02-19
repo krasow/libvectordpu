@@ -244,8 +244,8 @@ void shutdown() {
     std::ofstream out(filename, std::ios::binary);
     out.write(trace_data.data(), trace_data.size());
     out.close();
-    logger.lock() << "Trace written to " << filename << " (" << trace_data.size()
-                  << " bytes)" << std::endl;
+    logger.lock() << "Trace written to " << filename << " ("
+                  << trace_data.size() << " bytes)" << std::endl;
     tracing_session_.reset();
     perfetto::Tracing::Shutdown();
     logger.lock() << "[trace] Perfetto shutdown complete." << std::endl;
