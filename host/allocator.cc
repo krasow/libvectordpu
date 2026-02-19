@@ -4,129 +4,156 @@
 #include <stdexcept>
 
 #include "logger.h"
+#include "perfetto/trace.h"
 #include "runtime.h"
 
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
                      std::size_t num_dpus)
     : start_addr_(start_addr), dpu_mem_(dpu_mem), num_dpus_(num_dpus) {
-  // Initialize internal state, but do NOT pre-allocate vectors
-  ptrs_.resize(num_dpus_, start_addr_);  // all start at base address
+  ptrs_.resize(num_dpus_, start_addr_);
   sizes_.resize(num_dpus_, dpu_mem_);
   offsets_.resize(num_dpus_, 0);
   free_list_.resize(num_dpus_);
 }
 
-detail::VectorDescRef allocator::allocate_upmem_vector(
-    std::size_t n, std::size_t reserved_mem_per_dpu, std::size_t size_type) {
-  // grab lock
+detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
+                                                       std::size_t reserved,
+                                                       std::size_t size_type,
+                                                       bool lazy) {
+  bool uniform = (n % num_dpus_ == 0) && (n / num_dpus_ * size_type >= 8);
+  {
+    std::lock_guard<std::mutex> lock(this->lock);
+    if (is_synchronized_ && uniform)
+      return allocate_upmem_vector_broadcast(n, reserved, size_type, lazy);
+    is_synchronized_ = false;
+  }
   std::lock_guard<std::mutex> lock(this->lock);
-  std::size_t num_dpus = this->num_dpus_;
-  vector<uint32_t> vec_ptrs(num_dpus);
-  vector<uint32_t> vec_sizes(num_dpus);
+  size_t eff = n / num_dpus_, rem = (eff / size_type) % num_dpus_;
+  if (eff * size_type == 4) eff = 2;
 
-  size_t elems_per_dpu = n / num_dpus;
-  if (elems_per_dpu * size_type == 4) {
-    // ensure at least 8 bytes per DPU to avoid zero-size allocations
-    elems_per_dpu = 2;
+  auto vec = std::make_shared<detail::VectorDesc>();
+  for (size_t i = 0; i < num_dpus_; i++) {
+    size_t sz = (eff + (i < rem ? 1 : 0)) * size_type + reserved;
+    size_t aligned_sz = (sz + 7) & ~7;
+    vec->desc.push_back({!lazy ? raw_allocate(i, aligned_sz) : 0, (uint32_t)sz,
+                         (uint32_t)aligned_sz});
   }
-
-  size_t remainder = (elems_per_dpu / size_type) % num_dpus;
-
-  auto vec_desc = std::make_shared<detail::VectorDesc>(/* init */);
-
-  for (size_t i = 0; i < num_dpus; i++) {
-    size_t alloc_size = (elems_per_dpu + (i < remainder ? 1 : 0)) * size_type;
-    uint32_t addr = allocate(
-        i, alloc_size + reserved_mem_per_dpu);  // use bump/free-list allocator
-
-    detail::VectorSegment seg{
-        addr, static_cast<uint32_t>(alloc_size + reserved_mem_per_dpu)};
-    vec_desc->desc.push_back(seg);
-  }
-
-  vec_desc->reserved_bytes = static_cast<uint32_t>(reserved_mem_per_dpu);
-  vec_desc->element_size = static_cast<uint32_t>(size_type);
-  vec_desc->num_elements = n;
-
-  return vec_desc;
+  vec->ptr_allocated = !lazy;
+  vec->reserved_bytes = reserved;
+  vec->element_size = size_type;
+  vec->num_elements = n;
+  return vec;
 }
 
-void allocator::deallocate_upmem_vector(detail::VectorDescRef data) {
-  std::lock_guard<std::mutex> lock(this->lock);
-  for (size_t i = 0; i < num_dpus_; ++i) {
-    uint32_t addr = data->desc[i].ptr;
-    size_t size = data->desc[i].size_bytes;
-    deallocate(i, addr, size);
-  }
+detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
+    std::size_t n, std::size_t reserved, std::size_t size_type, bool lazy) {
+  size_t sz = std::max((size_t)8, (n / num_dpus_) * size_type) + reserved;
+  size_t aligned_sz = (sz + 7) & ~7;
+  auto vec = std::make_shared<detail::VectorDesc>();
+  uint32_t addr = !lazy ? raw_allocate(DPU_BROADCAST, aligned_sz) : 0;
+  vec->desc.assign(num_dpus_, {addr, (uint32_t)sz, (uint32_t)aligned_sz});
+  vec->ptr_allocated = !lazy;
+  vec->reserved_bytes = reserved;
+  vec->element_size = size_type;
+  vec->num_elements = n;
+  return vec;
 }
 
-uint32_t allocator::allocate(std::size_t dpu_id, std::size_t n) {
-  if (dpu_id >= num_dpus_) throw std::out_of_range("Invalid DPU ID");
-
-  auto& flist = free_list_[dpu_id];
-
-  // best-fit free block
-  auto best_it = flist.end();
-  size_t best_size = SIZE_MAX;
-  for (auto it = flist.begin(); it != flist.end(); ++it) {
-    if (it->size >= n && it->size < best_size) {
-      best_it = it;
-      best_size = it->size;
-    }
+void allocator::realize_allocation(detail::VectorDescRef data) {
+  if (data->ptr_allocated) return;
+  std::lock_guard<std::mutex> lock(this->lock);
+  if (is_synchronized_) {
+    uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].allocated_bytes);
+    for (auto& s : data->desc) s.ptr = addr;
+  } else {
+    for (size_t i = 0; i < num_dpus_; i++)
+      data->desc[i].ptr = raw_allocate(i, data->desc[i].allocated_bytes);
   }
+  data->ptr_allocated = true;
+}
 
-  if (best_it != flist.end()) {
-    uint32_t addr = best_it->addr;
-    if (best_it->size > n) {
-      best_it->addr += n;
-      best_it->size -= n;
-    } else {
-      flist.erase(best_it);
+uint32_t allocator::raw_allocate(int id, std::size_t n) {
+  auto& fl = (id == DPU_BROADCAST) ? broadcast_free_list_ : free_list_[id];
+  auto best = fl.end();
+  size_t bsz = SIZE_MAX;
+  for (auto it = fl.begin(); it != fl.end(); ++it)
+    if (it->size >= n && it->size < bsz) {
+      best = it;
+      bsz = it->size;
     }
+
+  if (best != fl.end()) {
+    uint32_t addr = best->addr;
+    if (best->size > n) {
+      best->addr += n;
+      best->size -= n;
+    } else
+      fl.erase(best);
+    total_allocated_bytes_ += n * (id == DPU_BROADCAST ? num_dpus_ : 1);
+    trace::counter("runtime", "total_bytes", total_allocated_bytes_);
     return addr;
   }
 
-  if (offsets_[dpu_id] + n > sizes_[dpu_id]) {
-    Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[allocator] DPU " << dpu_id
-                  << " out of memory: requested " << n << " bytes, available "
-                  << (sizes_[dpu_id] - offsets_[dpu_id]) << " bytes"
-                  << std::endl;
-    throw std::runtime_error("DPU out of memory!");
-  }
+  uint32_t& off = (id == DPU_BROADCAST) ? broadcast_offset_ : offsets_[id];
+  if (id == DPU_BROADCAST)
+    off = *std::max_element(offsets_.begin(), offsets_.end());
+  if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id]))
+    throw DpuOOMException();
 
-  uint32_t addr = ptrs_[dpu_id] + offsets_[dpu_id];
-  offsets_[dpu_id] += n;
+  uint32_t addr = ptrs_[0] + off;
+  off += n;
+  if (id == DPU_BROADCAST) {
+    std::fill(offsets_.begin(), offsets_.end(), off);
+  }
+  total_allocated_bytes_ += n * (id == DPU_BROADCAST ? num_dpus_ : 1);
+  trace::counter("runtime", "total_bytes", total_allocated_bytes_);
   return addr;
 }
 
-void allocator::deallocate(std::size_t dpu_id, uint32_t addr, size_t size) {
-  if (dpu_id >= num_dpus_) throw std::out_of_range("Invalid DPU ID");
+void allocator::deallocate_upmem_vector(detail::VectorDesc* data) {
+  if (!data->ptr_allocated) return;
+  data->ptr_allocated = false;
+  std::lock_guard<std::mutex> lock(this->lock);
+  if (is_synchronized_ && !data->desc.empty()) {
+    raw_deallocate(DPU_BROADCAST, data->desc[0].ptr,
+                   data->desc[0].allocated_bytes);
+    return;
+  }
+  is_synchronized_ = false;
+  for (size_t i = 0; i < num_dpus_; i++)
+    raw_deallocate(i, data->desc[i].ptr, data->desc[i].allocated_bytes);
+}
 
-  FreeBlock new_block{addr, size};
-  auto& flist = free_list_[dpu_id];
+void allocator::deallocate_upmem_vector_broadcast(detail::VectorDesc* data) {
+  deallocate_upmem_vector(data);
+}
 
-  // Find the first block whose address is greater than new_block
-  auto it = std::find_if(flist.begin(), flist.end(),
+void allocator::raw_deallocate(int id, uint32_t addr, size_t sz) {
+  auto& fl = (id == DPU_BROADCAST) ? broadcast_free_list_ : free_list_[id];
+  auto it = std::find_if(fl.begin(), fl.end(),
                          [&](const FreeBlock& b) { return b.addr > addr; });
-
-  // Insert the new block at the found position
-  auto inserted = flist.insert(it, new_block);
-
-  // Merge with previous block if adjacent
-  if (inserted != flist.begin()) {
-    auto prev = std::prev(inserted);
-    if (prev->addr + prev->size == inserted->addr) {
-      prev->size += inserted->size;
-      inserted =
-          flist.erase(inserted);  // erase returns iterator to next element
-      inserted = prev;            // keep prev as the merged block
+  auto ins = fl.insert(it, {addr, sz});
+  if (ins != fl.begin()) {
+    auto p = std::prev(ins);
+    if (p->addr + p->size == ins->addr) {
+      p->size += ins->size;
+      fl.erase(ins);
+      ins = p;
     }
   }
-  // Merge with next block if adjacent
-  auto next = std::next(inserted);
-  if (next != flist.end() && inserted->addr + inserted->size == next->addr) {
-    inserted->size += next->size;
-    flist.erase(next);
+  auto nxt = std::next(ins);
+  if (nxt != fl.end() && ins->addr + ins->size == nxt->addr) {
+    ins->size += nxt->size;
+    fl.erase(nxt);
   }
+
+  uint32_t& off = (id == DPU_BROADCAST) ? broadcast_offset_ : offsets_[id];
+  if (id == DPU_BROADCAST && !fl.empty() &&
+      fl.back().addr + fl.back().size == start_addr_ + off) {
+    off -= fl.back().size;
+    fl.pop_back();
+    std::fill(offsets_.begin(), offsets_.end(), off);
+  }
+  total_allocated_bytes_ -= sz * (id == DPU_BROADCAST ? num_dpus_ : 1);
+  trace::counter("runtime", "total_bytes", total_allocated_bytes_);
 }

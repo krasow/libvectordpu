@@ -1,9 +1,13 @@
 #include "queue.h"
 
 #include <cassert>
+#include <mutex>
+#include <ostream>
 #include <thread>
 
+#include "perfetto/trace_internal.h"
 #include "runtime.h"
+#include "vectordpu.h"
 
 #ifndef DPURT
 #define DPURT
@@ -11,35 +15,39 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
-std::string operationtype_to_string(Event::OperationType op) {
-  switch (op) {
-    case Event::OperationType::COMPUTE:
-      return "COMPUTE";
-    case Event::OperationType::DPU_TRANSFER:
-      return "DPU_TRANSFER";
-    case Event::OperationType::HOST_TRANSFER:
-      return "HOST_TRANSFER";
-    case Event::OperationType::FENCE:
-      return "FENCE";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
   auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
   std::shared_ptr<Event> me = *self_ptr;
 
-  me->mark_finished(/* true */);
-
   auto& runtime = DpuRuntime::get();
-  auto& events = runtime.get_event_queue().get_active_events();
-  std::mutex& events_mutex = runtime.get_event_queue().get_mutex();
+  auto& queue = runtime.get_event_queue();
+  auto& events = queue.get_active_events();
+  std::mutex& mtx = queue.get_mutex();
+
   {
-    std::lock_guard<std::mutex> lock(events_mutex);
-    events.remove(me);
+    std::lock_guard<std::mutex> lock(mtx);
+    me->mark_finished();
+
+    while (!events.empty() && events.front()->finished) {
+      // The event at the front of the list is the one currently "active"
+      auto e = events.front();
+      // Mark this event (and any events merged into it) as finished.
+      // This tells the host that it's safe to read the results of all merged
+      // ops.
+      queue.last_finished_id_.store(e->max_id);
+      trace::execution_end();
+      events.pop_front();
+
+      // If there's a next event, start its trace slice.
+      if (!events.empty()) {
+        auto next = events.front();
+        trace::execution_begin(next);
+        // If 'next' is also finished, the loop will continue and end its trace
+        // slice.
+      }
+    }
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -49,21 +57,21 @@ std::string operationtype_to_string(Event::OperationType op) {
                 << " phase=finished" << std::endl;
 #endif
 
+  delete self_ptr;
+  queue.outstanding_callbacks_--;
+
   return DPU_OK;
 }
 
-void Event::add_completion_callback() {
+void Event::add_completion_callback(std::shared_ptr<Event> self) {
   assert(this->finished == false);
 
-  if (this->op == OperationType::COMPUTE) {
-    this->mark_finished();
-    return;
-  }
-
   auto& runtime = DpuRuntime::get();
+  auto& queue = runtime.get_event_queue();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
-  auto wrapper = new std::shared_ptr<Event>(this);
+  queue.outstanding_callbacks_++;
+  auto wrapper = new std::shared_ptr<Event>(self);
 
   CHECK_UPMEM(dpu_callback(
       dpu_set, &upmem_callback, (void*)wrapper,
@@ -75,8 +83,10 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   assert(e->finished == false);
 
   auto& runtime = DpuRuntime::get();
+  auto& queue = runtime.get_event_queue();
   dpu_set_t& dpu_set = runtime.dpu_set();
 
+  queue.outstanding_callbacks_++;
   auto wrapper = new std::shared_ptr<Event>(std::move(e));
 
   CHECK_UPMEM(dpu_callback(
@@ -85,12 +95,19 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
                              DPU_CALLBACK_SINGLE_CALL)));
 }
 
+constexpr bool NO_PROGRESS = false;
+constexpr bool YES_PROGRESS = true;
+
 bool EventQueue::process_next() {
-  if (operations_.empty()) {
-    return false;
+  std::shared_ptr<Event> e;
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (operations_.empty()) {
+      return NO_PROGRESS;
+    }
+    e = operations_.front();
+    operations_.pop_front();
   }
-  std::shared_ptr<Event> e = operations_.front();
-  operations_.pop_front();
 
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
@@ -102,54 +119,112 @@ bool EventQueue::process_next() {
                 << " phase=started" << std::endl;
 #endif
 
-  switch (e->op) {
-    case Event::OperationType::FENCE:
-      this->add_fence(e);
-      break;
-    case Event::OperationType::COMPUTE:
-      e->started = true;
-      e->cb();
-      e->add_completion_callback();
-      break;
-    case Event::OperationType::DPU_TRANSFER:
-      e->started = true;
-      e->cb();
-      e->add_completion_callback();
-      break;
-    case Event::OperationType::HOST_TRANSFER:
-      e->started = true;
-      e->cb();
-      e->add_completion_callback();
-      break;
-    default:
-      assert(false && "Unknown event type");
+  trace::inqueue_end(e);
+
+  if (e->slice_name.empty()) {
+    e->slice_name = operationtype_to_string(e->op);
+    if (e->op == Event::OperationType::COMPUTE) {
+      e->slice_name = kernel_id_to_string(e->kid);
+      if (!e->rpn_ops.empty()) {
+        e->slice_name += " (Fused)";
+      }
+    }
   }
 
-  current_event_ = e;
-  running_events_.push_back(e);
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (running_events_.empty()) {
+      trace::execution_begin(e);
+    }
+    running_events_.push_back(e);
+    current_event_ = e;
+
+    trace::active_ops_counter(running_events_.size());
+  }
+
+  try {
+    switch (e->op) {
+      case Event::OperationType::FENCE:
+        this->add_fence(e);
+        break;
+      case Event::OperationType::COMPUTE:
+        e->started = true;
+#if PIPELINE
+        if (!e->rpn_ops.empty()) {
+          // Automatic fusion or manual RPN pipeline
+          detail::internal_launch_universal_pipeline(
+              e->output, (e->inputs.empty() ? nullptr : e->inputs[0]),
+              e->rpn_ops,
+              (e->inputs.size() > 1
+                   ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
+                                                        e->inputs.end())
+                   : std::vector<detail::VectorDescRef>()),
+              e->kid);
+        } else if (e->cb) {
+          e->cb();
+        }
+#else
+        if (e->cb) {
+          e->cb();
+        }
+#endif
+        e->add_completion_callback(e);
+        break;
+      case Event::OperationType::DPU_TRANSFER:
+        e->started = true;
+        e->cb();
+        e->add_completion_callback(e);
+        break;
+      case Event::OperationType::HOST_TRANSFER:
+        e->started = true;
+        e->cb();
+        e->add_completion_callback(e);
+        break;
+      default:
+        assert(false && "Unknown event type");
+    }
+  } catch (const DpuOOMException& ex) {
+#if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-oom] OOM detected for event id=" << e->id
+                  << ". Throttling..." << std::endl;
+#endif
+    // reset event state
+    e->started = false;
+
+    // remove from running_events_ and push back to front of operations_
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      running_events_.remove(e);
+      operations_.push_front(e);
+      // reset current event since we are backing off
+      if (current_event_ == e) current_event_ = nullptr;
+    }
+    // no progress as we caught an exception
+    return NO_PROGRESS;
+  }
 
   debug_active_events();
   debug_print_queue();
-  return true;
+  return YES_PROGRESS;
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
   while (true) {
-    bool made_progress = this->process_next();
-    if (this->get_curr_event_id() > wait_for_id) {
-      break;
-    }
-    // check if wait_for_id event has completed
-    if (this->get_curr_event_id() == wait_for_id &&
-        this->get_curr_event() != nullptr && this->get_curr_event()->finished) {
+    bool progress = this->process_next();
+
+    if (this->get_last_finished_id() >= wait_for_id) {
       break;
     }
 
-    // exit if no more events to process
-    if (operations_.empty() && running_events_.empty()) break;
-
-    if (!made_progress)
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // exit if no more events to process and everything is finished
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (operations_.empty() && running_events_.empty()) break;
+    }
+    if (!progress) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 }
 
@@ -201,4 +276,207 @@ void EventQueue::debug_active_events() {
     }
   }
 #endif
+}
+void EventQueue::submit(std::shared_ptr<Event> e) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  // Backpressure: block if total in-flight events (pending + running) exceed
+  // limit. Running events hold shared_ptr<VectorDesc> references that prevent
+  // DPU MRAM deallocation, so we must count them too—not just the pending
+  // operations_ queue.
+  while (operations_.size() + running_events_.size() >= max_queue_depth_) {
+    mtx_.unlock();
+    // Actively drain: process pending events so their callbacks can fire,
+    // releasing VectorDescRef shared_ptrs and freeing DPU MRAM.
+    this->process_next();
+    std::this_thread::yield();
+    mtx_.lock();
+  }
+
+  e->id = counter_++;
+  e->max_id = e->id;
+
+  trace::event_enqueued(e, operations_, running_events_);
+  trace::active_ops_counter(operations_.size());
+
+  bool fused = false;
+#if PIPELINE
+  if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
+    auto last = operations_.back();
+    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr) {
+      // Look for dependency: does any input of 'e' match 'last->output'?
+      bool dependent = false;
+      for (size_t i = 0; i < e->inputs.size(); ++i) {
+        if (e->inputs[i] == last->output) {
+          dependent = true;
+          break;
+        }
+      }
+
+      if (dependent) {
+        // Check fusion constraints:
+        // 1. Total ops <= MAX_PIPELINE_OPS
+        // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
+        if (dependent) {
+          // Promote 'last' RPN if needed to estimate new size
+          // Promote 'last' RPN if needed to estimate new size
+          std::vector<uint8_t> last_rpn = last->rpn_ops;
+          if (last_rpn.empty()) {
+            if (last->is_scalar) {
+              last_rpn.push_back(OP_PUSH_INPUT);
+              last_rpn.push_back(last->opcode);
+              const uint8_t* p =
+                  reinterpret_cast<const uint8_t*>(&last->scalar_value);
+              last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
+            } else {
+              last_rpn.push_back(OP_PUSH_INPUT);
+              if (last->inputs.size() > 1)
+                last_rpn.push_back(OP_PUSH_OPERAND_0);
+              last_rpn.push_back(last->opcode);
+            }
+          }
+
+          // Promote 'e' RPN if needed
+          std::vector<uint8_t> e_rpn = e->rpn_ops;
+          if (e_rpn.empty()) {
+            if (e->is_scalar) {
+              e_rpn.push_back(e->opcode);
+              const uint8_t* p =
+                  reinterpret_cast<const uint8_t*>(&e->scalar_value);
+              e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
+            } else {
+              e_rpn.push_back(OP_PUSH_INPUT);
+              if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
+              e_rpn.push_back(e->opcode);
+            }
+          }
+
+          std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
+          auto get_operand_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
+            if (vec == last->output) return 0;  // Already on stack
+            if (vec == combined_inputs[0]) return OP_PUSH_INPUT;
+            for (size_t i = 1; i < combined_inputs.size(); ++i) {
+              if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
+            }
+            if (combined_inputs.size() < MAX_PIPELINE_OPERANDS + 1) {
+              combined_inputs.push_back(vec);
+              return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
+            }
+            return 0xFF;  // Too many unique operands
+          };
+
+          std::vector<uint8_t> e_rpn_mapped;
+          bool possible = true;
+          for (size_t k = 0; k < e_rpn.size(); ++k) {
+            uint8_t op = e_rpn[k];
+            if (IS_OP_SCALAR(op)) {
+              e_rpn_mapped.push_back(op);
+              for (int m = 0; m < 4; ++m) {
+                if (++k < e_rpn.size()) e_rpn_mapped.push_back(e_rpn[k]);
+              }
+            } else if (op == OP_PUSH_INPUT) {
+              uint8_t push_op = get_operand_push_op(e->inputs[0]);
+              if (push_op == 0xFF) {
+                possible = false;
+                break;
+              }
+              if (push_op != 0) e_rpn_mapped.push_back(push_op);
+            } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+              uint32_t orig_idx = op - OP_PUSH_OPERAND_0;
+              uint8_t push_op = get_operand_push_op(e->inputs[orig_idx + 1]);
+              if (push_op == 0xFF) {
+                possible = false;
+                break;
+              }
+              if (push_op != 0) e_rpn_mapped.push_back(push_op);
+            } else {
+              e_rpn_mapped.push_back(op);
+            }
+          }
+
+          if (possible &&
+              (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) {
+            possible = false;
+          }
+
+          if (possible) {
+            if (last->rpn_ops.empty()) {
+              last->rpn_ops = last_rpn;
+              last->kid = last->pipeline_kid;
+            }
+            last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
+                                 e_rpn_mapped.end());
+            last->inputs = combined_inputs;
+            last->output = e->output;
+            last->max_id = std::max(last->max_id, e->id);
+            last->dependencies.insert(e->id);
+            fused = true;
+
+            // Update dependencies for fused event
+            for (const auto& in : e->inputs) {
+              if (in && in->last_producer_id != 0 &&
+                  in->last_producer_id != last->id) {
+                last->dependencies.insert(in->last_producer_id);
+              }
+            }
+            // Update last producer for the NEW output
+            if (last->output) {
+              last->output->last_producer_id = last->id;
+            }
+
+            // Build descriptive slice name for fused event
+            std::string ops_list;
+            for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
+              uint8_t op = last->rpn_ops[i];
+              std::string s = opcode_to_string(op);
+              if (s.empty()) continue;
+              if (!ops_list.empty()) ops_list += ", ";
+              ops_list += s;
+              if (IS_OP_SCALAR(op)) {
+                i += sizeof(uint32_t);
+              }
+            }
+            last->slice_name = "Fused: [" + ops_list + "]";
+
+#if ENABLE_DPU_LOGGING >= 1
+            Logger& logger = DpuRuntime::get().get_logger();
+            logger.lock() << "[queue-fuse] fused event id=" << e->id
+                          << " into last=" << last->id
+                          << " new_ops_count=" << last->rpn_ops.size()
+                          << std::endl;
+#endif
+            std::string fused_ops;
+            for (size_t i = 0; i < e_rpn_mapped.size(); ++i) {
+              uint8_t op = e_rpn_mapped[i];
+              std::string s = opcode_to_string(op);
+              if (s.empty()) continue;
+              if (!fused_ops.empty()) fused_ops += ", ";
+              fused_ops += s;
+              if (IS_OP_SCALAR(op)) {
+                i += sizeof(uint32_t);
+              }
+            }
+
+            trace::event_fused(e, last, fused_ops);
+            trace::inqueue_end(e);
+          }
+        }
+      }
+    }
+  }
+#endif
+
+  if (!fused) {
+    // Identify producers for all inputs
+    for (const auto& in : e->inputs) {
+      if (in && in->last_producer_id != 0) {
+        e->dependencies.insert(in->last_producer_id);
+      }
+    }
+    // Set this event as the last producer for the output
+    if (e->output) {
+      e->output->last_producer_id = e->id;
+    }
+
+    operations_.push_back(e);
+  }
 }

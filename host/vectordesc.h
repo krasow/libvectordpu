@@ -10,7 +10,8 @@
 namespace detail {
 struct VectorSegment {
   uint32_t ptr;
-  uint32_t size_bytes;  // bytes
+  uint32_t size_bytes;       // Logical bytes (used for count)
+  uint32_t allocated_bytes;  // Physical bytes (aligned to 8)
 };
 
 struct VectorDesc {
@@ -21,6 +22,18 @@ struct VectorDesc {
 
   // Sharded per DPU.
   std::vector<VectorSegment> desc;
+
+  bool is_reduction_result = false;
+  KernelID reduction_rid;
+
+  bool ptr_allocated =
+      true;  // Default to true for backwards/eager compatibility
+  size_t last_producer_id = 0;
+  const char* type_name = nullptr;
+  const char* debug_name = nullptr;
+  const char* debug_file = nullptr;
+  int debug_line = -1;
+  virtual ~VectorDesc();
 };
 
 using VectorDescRef = std::shared_ptr<VectorDesc>;

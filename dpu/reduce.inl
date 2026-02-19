@@ -9,7 +9,7 @@
 #define PRODUCT(a, b) ((a) * (b))
 #define SUM(a, b) ((a) + (b))
 
-#define MINIMUM_WRITE_SIZE 8
+// MINIMUM_WRITE_SIZE is defined in common.h
 
 #if ENABLE_DPU_PRINTING == 1
 void print_args(DPU_LAUNCH_ARGS args) {
@@ -34,8 +34,9 @@ void print_args(DPU_LAUNCH_ARGS args) {
     __mram_ptr TYPE *res_ptr = (__mram_ptr TYPE *)(args.reduction.res_offset); \
                                                                                \
     /* WRAM working buffer (DMA aligned) */                                    \
-    __dma_aligned TYPE rhs_block[BLOCK_SIZE];                                  \
-    __dma_aligned TYPE res_block[NR_TASKLETS * stride];                        \
+    TYPE *rhs_block = (TYPE *)dpu_workspace[tasklet_id];                       \
+    TYPE *res_block =                                                          \
+        (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)];         \
                                                                                \
     TYPE local_red = (TYPE)0;                                                  \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                   \

@@ -1,23 +1,36 @@
 #pragma once
-
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <typeindex>
 #include <variant>
 
 #include "common.h"
 #include "vectordesc.h"
 
-class Event {
+class Event : public std::enable_shared_from_this<Event> {
  public:
   enum class OperationType { COMPUTE, DPU_TRANSFER, HOST_TRANSFER, FENCE };
 
   OperationType op;
   std::function<void()> cb;
+
+  // Metadata for fusion
+  std::vector<detail::VectorDescRef> inputs;
+  detail::VectorDescRef output;
+  std::vector<uint8_t> rpn_ops;
+  KernelID kid = 0;
+  KernelID pipeline_kid = 0;  // For lazy promotion
+  uint8_t opcode = 0;         // For lazy promotion
+  bool is_scalar = false;     // Prevent fusion of scalar ops for now
+  uint32_t scalar_value = 0;  // Scalar operand for fusion
+  void* host_ptr = nullptr;   // For transfers
+  size_t transfer_size = 0;   // For transfers
 
   std::variant<std::monostate, detail::VectorDescRef> res;
 
@@ -28,29 +41,30 @@ class Event {
       : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
 
   size_t id = 0;
-  bool finished = false;
+  std::string slice_name;
+  std::set<size_t> dependencies;
+  std::atomic<bool> finished{false};
   bool started = false;
-  // bool has_parents = false;
-  // std::list<std::shared_ptr<Event>> parents;
+  size_t max_id = 0;  // The highest ID represented by this event (if fused)
 
-  void add_completion_callback();
-  void mark_finished() { this->finished = true; }
+  void add_completion_callback(std::shared_ptr<Event> self);
+  void mark_finished() { this->finished.store(true); }
   bool operator==(const Event& other) const { return this->id == other.id; }
 };
 
 class EventQueue {
  public:
+  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 64;
+
   EventQueue() = default;
   ~EventQueue() = default;
 
-  void submit(std::shared_ptr<Event> e) {
-    e->id = counter_++;
-    operations_.push_back(e);
-  }
+  void submit(std::shared_ptr<Event> e);
+  void set_max_queue_depth(size_t depth) { max_queue_depth_ = depth; }
+  size_t max_queue_depth() const { return max_queue_depth_; }
 
   void add_fence(std::shared_ptr<Event> e);
 
-  void wait();
   bool process_next();
   void process_events(size_t wait_for_id);
   void debug_print_queue();
@@ -76,15 +90,21 @@ class EventQueue {
   }
   size_t size() const { return operations_.size(); }
 
+  size_t get_last_finished_id() const { return last_finished_id_.load(); }
+
   std::list<std::shared_ptr<Event>>& get_active_events() {
     return running_events_;
   }
 
   std::mutex& get_mutex() { return mtx_; }
 
+  std::atomic<size_t> last_finished_id_{0};
+  std::atomic<int> outstanding_callbacks_{0};
+
  private:
   std::mutex mtx_;
   size_t counter_ = 1;
+  size_t max_queue_depth_ = DEFAULT_MAX_QUEUE_DEPTH;
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;

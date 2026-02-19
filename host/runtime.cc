@@ -4,6 +4,8 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+#include <fstream>
+#include <iostream>
 #include <string>
 #include <thread>
 
@@ -12,7 +14,10 @@
 #include <libgen.h>
 #include <limits.h>
 
+#include "perfetto/trace.h"
 #include "runtime.h"
+
+// (Moved to trace.cc)
 
 allocator& DpuRuntime::get_allocator() { return *allocator_; }
 EventQueue& DpuRuntime::get_event_queue() { return *event_queue_; }
@@ -45,6 +50,10 @@ std::string get_runtime_dpu_binary() {
 
 void DpuRuntime::init(uint32_t num_dpus) {
   if (initialized_) return;  // idempotent
+  TRACE_INIT();
+
+  trace::scoped_event trace_scoped("runtime", "DpuRuntime::init");
+
   num_dpus_ = num_dpus;
   logger_ = std::make_unique<Logger>();
 
@@ -61,6 +70,16 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
 
+  // Update num_dpus_ to actual allocated count
+  uint32_t actual_dpus;
+  DPU_ASSERT(dpu_get_nr_dpus(*dpu_set_, &actual_dpus));
+  num_dpus_ = actual_dpus;
+
+#if ENABLE_DPU_LOGGING == 1
+  logger_->lock() << "[runtime] Allocated " << num_dpus_ << " DPUs..."
+                  << std::endl;
+#endif
+
   // Load DPU binary
   std::string dpu_file = get_runtime_dpu_binary();
   DPU_ASSERT(dpu_load(*dpu_set_, dpu_file.c_str(), nullptr));
@@ -72,6 +91,8 @@ void DpuRuntime::init(uint32_t num_dpus) {
 
   // Allocate allocator and event queue
   size_t dpu_mem = 64 * 1024 * 1024;  // 64MB per DPU
+  // Constructor: allocator(uint32_t start_addr, std::size_t dpu_mem,
+  // std::size_t num_dpus)
   allocator_ = std::make_unique<allocator>(0, dpu_mem, num_dpus_);
   event_queue_ = std::make_unique<EventQueue>();
 
@@ -81,26 +102,46 @@ void DpuRuntime::init(uint32_t num_dpus) {
 void DpuRuntime::shutdown() {
   if (!initialized_) return;
 
+  {
+    trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
+
 #if ENABLE_DPU_LOGGING == 1
-  logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
+    logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
-  while (event_queue_->has_pending()) {
-    logger_->lock() << "[runtime] Waiting for pending events to complete..."
+    if (event_queue_->has_pending()) {
+      logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
+      event_queue_->process_events(UINT64_MAX);
+    }
+
+    logger_->lock() << "[runtime] Waiting for active events and callbacks..."
                     << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
+    while (true) {
+      {
+        std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
+        if (event_queue_->get_active_events().empty() &&
+            event_queue_->outstanding_callbacks_.load() == 0)
+          break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
-  // if (initialized_) {
-  //   DPU_ASSERT(dpu_free(dpu_set_));
-  // }
+    logger_->lock() << "[runtime] Freeing DPU set..." << std::endl;
+    DPU_ASSERT(dpu_free(*dpu_set_));
+    delete dpu_set_;
+    dpu_set_ = nullptr;
+    initialized_ = false;
+  }  // trace_scoped ends here, before TRACE_SHUTDOWN
 
-  allocator_.reset();
+  logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
+  TRACE_SHUTDOWN();
+
+  logger_->lock() << "[runtime] Shutdown complete." << std::endl;
+
+  // Reset core systems explicitly so they don't hang in static destructor
   event_queue_.reset();
+  allocator_.reset();
   logger_.reset();
-  dpu_set_ = nullptr;
-
-  initialized_ = false;
 }
 
 void DpuRuntime::debug_read_dpu_log() {

@@ -41,9 +41,16 @@ void print_vector_desc(Logger& logger, detail::VectorDescRef desc,
 void log_allocation(Logger& logger, const std::type_info& type, uint32_t n,
                     std::string_view debug_name, const char* debug_file,
                     int debug_line, bool is_allocation) {
+  log_allocation(logger, type.name(), n, debug_name, debug_file, debug_line,
+                 is_allocation);
+}
+
+void log_allocation(Logger& logger, const char* type_name, uint32_t n,
+                    std::string_view debug_name, const char* debug_file,
+                    int debug_line, bool is_allocation) {
   auto log = logger.lock();
   log << "[mem-logger] action=" << (is_allocation ? "allocate  " : "deallocate")
-      << " type=dpu_vector<" << type.name() << ">"
+      << " type=dpu_vector<" << type_name << ">"
       << " size=" << n;
   if (!debug_name.empty()) {
     log << " (name=\"" << debug_name << "\")";

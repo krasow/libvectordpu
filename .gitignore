@@ -20,3 +20,5 @@ opinfo.h
 kernels.h
 config.h
 .envrc
+opcodes.h
+*.perfetto-trace
