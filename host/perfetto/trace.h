@@ -11,6 +11,7 @@ namespace trace {
 
 // Library-internal opaque tracing hooks to avoid pulling Perfetto into user
 // headers. These are implemented in trace.cc using the full Perfetto SDK.
+#if TRACE == 1
 void internal_reduction_begin(uint64_t flow_id);
 void internal_reduction_end();
 void internal_to_cpu_begin(uint64_t flow_id);
@@ -22,6 +23,25 @@ void internal_from_cpu_end();
 void counter(const char* cat, const char* name, int64_t value);
 void event_begin(const char* cat, const char* name);
 void event_end(const char* cat);
+#else
+inline void internal_reduction_begin(uint64_t flow_id) { (void)flow_id; }
+inline void internal_reduction_end() {}
+inline void internal_to_cpu_begin(uint64_t flow_id) { (void)flow_id; }
+inline void internal_to_cpu_end() {}
+inline void internal_from_cpu_begin() {}
+inline void internal_from_cpu_end() {}
+
+inline void counter(const char* cat, const char* name, int64_t value) {
+  (void)cat;
+  (void)name;
+  (void)value;
+}
+inline void event_begin(const char* cat, const char* name) {
+  (void)cat;
+  (void)name;
+}
+inline void event_end(const char* cat) { (void)cat; }
+#endif
 
 struct scoped_event {
   const char* category;

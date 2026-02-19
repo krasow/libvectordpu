@@ -1,26 +1,11 @@
 #include "perfetto/trace.h"
 
-#include "perfetto/trace_internal.h"
-
-#if TRACE == 1 && __has_include(<perfetto.h>)
-#include <perfetto.h>
-
-PERFETTO_DEFINE_CATEGORIES(
-    perfetto::Category("runtime").SetDescription(
-        "Events related to runtime init and shutdown"),
-    perfetto::Category("queue").SetDescription(
-        "Events related to the event queue"),
-    perfetto::Category("transfer")
-        .SetDescription("Events related to MRAM transfers"),
-    perfetto::Category("events").SetDescription(
-        "Actual operation execution events"));
-
-PERFETTO_TRACK_EVENT_STATIC_STORAGE();
-#endif
-
 #include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <vector>
 
+#include "perfetto/trace_internal.h"
 #include "runtime.h"
 
 std::string operationtype_to_string(Event::OperationType op) {
@@ -36,91 +21,6 @@ std::string operationtype_to_string(Event::OperationType op) {
     default:
       return "UNKNOWN";
   }
-}
-
-void trace::internal_reduction_begin(uint64_t flow_id) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_BEGIN("events", "reduction_cpu",
-                    [flow_id](perfetto::EventContext& ctx) {
-                      if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
-                    });
-#else
-  (void)flow_id;
-#endif
-}
-
-void trace::internal_reduction_end() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_END("events");
-#endif
-}
-
-void trace::internal_to_cpu_begin(uint64_t flow_id) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_BEGIN("transfer", "dpu_vector::to_cpu",
-                    [flow_id](perfetto::EventContext& ctx) {
-                      if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
-                    });
-#else
-  (void)flow_id;
-#endif
-}
-
-void trace::internal_to_cpu_end() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_END("transfer");
-#endif
-}
-
-void trace::internal_from_cpu_begin() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_BEGIN("transfer", "dpu_vector::from_cpu");
-#endif
-}
-
-void trace::internal_from_cpu_end() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  TRACE_EVENT_END("transfer");
-#endif
-}
-
-void trace::counter(const char* cat, const char* name, int64_t value) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  if (std::string(cat) == "runtime") {
-    TRACE_COUNTER("runtime", perfetto::DynamicString(name), value);
-  } else if (std::string(cat) == "queue") {
-    TRACE_COUNTER("queue", perfetto::DynamicString(name), value);
-  }
-#else
-  (void)cat;
-  (void)name;
-  (void)value;
-#endif
-}
-
-void trace::event_begin(const char* cat, const char* name) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  if (std::string(cat) == "runtime") {
-    TRACE_EVENT_BEGIN("runtime", perfetto::DynamicString(name));
-  } else if (std::string(cat) == "queue") {
-    TRACE_EVENT_BEGIN("queue", perfetto::DynamicString(name));
-  }
-#else
-  (void)cat;
-  (void)name;
-#endif
-}
-
-void trace::event_end(const char* cat) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
-  if (std::string(cat) == "runtime") {
-    TRACE_EVENT_END("runtime");
-  } else if (std::string(cat) == "queue") {
-    TRACE_EVENT_END("queue");
-  }
-#else
-  (void)cat;
-#endif
 }
 
 std::string opcode_to_string(uint8_t op) {
@@ -175,6 +75,22 @@ std::string opcode_to_string(uint8_t op) {
 }
 
 #if TRACE == 1 && __has_include(<perfetto.h>)
+#include <perfetto.h>
+
+PERFETTO_DEFINE_CATEGORIES(
+    perfetto::Category("runtime").SetDescription(
+        "Events related to runtime init and shutdown"),
+    perfetto::Category("queue").SetDescription(
+        "Events related to the event queue"),
+    perfetto::Category("transfer")
+        .SetDescription("Events related to MRAM transfers"),
+    perfetto::Category("events").SetDescription(
+        "Actual operation execution events"));
+
+PERFETTO_TRACK_EVENT_STATIC_STORAGE();
+
+static std::unique_ptr<perfetto::TracingSession> tracing_session_;
+
 static std::string vector_to_string(detail::VectorDescRef vec) {
   if (!vec) return "NULL";
   char buf[128];
@@ -197,8 +113,7 @@ static std::string get_pipeline_breakdown(const Event& e) {
     if (op == OP_PUSH_INPUT) {
       stack.push_back("In[0]");
     } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
-      stack.push_back("In[" + std::to_string(op - OP_PUSH_OPERAND_0 + 1) +
-                      "]");
+      stack.push_back("In[" + std::to_string(op - OP_PUSH_OPERAND_0 + 1) + "]");
     } else if (IS_OP_UNARY(op)) {
       if (stack.size() < 1) {
         breakdown += "!!STK_ERR!!\n";
@@ -228,7 +143,6 @@ static std::string get_pipeline_breakdown(const Event& e) {
         breakdown += "!!STK_ERR!!\n";
         break;
       }
-      // Extract scalar
       if (i + sizeof(uint32_t) >= size) {
         breakdown += "!!SCALAR_ERR!!\n";
         break;
@@ -236,7 +150,6 @@ static std::string get_pipeline_breakdown(const Event& e) {
       uint32_t scalar;
       memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
       i += sizeof(uint32_t);
-
       std::string s1 = stack.back();
       stack.pop_back();
       std::string res = "st[" + std::to_string(stack.size()) + "]";
@@ -293,19 +206,10 @@ static void add_event_metadata(perfetto::EventContext& ctx,
     }
   }
 }
-#endif
-
-#include <fstream>
-#include <iostream>
-
-#if TRACE == 1 && __has_include(<perfetto.h>)
-static std::unique_ptr<perfetto::TracingSession> tracing_session_;
-#endif
 
 namespace trace {
 
 void initialize() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   perfetto::TracingInitArgs args;
   args.backends |= perfetto::kInProcessBackend;
   perfetto::Tracing::Initialize(args);
@@ -324,34 +228,72 @@ void initialize() {
   track_desc.set_name("DPU Hardware");
   perfetto::TrackEvent::SetTrackDescriptor(perfetto::Track(DPU_TRACK_ID),
                                            track_desc);
-#endif
 }
 
 void shutdown() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   if (tracing_session_) {
-    std::cout << "[trace] Stopping tracing session..." << std::endl;
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[trace] Stopping tracing session..." << std::endl;
     tracing_session_->StopBlocking();
-    std::cout << "[trace] Reading trace data..." << std::endl;
+    logger.lock() << "[trace] Reading trace data..." << std::endl;
     std::vector<char> trace_data = tracing_session_->ReadTraceBlocking();
 
-    std::ofstream out("trace.perfetto-trace", std::ios::binary);
+    const char* env_path = std::getenv("TRACE_OUTPUT");
+    std::string filename = (env_path ? env_path : "trace.perfetto-trace");
+
+    std::ofstream out(filename, std::ios::binary);
     out.write(trace_data.data(), trace_data.size());
     out.close();
-
-    std::cout << "Trace written to trace.perfetto-trace (" << trace_data.size()
-              << " bytes)" << std::endl;
-    std::cout << "[trace] Resetting tracing session..." << std::endl;
+    logger.lock() << "Trace written to " << filename << " (" << trace_data.size()
+                  << " bytes)" << std::endl;
     tracing_session_.reset();
-    std::cout << "[trace] Tracing session reset complete." << std::endl;
+    perfetto::Tracing::Shutdown();
+    logger.lock() << "[trace] Perfetto shutdown complete." << std::endl;
   }
-#endif
+}
+
+void internal_reduction_begin(uint64_t flow_id) {
+  TRACE_EVENT_BEGIN("events", "reduction_cpu",
+                    [flow_id](perfetto::EventContext& ctx) {
+                      if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
+                    });
+}
+void internal_reduction_end() { TRACE_EVENT_END("events"); }
+void internal_to_cpu_begin(uint64_t flow_id) {
+  TRACE_EVENT_BEGIN("transfer", "dpu_vector::to_cpu",
+                    [flow_id](perfetto::EventContext& ctx) {
+                      if (flow_id) perfetto::Flow::ProcessScoped(flow_id)(ctx);
+                    });
+}
+void internal_to_cpu_end() { TRACE_EVENT_END("transfer"); }
+
+void internal_from_cpu_begin() {
+  TRACE_EVENT_BEGIN("transfer", "dpu_vector::from_cpu");
+}
+void internal_from_cpu_end() { TRACE_EVENT_END("transfer"); }
+
+void counter(const char* cat, const char* name, int64_t value) {
+  if (std::string(cat) == "runtime")
+    TRACE_COUNTER("runtime", perfetto::DynamicString(name), value);
+  else if (std::string(cat) == "queue")
+    TRACE_COUNTER("queue", perfetto::DynamicString(name), value);
+}
+void event_begin(const char* cat, const char* name) {
+  if (std::string(cat) == "runtime")
+    TRACE_EVENT_BEGIN("runtime", perfetto::DynamicString(name));
+  else if (std::string(cat) == "queue")
+    TRACE_EVENT_BEGIN("queue", perfetto::DynamicString(name));
+}
+void event_end(const char* cat) {
+  if (std::string(cat) == "runtime")
+    TRACE_EVENT_END("runtime");
+  else if (std::string(cat) == "queue")
+    TRACE_EVENT_END("queue");
 }
 
 void event_enqueued(std::shared_ptr<Event> e,
                     const std::deque<std::shared_ptr<Event>>& ops,
                     const std::list<std::shared_ptr<Event>>& running) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_EVENT_INSTANT(
       "queue", "EventEnqueued", perfetto::Track(EVENT_TRACK_BASE + e->id),
       [e](perfetto::EventContext& ctx) {
@@ -388,16 +330,10 @@ void event_enqueued(std::shared_ptr<Event> e,
         perfetto::Flow::ProcessScoped(e->id)(ctx);
       },
       "waiting_on_details", waiting_on, "queue_depth", (int)ops.size());
-#else
-  (void)e;
-  (void)ops;
-  (void)running;
-#endif
 }
 
 void event_fused(std::shared_ptr<Event> e, std::shared_ptr<Event> into,
                  const std::string& fused_ops) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_EVENT_INSTANT(
       "queue",
       perfetto::DynamicString("Fused [" + fused_ops + "] into #" +
@@ -405,23 +341,13 @@ void event_fused(std::shared_ptr<Event> e, std::shared_ptr<Event> into,
       perfetto::Track(EVENT_TRACK_BASE + e->id), "into_id", into->id,
       "new_ops_count", (int)into->rpn_ops.size());
   TRACE_EVENT_END("queue", perfetto::Track(EVENT_TRACK_BASE + e->id));
-#else
-  (void)e;
-  (void)into;
-  (void)fused_ops;
-#endif
 }
 
 void inqueue_end(std::shared_ptr<Event> e) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_EVENT_END("queue", perfetto::Track(EVENT_TRACK_BASE + e->id));
-#else
-  (void)e;
-#endif
 }
 
 void execution_begin(std::shared_ptr<Event> e) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   auto base_lambda = [e](perfetto::EventContext& ctx) {
     perfetto::Flow::ProcessScoped(e->id)(ctx);
     for (size_t dep_id : e->dependencies)
@@ -438,42 +364,31 @@ void execution_begin(std::shared_ptr<Event> e) {
       ops_str += s;
       if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
     }
-    auto event_lambda = [e, base_lambda, ops_str](perfetto::EventContext& ctx) {
-      base_lambda(ctx);
-      add_event_metadata(ctx, e);
-    };
     TRACE_EVENT_BEGIN("events", perfetto::DynamicString(e->slice_name),
                       perfetto::Track(DPU_TRACK_ID), "id", e->id, "fused_ops",
-                      perfetto::DynamicString(ops_str), event_lambda);
+                      perfetto::DynamicString(ops_str),
+                      [e, base_lambda](perfetto::EventContext& ctx) {
+                        base_lambda(ctx);
+                        add_event_metadata(ctx, e);
+                      });
   } else {
-    auto event_lambda = [e, base_lambda](perfetto::EventContext& ctx) {
-      base_lambda(ctx);
-      add_event_metadata(ctx, e);
-    };
     TRACE_EVENT_BEGIN("events", perfetto::DynamicString(e->slice_name),
-                      perfetto::Track(DPU_TRACK_ID), "id", e->id, event_lambda);
+                      perfetto::Track(DPU_TRACK_ID), "id", e->id,
+                      [e, base_lambda](perfetto::EventContext& ctx) {
+                        base_lambda(ctx);
+                        add_event_metadata(ctx, e);
+                      });
   }
-#else
-  (void)e;
-#endif
 }
 
 void execution_end() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_EVENT_END("events", perfetto::Track(DPU_TRACK_ID));
-#endif
 }
-
 void active_ops_counter(size_t count) {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   TRACE_COUNTER("queue", "Active DPU Ops", (int)count);
-#else
-  (void)count;
-#endif
 }
 
 void ensure_callback_thread_named() {
-#if TRACE == 1 && __has_include(<perfetto.h>)
   static thread_local bool thread_named = false;
   if (!thread_named) {
     auto track = perfetto::ThreadTrack::Current();
@@ -482,7 +397,7 @@ void ensure_callback_thread_named() {
     perfetto::TrackEvent::SetTrackDescriptor(track, desc);
     thread_named = true;
   }
-#endif
 }
 
 }  // namespace trace
+#endif

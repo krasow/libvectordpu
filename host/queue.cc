@@ -21,8 +21,6 @@
   auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
   std::shared_ptr<Event> me = *self_ptr;
 
-  trace::ensure_callback_thread_named();
-
   auto& runtime = DpuRuntime::get();
   auto& queue = runtime.get_event_queue();
   auto& events = queue.get_active_events();
@@ -281,9 +279,10 @@ void EventQueue::debug_active_events() {
 }
 void EventQueue::submit(std::shared_ptr<Event> e) {
   std::lock_guard<std::mutex> lock(mtx_);
-  // Backpressure: block if total in-flight events (pending + running) exceed limit.
-  // Running events hold shared_ptr<VectorDesc> references that prevent DPU MRAM
-  // deallocation, so we must count them too—not just the pending operations_ queue.
+  // Backpressure: block if total in-flight events (pending + running) exceed
+  // limit. Running events hold shared_ptr<VectorDesc> references that prevent
+  // DPU MRAM deallocation, so we must count them too—not just the pending
+  // operations_ queue.
   while (operations_.size() + running_events_.size() >= max_queue_depth_) {
     mtx_.unlock();
     // Actively drain: process pending events so their callbacks can fire,

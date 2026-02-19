@@ -102,38 +102,46 @@ void DpuRuntime::init(uint32_t num_dpus) {
 void DpuRuntime::shutdown() {
   if (!initialized_) return;
 
-  trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
+  {
+    trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
 
 #if ENABLE_DPU_LOGGING == 1
-  logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
+    logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
-  if (event_queue_->has_pending()) {
-    std::cout << "[runtime] Flushing pending events..." << std::endl;
-    event_queue_->process_events(UINT64_MAX);
-  }
-
-  std::cout << "[runtime] Waiting for active events and callbacks..."
-            << std::endl;
-  while (true) {
-    {
-      std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
-      if (event_queue_->get_active_events().empty() &&
-          event_queue_->outstanding_callbacks_.load() == 0)
-        break;
+    if (event_queue_->has_pending()) {
+      logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
+      event_queue_->process_events(UINT64_MAX);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
 
-  std::cout << "[runtime] Freeing DPU set..." << std::endl;
-  if (initialized_) {
+    logger_->lock() << "[runtime] Waiting for active events and callbacks..."
+                    << std::endl;
+    while (true) {
+      {
+        std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
+        if (event_queue_->get_active_events().empty() &&
+            event_queue_->outstanding_callbacks_.load() == 0)
+          break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    logger_->lock() << "[runtime] Freeing DPU set..." << std::endl;
     DPU_ASSERT(dpu_free(*dpu_set_));
+    delete dpu_set_;
+    dpu_set_ = nullptr;
     initialized_ = false;
-  }
+  }  // trace_scoped ends here, before TRACE_SHUTDOWN
 
-  std::cout << "[runtime] Tracing shutdown..." << std::endl;
+  logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();
-  std::cout << "[runtime] Shutdown complete." << std::endl;
+
+  logger_->lock() << "[runtime] Shutdown complete." << std::endl;
+
+  // Reset core systems explicitly so they don't hang in static destructor
+  event_queue_.reset();
+  allocator_.reset();
+  logger_.reset();
 }
 
 void DpuRuntime::debug_read_dpu_log() {
