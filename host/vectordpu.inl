@@ -541,7 +541,9 @@ pipeline_result<T> dpu_vector<T>::jit(
   } else {
     tname = typeid(T).name();
   }
-  std::string binary_path = jit_compile(rpn_ops, tname);
+  std::vector<std::pair<std::vector<uint8_t>, std::string>> kernels = {
+      {rpn_ops, tname}};
+  std::string binary_path = jit_compile(kernels);
   std::vector<detail::VectorDescRef> operand_refs;
   for (const auto& op : operands) {
     operand_refs.push_back(op.data_desc_ref());

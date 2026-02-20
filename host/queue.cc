@@ -5,10 +5,11 @@
 #include <ostream>
 #include <thread>
 
+#include "jit.h"
+#include "opinfo.h"
 #include "perfetto/trace_internal.h"
 #include "runtime.h"
 #include "vectordpu.h"
-#include "jit.h"
 
 #ifndef DPURT
 #define DPURT
@@ -51,12 +52,14 @@
     }
   }
 
+  static std::atomic<size_t> callback_count{0};
+  size_t count = ++callback_count;
+  if (count % 100 == 0) {
 #if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[event-logger] id=" << me->id
-                << " type=" << operationtype_to_string(me->op)
-                << " phase=finished" << std::endl;
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-heartbeat] callback fired (" << count << ") for id=" << me->id << std::endl;
 #endif
+  }
 
   delete self_ptr;
   queue.outstanding_callbacks_--;
@@ -122,6 +125,34 @@ bool EventQueue::process_next() {
 
   trace::inqueue_end(e);
 
+  // Wait for dependencies
+  if (!e->dependencies.empty()) {
+    size_t max_dep = 0;
+    for (size_t dep : e->dependencies) {
+      if (dep > max_dep) max_dep = dep;
+    }
+#if ENABLE_DPU_LOGGING >= 1
+    if (this->get_last_finished_id() < max_dep) {
+      logger.lock() << "[queue-wait] id=" << e->id
+                    << " waiting for max_dep=" << max_dep
+                    << " (current=" << this->get_last_finished_id() << ")"
+                    << std::endl;
+    }
+#endif
+    size_t loop_count = 0;
+    while (this->get_last_finished_id() < max_dep) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+#if ENABLE_DPU_LOGGING >= 1
+      if (++loop_count % 1000 == 0) {
+        logger.lock() << "[queue-heartbeat] id=" << e->id
+                      << " dependency block on " << max_dep
+                      << " (current=" << this->get_last_finished_id() << ")"
+                      << std::endl;
+      }
+#endif
+    }
+  }
+
   if (e->slice_name.empty()) {
     e->slice_name = operationtype_to_string(e->op);
     if (e->op == Event::OperationType::COMPUTE) {
@@ -144,27 +175,49 @@ bool EventQueue::process_next() {
   }
 
 #if JIT
-  // Automatic JIT for fused pipelines
-  if (e->op == Event::OperationType::COMPUTE && !e->rpn_ops.empty() && 
-      e->jit_binary_path.empty()) {
-    const char* type_name = "int32_t"; // Default
-    if (e->output && e->output->type_name) {
-        // Map common mangled names or typeid().name() to C types
-        std::string tn = e->output->type_name;
-        if (tn == "i" || tn == "int") type_name = "int32_t";
-        else if (tn == "j" || tn == "uint32_t") type_name = "uint32_t";
-        else if (tn == "f" || tn == "float") type_name = "float";
-        else if (tn == "d" || tn == "double") type_name = "double";
-        else type_name = e->output->type_name;
+  if (e->op == Event::OperationType::COMPUTE && MAX_JIT_QUEUE_DEPTH > 0) {
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (!e->is_locked_for_jit) {
+        lock_for_jit(e);
+      }
+
+      // Opportunistic batching: if we are about to flush, try to pull more
+      // compute events from the queue first.
+      if (!e->jit_future.valid()) {
+        // If the queue is empty, give the submitter a tiny bit of time to add
+        // more compute events so we can mega-batch them. 200us is negligible
+        // compared to JIT compilation time (~100ms+) but enough to catch a loop.
+        if (operations_.empty()) {
+          std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+
+        auto it = operations_.begin();
+        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH &&
+               it != operations_.end()) {
+          auto next = *it;
+          if (next->op != Event::OperationType::COMPUTE) break;
+
+          lock_for_jit(next);
+          if (e->jit_future.valid()) break;
+          ++it;
+        }
+
+        // Final flush if still not valid
+        if (!e->jit_future.valid()) {
+          flush_jit_batch();
+        }
+      }
     }
-    
-    #if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[queue-jit] Automatically JIT-compiling fused event id=" << e->id 
-                  << " for type=" << type_name << std::endl;
-    #endif
-    
-    e->jit_binary_path = jit_compile(e->rpn_ops, type_name);
+    // Await background compilation
+    if (e->jit_future.valid()) {
+#if ENABLE_DPU_LOGGING >= 1
+      Logger& logger = DpuRuntime::get().get_logger();
+      logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
+                    << e->id << std::endl;
+#endif
+      e->jit_binary_path = e->jit_future.get();
+    }
   }
 #endif
 
@@ -172,9 +225,16 @@ bool EventQueue::process_next() {
   std::string required_binary;
   if (!e->jit_binary_path.empty()) {
     required_binary = e->jit_binary_path;
-  } else {
-    // Default binary
+  } else if (e->op == Event::OperationType::COMPUTE) {
+    // Compute events without a JIT path must use the default binary
     required_binary = DpuRuntime::get().get_default_binary_path();
+  } else {
+    // Non-compute events (transfers, fences) can stay on the current binary
+    if (current_binary_path_.empty()) {
+      required_binary = DpuRuntime::get().get_default_binary_path();
+    } else {
+      required_binary = current_binary_path_;
+    }
   }
 
   // Check if we need to switch binaries
@@ -184,6 +244,7 @@ bool EventQueue::process_next() {
     logger.lock() << "[queue-jit] Switching binary to " << required_binary
                   << " (was " << current_binary_path_ << ")" << std::endl;
 #endif
+    trace::jit_binary_switch(current_binary_path_, required_binary);
 
     // Wait for all running events to complete before swapping
     // We need to wait until running_events_ is empty (except for current 'e'
@@ -219,7 +280,11 @@ bool EventQueue::process_next() {
       case Event::OperationType::COMPUTE:
         e->started = true;
 #if PIPELINE
-        if (!e->rpn_ops.empty()) {
+        if (!e->rpn_ops.empty() || e->is_locked_for_jit) {
+          // Determine Kernel ID: use jit_sub_kernel_idx for JIT batched
+          // kernels, otherwise regular e->kid
+          KernelID dynamic_kid =
+              e->is_locked_for_jit ? e->jit_sub_kernel_idx : e->kid;
           // Automatic fusion or manual RPN pipeline
           detail::internal_launch_universal_pipeline(
               e->output, (e->inputs.empty() ? nullptr : e->inputs[0]),
@@ -228,7 +293,7 @@ bool EventQueue::process_next() {
                    ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
                                                         e->inputs.end())
                    : std::vector<detail::VectorDescRef>()),
-              e->kid);
+              dynamic_kid);
         } else if (e->cb) {
           e->cb();
         }
@@ -294,6 +359,19 @@ void EventQueue::process_events(size_t wait_for_id) {
     if (!progress) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    static size_t loop_count = 0;
+    if (++loop_count % 1000 == 0) {
+#if ENABLE_DPU_LOGGING >= 1
+      Logger& logger = DpuRuntime::get().get_logger();
+      std::lock_guard<std::mutex> lock(mtx_);
+      logger.lock() << "[queue-heartbeat] process_events waiting for "
+                    << wait_for_id << " (last_finished="
+                    << this->get_last_finished_id()
+                    << " ops=" << operations_.size()
+                    << " running=" << running_events_.size() << ")" << std::endl;
+#endif
+    }
   }
 }
 
@@ -346,6 +424,109 @@ void EventQueue::debug_active_events() {
   }
 #endif
 }
+
+#if JIT
+void EventQueue::flush_jit_batch() {
+  if (pending_unique_kernels_.empty()) return;
+
+  std::vector<std::pair<std::vector<uint8_t>, std::string>> batch =
+      pending_unique_kernels_;
+
+  // Create an async task
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[queue-jit] Flushing " << batch.size()
+                << " kernels to async JIT compiler." << std::endl;
+#endif
+
+  std::shared_future<std::string> future =
+      std::async(std::launch::async, [batch]() { return jit_compile(batch); });
+
+  // Assign future to all pending events
+  for (auto ev : pending_jit_events_) {
+    ev->jit_future = future;
+  }
+
+  // Clear pending events but KEEP pending_unique_kernels_ (Sticky Mega-Batching)
+  pending_jit_events_.clear();
+}
+
+void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
+  if (e->op != Event::OperationType::COMPUTE) return;
+  if (e->is_locked_for_jit) return;
+
+  e->is_locked_for_jit = true;
+
+  // 1. Ensure it has an RPN sequence (even single operations need it for the
+  // batched Kernel)
+  if (e->rpn_ops.empty()) {
+    if (e->is_scalar) {
+      e->rpn_ops.push_back(OP_PUSH_INPUT);
+      e->rpn_ops.push_back(e->opcode);
+      const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
+      e->rpn_ops.insert(e->rpn_ops.end(), p, p + sizeof(uint32_t));
+    } else {
+      e->rpn_ops.push_back(OP_PUSH_INPUT);
+      if (e->inputs.size() > 1) {
+        e->rpn_ops.push_back(OP_PUSH_OPERAND_0);
+      }
+      e->rpn_ops.push_back(e->opcode);
+    }
+  }
+
+  // 2. Identify type name
+  const char* type_name = "int32_t";  // Default
+  if (e->output && e->output->type_name) {
+    std::string tn = e->output->type_name;
+    if (tn == "i" || tn == "int")
+      type_name = "int32_t";
+    else if (tn == "j" || tn == "uint32_t")
+      type_name = "uint32_t";
+    else if (tn == "f" || tn == "float")
+      type_name = "float";
+    else if (tn == "d" || tn == "double")
+      type_name = "double";
+    else
+      type_name = e->output->type_name;
+  }
+
+  std::pair<std::vector<uint8_t>, std::string> signature = {e->rpn_ops,
+                                                            type_name};
+
+  // 3. Find if this kernel exists in the current pending batch
+  int idx = -1;
+  for (size_t i = 0; i < pending_unique_kernels_.size(); ++i) {
+    if (pending_unique_kernels_[i] == signature) {
+      idx = i;
+      break;
+    }
+  }
+
+  if (idx != -1) {
+    // Found a match in the current batch!
+    e->jit_sub_kernel_idx = idx;
+    pending_jit_events_.push_back(e);
+    return;
+  }
+
+  // 4. Cumulative Expansion Threshold (Sticky Mega-Batching)
+  // If we need to add a NEW unique kernel but the set is full, start a new
+  // epoch.
+  if (pending_unique_kernels_.size() >= MAX_JIT_QUEUE_DEPTH) {
+    flush_jit_batch();
+    pending_unique_kernels_.clear();
+  }
+
+  e->jit_sub_kernel_idx = pending_unique_kernels_.size();
+  pending_unique_kernels_.push_back(signature);
+  pending_jit_events_.push_back(e);
+
+  // 5. Automatic flush when adding a new signature to ensure its future is
+  // available to following logic.
+  flush_jit_batch();
+}
+#endif
+
 void EventQueue::submit(std::shared_ptr<Event> e) {
   std::lock_guard<std::mutex> lock(mtx_);
   // Backpressure: block if total in-flight events (pending + running) exceed
@@ -357,7 +538,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
     // Actively drain: process pending events so their callbacks can fire,
     // releasing VectorDescRef shared_ptrs and freeing DPU MRAM.
     this->process_next();
-    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
     mtx_.lock();
   }
 
@@ -477,7 +658,6 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
             last->inputs = combined_inputs;
             last->output = e->output;
             last->max_id = std::max(last->max_id, e->id);
-            last->dependencies.insert(e->id);
             fused = true;
 
             // Update dependencies for fused event
@@ -535,6 +715,22 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 #endif
 
   if (!fused) {
+#if JIT
+    // Lock the previous event for JIT since it won't be fused into anymore
+    if (!operations_.empty()) {
+      auto last = operations_.back();
+      if (last->op == Event::OperationType::COMPUTE &&
+          !last->is_locked_for_jit) {
+        lock_for_jit(last);
+      }
+    }
+    // Automatically promote all single compute events to batched kernels to
+    // avoid binary thrashing
+    if (e->op == Event::OperationType::COMPUTE && e->rpn_ops.empty() &&
+        MAX_JIT_QUEUE_DEPTH > 0) {
+      e->kid = e->pipeline_kid;  // Ensure it behaves like a pipeline payload
+    }
+#endif
     // Identify producers for all inputs
     for (const auto& in : e->inputs) {
       if (in && in->last_producer_id != 0) {

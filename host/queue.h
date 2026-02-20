@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -34,6 +35,9 @@ class Event : public std::enable_shared_from_this<Event> {
 
   // JIT
   std::string jit_binary_path;
+  bool is_locked_for_jit = false;
+  int jit_sub_kernel_idx = -1;
+  std::shared_future<std::string> jit_future;
 
   std::variant<std::monostate, detail::VectorDescRef> res;
 
@@ -61,6 +65,9 @@ class EventQueue {
 
   EventQueue() = default;
   ~EventQueue() = default;
+
+  void lock_for_jit(std::shared_ptr<Event> e);
+  void flush_jit_batch();
 
   void submit(std::shared_ptr<Event> e);
   void set_max_queue_depth(size_t depth) { max_queue_depth_ = depth; }
@@ -111,5 +118,11 @@ class EventQueue {
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;
+
+  // JIT Batching State
+  std::vector<std::pair<std::vector<uint8_t>, std::string>>
+      pending_unique_kernels_;
+  std::vector<std::shared_ptr<Event>> pending_jit_events_;
+
   std::string current_binary_path_;
 };

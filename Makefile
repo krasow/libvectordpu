@@ -11,6 +11,8 @@ LOGGING ?= 0
 PIPELINE ?= 0
 # this option enables JIT compilation of pipeline kernels
 JIT ?= 0
+# this option sets the maximum number of unique kernels to fuse into a single JIT binary
+MAX_JIT_QUEUE_DEPTH ?= 8
 
 # JIT requires pipeline logic to dispatch events correctly
 ifeq ($(JIT),1)
@@ -27,6 +29,9 @@ ENABLE_DPU_PRINTING ?= 0
 # this option enables tracing with Perfetto
 TRACE ?= 0
 PERFETTO_HOME ?= /scratch/david/benchmark-upmem/opt/perfetto
+
+# this option prevents the automatic removal of the JIT build directory at shutdown
+DEBUG_KEEP_JIT_DIR ?= 0
 
 # the default compiler on feta supports up to C++17
 # c++20 is needed for some debugging output from std::source_location
@@ -119,8 +124,10 @@ reconfigure:
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
 	@echo "PIPELINE=$(PIPELINE)" >> $(CONFIG_STAMP)
 	@echo "JIT=$(JIT)" >> $(CONFIG_STAMP)
+	@echo "MAX_JIT_QUEUE_DEPTH=$(MAX_JIT_QUEUE_DEPTH)" >> $(CONFIG_STAMP)
 	@echo "TRACE=$(TRACE)" >> $(CONFIG_STAMP)
 	@echo "PERFETTO_HOME=$(PERFETTO_HOME)" >> $(CONFIG_STAMP)
+	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

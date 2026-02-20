@@ -138,32 +138,32 @@ test_error test_jit_chain() {
 
 #if JIT
 int test_jit_caching() {
-    printf("Testing JIT caching...\n");
-    const size_t N = 1024 * 1024;
-    std::vector<int> h_a(N);
+  printf("Testing JIT caching...\n");
+  const size_t N = 1024 * 1024;
+  std::vector<int> h_a(N);
 
-    // Fill a
-    for(size_t i=0; i< N; ++i) h_a[i] = i % 100;
-    
-    // Create DPU vector from CPU vector
-    dpu_vector<int> a = dpu_vector<int>::from_cpu(h_a);
+  // Fill a
+  for (size_t i = 0; i < N; ++i) h_a[i] = i % 100;
 
-    // Ops for a + a: PUSH_INPUT, PUSH_INPUT, ADD
-    std::vector<uint8_t> ops = {OP_PUSH_INPUT, OP_PUSH_INPUT, OP_ADD};
+  // Create DPU vector from CPU vector
+  dpu_vector<int> a = dpu_vector<int>::from_cpu(h_a);
 
-    // First call - should compile
-    auto res1 = a.jit(ops);
+  // Ops for a + a: PUSH_INPUT, PUSH_INPUT, ADD
+  std::vector<uint8_t> ops = {OP_PUSH_INPUT, OP_PUSH_INPUT, OP_ADD};
 
-    // Second call - should hit cache
-    auto res2 = a.jit(ops);
+  // First call - should compile
+  auto res1 = a.jit(ops);
 
-    auto h_res1 = res1.vec.to_cpu();
-    auto h_res2 = res2.vec.to_cpu();
+  // Second call - should hit cache
+  auto res2 = a.jit(ops);
 
-    if (h_res1[0] != h_res2[0]) return TEST_ERROR;
+  auto h_res1 = res1.vec.to_cpu();
+  auto h_res2 = res2.vec.to_cpu();
 
-    printf("[PASS] test_jit_caching (Execution successful)\n");
-    return TEST_SUCCESS;
+  if (h_res1[0] != h_res2[0]) return TEST_ERROR;
+
+  printf("[PASS] test_jit_caching (Execution successful)\n");
+  return TEST_SUCCESS;
 }
 #endif
 
@@ -179,7 +179,6 @@ int main(void) {
   RUN_TEST(test_jit_chain);
   RUN_TEST(test_jit_caching);
 #endif
-
   RUN_TEST(memory_test);
 
   // RUN_TEST(test_int_product_reduction);

@@ -1,6 +1,6 @@
-
 #include <barrier.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 // STACK_DEPTH and MINIMUM_WRITE_SIZE are defined in common.h

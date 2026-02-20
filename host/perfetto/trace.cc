@@ -226,8 +226,15 @@ void initialize() {
 
   auto track_desc = perfetto::Track(DPU_TRACK_ID).Serialize();
   track_desc.set_name("DPU Hardware");
+  track_desc.set_parent_uuid(perfetto::ProcessTrack::Current().uuid);
   perfetto::TrackEvent::SetTrackDescriptor(perfetto::Track(DPU_TRACK_ID),
                                            track_desc);
+
+  auto jit_track_desc = perfetto::Track(8080).Serialize();
+  jit_track_desc.set_name("JIT Compiler");
+  jit_track_desc.set_parent_uuid(perfetto::ProcessTrack::Current().uuid);
+  perfetto::TrackEvent::SetTrackDescriptor(perfetto::Track(8080),
+                                           jit_track_desc);
 }
 
 void shutdown() {
@@ -397,6 +404,49 @@ void ensure_callback_thread_named() {
     perfetto::TrackEvent::SetTrackDescriptor(track, desc);
     thread_named = true;
   }
+}
+
+static std::string rpn_ops_to_string(const std::vector<uint8_t>& rpn_ops) {
+  std::string ops_str;
+  for (size_t i = 0; i < rpn_ops.size(); ++i) {
+    uint8_t op = rpn_ops[i];
+    std::string s = opcode_to_string(op);
+    if (s.empty()) continue;
+    if (!ops_str.empty()) ops_str += ", ";
+    ops_str += s;
+    if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+  }
+  return ops_str;
+}
+
+void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
+                       const char* type_name) {
+  std::string ops_str = rpn_ops_to_string(rpn_ops);
+  TRACE_EVENT_BEGIN("runtime", "jit_compile", perfetto::Track(8080), "type",
+                    perfetto::DynamicString(type_name), "ops",
+                    perfetto::DynamicString(ops_str));
+}
+
+void jit_compile_begin(
+    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+  std::string summary =
+      "Batched " + std::to_string(kernels.size()) + " kernels\n";
+  for (size_t i = 0; i < kernels.size(); ++i) {
+    summary += "K" + std::to_string(i) + " [" + kernels[i].second +
+               "]: " + rpn_ops_to_string(kernels[i].first) + "\n";
+  }
+  TRACE_EVENT_BEGIN("runtime", "jit_compile_batch", perfetto::Track(8080),
+                    "kernels", (int)kernels.size(), "details",
+                    perfetto::DynamicString(summary));
+}
+
+void jit_compile_end() { TRACE_EVENT_END("runtime", perfetto::Track(8080)); }
+
+void jit_binary_switch(const std::string& previous,
+                       const std::string& current) {
+  TRACE_EVENT_INSTANT("runtime", "binary_switch", perfetto::Track(8080), "from",
+                      perfetto::DynamicString(previous), "to",
+                      perfetto::DynamicString(current));
 }
 
 }  // namespace trace

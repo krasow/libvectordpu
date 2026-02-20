@@ -17,6 +17,7 @@ namespace fs = std::filesystem;
 #include <libgen.h>
 #include <limits.h>
 
+#include "jit.h"
 #include "perfetto/trace.h"
 #include "runtime.h"
 
@@ -155,6 +156,11 @@ void DpuRuntime::shutdown() {
 
   logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();
+
+#if JIT
+  logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
+  jit_cleanup();
+#endif
 
   logger_->lock() << "[runtime] Shutdown complete." << std::endl;
 

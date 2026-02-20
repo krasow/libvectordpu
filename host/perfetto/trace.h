@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "config.h"
 
@@ -23,6 +24,13 @@ void internal_from_cpu_end();
 void counter(const char* cat, const char* name, int64_t value);
 void event_begin(const char* cat, const char* name);
 void event_end(const char* cat);
+void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
+                       const char* type_name);
+void jit_compile_begin(
+    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels);
+void jit_compile_end();
+void jit_binary_switch(const std::string& previous,
+                       const std::string& current);
 #else
 inline void internal_reduction_begin(uint64_t flow_id) { (void)flow_id; }
 inline void internal_reduction_end() {}
@@ -41,6 +49,21 @@ inline void event_begin(const char* cat, const char* name) {
   (void)name;
 }
 inline void event_end(const char* cat) { (void)cat; }
+inline void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
+                              const char* type_name) {
+  (void)rpn_ops;
+  (void)type_name;
+}
+inline void jit_compile_begin(
+    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+  (void)kernels;
+}
+inline void jit_compile_end() {}
+inline void jit_binary_switch(const std::string& previous,
+                              const std::string& current) {
+  (void)previous;
+  (void)current;
+}
 #endif
 
 struct scoped_event {

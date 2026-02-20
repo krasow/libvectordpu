@@ -15,7 +15,8 @@ test_error memory_test() {
 #if PIPELINE
     size_t mb_per_dpu = 15;
 #else
-    size_t mb_per_dpu = 5;  // Need more space for intermediates when fusion is off
+    size_t mb_per_dpu =
+        5;  // Need more space for intermediates when fusion is off
 #endif
     size_t N = (mb_per_dpu * 1024 * 1024 * num_dpus) / 4;
 

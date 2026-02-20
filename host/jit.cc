@@ -8,63 +8,60 @@
 #include <vector>
 
 #include "common.h"
-#include "opcodes.h"
-#include "vectordpu.h"
-#include "runtime.h"
 #include "logger.h"
+#include "opcodes.h"
+#include "runtime.h"
+#include "vectordpu.h"
 
 #if JIT
 #include <dlfcn.h>
 
+#include <map>
+#include <mutex>
+
+#include "perfetto/trace.h"
+
 namespace fs = std::filesystem;
 
-#include <map>
+namespace {
+using Signature = std::pair<std::vector<uint8_t>, std::string>;
+using CacheKey = std::vector<Signature>;
+std::map<CacheKey, std::string> g_jit_cache;
+std::map<Signature, std::string> g_kernel_obj_cache;
+std::mutex g_jit_cache_mutex;
+
+std::string hash_signature(const Signature& sig) {
+  size_t h = std::hash<std::string>{}(sig.second);
+  for (uint8_t b : sig.first) {
+    h ^= std::hash<uint8_t>{}(b) + 0x9e3779b9 + (h << 6) + (h >> 2);
+  }
+  char buf[32];
+  sprintf(buf, "%016zx", h);
+  return std::string(buf);
+}
+}  // namespace
 
 // Anchor for dladdr
 extern "C" void vectordpu_jit_dladdr_anchor() {}
 
-std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
-                        const char* type_name) {
-  // Cache Key: RPN sequence + Type name
-  using CacheKey = std::pair<std::vector<uint8_t>, std::string>;
-  static std::map<CacheKey, std::string> jit_cache;
+static void write_kernel_header(std::ofstream& out) {
+  out << "#include <stdint.h>\n";
+  out << "#include <defs.h>\n";
+  out << "#include <mram.h>\n";
+  out << "#include \"common.h\"\n\n";
+  out << "extern DPU_LAUNCH_ARGS args;\n";
+  out << "extern uint8_t dpu_workspace[NR_TASKLETS][8 * "
+         "BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n\n";
+}
 
-  std::cout << std::flush;
-  
-#if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
-#endif
-
-  CacheKey key = {rpn_ops, std::string(type_name)};
-  if (jit_cache.find(key) != jit_cache.end()) {
-#if ENABLE_DPU_LOGGING >= 1
-      logger.lock() << "[JIT] Cache hit for kernel type=" << type_name << std::endl;
-#endif
-    return jit_cache[key];
-  }
-
-  // 1. Generate unique filename based on ops hash or simple counter
-  // For simplicity, using a static counter or hash
-  static int counter = 0;
-  std::stringstream ss_fn;
-  ss_fn << "jit_kernel_" << counter++ << ".c";
-  std::string filename = ss_fn.str();
-  std::string build_dir = "build/jit";
-  fs::create_directories(build_dir);
-  std::string filepath = build_dir + "/" + filename;
-  std::string binpath = build_dir + "/" + filename + ".dpu";
-
-  // Check if binary already exists (optional optimization, skip for now)
-
-  std::ofstream out(filepath);
-
-  // 2. Write Header
+static void write_dpu_main_header(std::ofstream& out) {
   out << "#include <alloc.h>\n";
   out << "#include <barrier.h>\n";
   out << "#include <defs.h>\n";
   out << "#include <mram.h>\n";
   out << "#include <stdint.h>\n";
   out << "#include <stdio.h>\n";
+  out << "#include <stdlib.h>\n";
   out << "#include <string.h>\n";
   out << "#include \"common.h\"\n\n";
 
@@ -74,9 +71,18 @@ std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
          "MINIMUM_WRITE_SIZE)\n";
   out << "__dma_aligned uint8_t "
          "dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];\n\n";
+}
 
-  // 3. Write Kernel
-  out << "int jit_main_kernel(void) {\n";
+static void write_kernel_function(std::ofstream& out,
+                                  const std::string& func_name,
+                                  const std::vector<uint8_t>& rpn_ops,
+                                  const std::string& type_name) {
+  out << "#include <mram.h>\n";
+  out << "#include <defs.h>\n";
+  out << "#include <barrier.h>\n";
+  out << "#include <string.h>\n";
+  out << "extern barrier_t my_barrier;\n\n";
+  out << "int " << func_name << "(void) {\n";
   out << "    unsigned int id = me();\n";
   out << "    uint32_t n = args.num_elements;\n";
   out << "    " << type_name << " *in_ptr = (" << type_name
@@ -111,7 +117,7 @@ std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
         break;
       case OP_MIN:
         out << "    acc = (" << type_name << ")1e9;\n";
-        break;  // TODO: limits
+        break;
       case OP_MAX:
         out << "    acc = (" << type_name << ")-1e9;\n";
         break;
@@ -274,7 +280,6 @@ std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
   if (!is_reduction && !stack.empty()) {
     out << "            w_out[i] = " << stack.back() << ";\n";
   }
-
   out << "        }\n";  // End compute loop
 
   // Write Back (BLOCK)
@@ -298,8 +303,8 @@ std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
     out << "    barrier_wait(&my_barrier);\n";
     out << "    if (id == 0) {\n";
     out << "        " << type_name << " rb[NR_TASKLETS * sd];\n";
-    out << "        mram_read((__mram_ptr void const *)rs_ptr, rb, "
-           "NR_TASKLETS * MINIMUM_WRITE_SIZE);\n";
+    out << "        mram_read((__mram_ptr void const *)rs_ptr, rb, NR_TASKLETS "
+           "* MINIMUM_WRITE_SIZE);\n";
     out << "        " << type_name << " tot = rb[0];\n";
     out << "        for (i = 1; i < NR_TASKLETS; i++) {\n";
     out << "          " << type_name << " v = rb[i * sd];\n";
@@ -328,60 +333,193 @@ std::string jit_compile(const std::vector<uint8_t>& rpn_ops,
 
   out << "    return 0;\n";
   out << "}\n\n";
+}
 
-  out << "int main() { return jit_main_kernel(); }\n";
-
-  out.close();
-
-  // 4. Compile
-  // Resolve include path relative to library
+static std::string get_include_flags() {
   Dl_info dl_info;
   void* fptr = (void*)&vectordpu_jit_dladdr_anchor;
   std::vector<std::string> include_dirs;
 
   if (dladdr(fptr, &dl_info) != 0) {
-      fs::path lib_path = fs::absolute(dl_info.dli_fname);
-      fs::path base = lib_path.parent_path().parent_path();
-
-      // Case 1: Installed mode (e.g. /usr/local/include/vectordpu)
-      if (fs::exists(base / "include" / "vectordpu"))
-          include_dirs.push_back((base / "include" / "vectordpu").string());
-
-      // Case 2: Source tree (from build/lib/, headers are in ../common)
-      if (fs::exists(base.parent_path() / "common"))
-          include_dirs.push_back((base.parent_path() / "common").string());
-
-      // Case 3: Library is in project root/lib (less common but possible)
-      if (fs::exists(base / "common"))
-          include_dirs.push_back((base / "common").string());
+    fs::path lib_path = fs::absolute(dl_info.dli_fname);
+    fs::path base = lib_path.parent_path().parent_path();
+    if (fs::exists(base / "include" / "vectordpu"))
+      include_dirs.push_back((base / "include" / "vectordpu").string());
+    if (fs::exists(base.parent_path() / "common"))
+      include_dirs.push_back((base.parent_path() / "common").string());
+    if (fs::exists(base / "common"))
+      include_dirs.push_back((base / "common").string());
   }
 
-  // Fallback to current directory if nothing found
   if (include_dirs.empty()) {
-      include_dirs.push_back("include/vectordpu");
+    include_dirs.push_back("include/vectordpu");
   }
 
   std::string include_flags;
   for (const auto& dir : include_dirs) {
-      include_flags += " -I" + dir;
+    include_flags += " -I" + dir;
   }
+  return include_flags;
+}
 
-  std::string cmd =
-      "dpu-upmem-dpurte-clang -DNR_TASKLETS=" + std::to_string(DpuRuntime::get().num_tasklets()) + 
-      include_flags + " -O3 -o " + binpath + " " + filepath;
+static bool compile_dpu_source(const std::string& filepath,
+                               const std::string& binpath, bool is_object,
+                               const std::string& include_flags) {
+  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS=" +
+                    std::to_string(DpuRuntime::get().num_tasklets()) +
+                    include_flags + " -O3 " + (is_object ? "-c " : "") + "-o " +
+                    binpath + " " + filepath;
 
-      int ret = system(cmd.c_str());
+  int ret = system(cmd.c_str());
   if (ret != 0) {
     std::cerr << "JIT Compilation failed: " << cmd << std::endl;
+    return false;
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[JIT] Compiled " << (is_object ? "object " : "kernel ")
+                << "to " << binpath << std::endl;
+#endif
+
+  return true;
+}
+
+static bool link_dpu_objects(const std::string& main_path,
+                             const std::vector<std::string>& objects,
+                             const std::string& binpath,
+                             const std::string& include_flags) {
+  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS=" +
+                    std::to_string(DpuRuntime::get().num_tasklets()) +
+                    include_flags + " -O3 -o " + binpath + " " + main_path;
+  for (const auto& obj : objects) {
+    cmd += " " + obj;
+  }
+
+  int ret = system(cmd.c_str());
+  if (ret != 0) {
+    std::cerr << "JIT Linking failed: " << cmd << std::endl;
+    return false;
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[JIT] Linked binary to " << binpath << std::endl;
+#endif
+  return true;
+}
+
+std::string jit_compile(
+    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+  std::cout << std::flush;
+
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+#endif
+
+  {
+    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    if (g_jit_cache.find(kernels) != g_jit_cache.end()) {
+#if ENABLE_DPU_LOGGING >= 1
+      logger.lock() << "[JIT] Cache hit for batched binary with "
+                    << kernels.size() << " sub-kernels" << std::endl;
+#endif
+      return g_jit_cache[kernels];
+    }
+  }
+
+  trace::jit_compile_begin(kernels);
+
+  std::string include_flags = get_include_flags();
+  std::string build_dir = "build/jit";
+  fs::create_directories(build_dir);
+
+  std::vector<std::string> object_files;
+  for (size_t k_idx = 0; k_idx < kernels.size(); ++k_idx) {
+    const auto& sig = kernels[k_idx];
+    std::string obj_path;
+
+    {
+      std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+      if (g_kernel_obj_cache.count(sig)) {
+        obj_path = g_kernel_obj_cache[sig];
+      }
+    }
+
+    if (obj_path.empty()) {
+      std::string hash = hash_signature(sig);
+      std::string c_path = build_dir + "/k_" + hash + ".c";
+      obj_path = build_dir + "/k_" + hash + ".o";
+
+      std::ofstream out(c_path);
+      write_kernel_header(out);
+      write_kernel_function(out, "k_" + hash, sig.first, sig.second);
+      out.close();
+
+      if (!compile_dpu_source(c_path, obj_path, true, include_flags)) {
+        trace::jit_compile_end();
+        exit(1);
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+        g_kernel_obj_cache[sig] = obj_path;
+      }
+    }
+    object_files.push_back(obj_path);
+  }
+
+  static int binary_counter = 0;
+  std::string main_c_path =
+      build_dir + "/main_" + std::to_string(binary_counter++) + ".c";
+  std::string binpath = main_c_path + ".dpu";
+
+  std::ofstream out(main_c_path);
+  write_dpu_main_header(out);
+
+  // extern declarations
+  for (size_t k_idx = 0; k_idx < kernels.size(); ++k_idx) {
+    std::string hash;
+    {
+      std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+      hash = hash_signature(kernels[k_idx]);
+    }
+    out << "extern int k_" << hash << "(void);\n";
+  }
+
+  out << "\nint main() {\n";
+  out << "  switch (args.kernel) {\n";
+  for (size_t k_idx = 0; k_idx < kernels.size(); ++k_idx) {
+    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    out << "    case " << k_idx << ": return k_"
+        << hash_signature(kernels[k_idx]) << "();\n";
+  }
+  out << "    default: return -1;\n";
+  out << "  }\n";
+  out << "}\n";
+  out.close();
+
+  if (!link_dpu_objects(main_c_path, object_files, binpath, include_flags)) {
+    trace::jit_compile_end();
     exit(1);
   }
 
-  #if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[JIT] Compiled kernel to " << binpath << std::endl;
-  #endif
-
-  jit_cache[key] = binpath;
+  {
+    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    g_jit_cache[kernels] = binpath;
+  }
+  trace::jit_compile_end();
   return binpath;
+}
+
+void jit_cleanup() {
+#if DEBUG_KEEP_JIT_DIR
+  return;
+#endif
+  std::string build_dir = "build/jit";
+  if (fs::exists(build_dir)) {
+    fs::remove_all(build_dir);
+  }
 }
 
 #endif
