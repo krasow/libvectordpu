@@ -48,10 +48,8 @@ static void write_kernel_header(std::ofstream& out) {
   out << "#include <stdint.h>\n";
   out << "#include <defs.h>\n";
   out << "#include <mram.h>\n";
+  out << "#include <stdio.h>\n";
   out << "#include \"common.h\"\n\n";
-  out << "extern DPU_LAUNCH_ARGS args;\n";
-  out << "extern uint8_t dpu_workspace[NR_TASKLETS][8 * "
-         "BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n\n";
 }
 
 static void write_dpu_main_header(std::ofstream& out) {
@@ -66,7 +64,9 @@ static void write_dpu_main_header(std::ofstream& out) {
   out << "#include \"common.h\"\n\n";
 
   out << "__host DPU_LAUNCH_ARGS args;\n";
-  out << "BARRIER_INIT(my_barrier, NR_TASKLETS);\n\n";
+  out << "BARRIER_INIT(my_barrier, NR_TASKLETS);\n";
+  out << "uint64_t reduction_scratchpad[NR_TASKLETS] "
+         "__attribute__((aligned(8)));\n\n";
   out << "#define TASKLET_WORKSPACE_SIZE (8 * BLOCK_SIZE * "
          "MINIMUM_WRITE_SIZE)\n";
   out << "__dma_aligned uint8_t "
@@ -77,18 +77,23 @@ static void write_kernel_function(std::ofstream& out,
                                   const std::string& func_name,
                                   const std::vector<uint8_t>& rpn_ops,
                                   const std::string& type_name) {
+  std::string stack_type = type_name;
+
   out << "#include <mram.h>\n";
   out << "#include <defs.h>\n";
+  out << "#include <stdio.h>\n";
   out << "#include <barrier.h>\n";
   out << "#include <string.h>\n";
-  out << "extern barrier_t my_barrier;\n\n";
+  out << "#include \"common.h\"\n";
+  out << "extern barrier_t my_barrier;\n";
+  out << "extern uint64_t reduction_scratchpad[NR_TASKLETS];\n\n";
   out << "int " << func_name << "(void) {\n";
   out << "    unsigned int id = me();\n";
   out << "    uint32_t n = args.num_elements;\n";
-  out << "    " << type_name << " *in_ptr = (" << type_name
-      << " *)(args.pipeline.init_offset);\n";
-  out << "    " << type_name << " *rs_ptr = (" << type_name
-      << " *)(args.pipeline.res_offset);\n\n";
+  out << "    __mram_ptr " << type_name << " *in_ptr = (__mram_ptr "
+      << type_name << " *)(args.pipeline.init_offset);\n";
+  out << "    __mram_ptr " << type_name << " *rs_ptr = (__mram_ptr "
+      << type_name << " *)(args.pipeline.res_offset);\n\n";
 
   // Setup Workspace pointers
   out << "    " << type_name << " *input_blk = (" << type_name
@@ -104,10 +109,13 @@ static void write_kernel_function(std::ofstream& out,
   if (!rpn_ops.empty() && IS_OP_REDUCTION(rpn_ops.back())) {
     is_reduction = true;
     reduction_op = rpn_ops.back();
+#if ENABLE_PROMOTION_REDUCTIONS == 1
+    if (type_name == "int32_t") stack_type = "int64_t";
+#endif
   }
 
   if (is_reduction) {
-    out << "    " << type_name << " acc;\n";
+    out << "    " << stack_type << " acc;\n";
     switch (reduction_op) {
       case OP_SUM:
         out << "    acc = 0;\n";
@@ -116,10 +124,10 @@ static void write_kernel_function(std::ofstream& out,
         out << "    acc = 1;\n";
         break;
       case OP_MIN:
-        out << "    acc = (" << type_name << ")1e9;\n";
+        out << "    acc = (" << stack_type << ")1e9;\n";
         break;
       case OP_MAX:
-        out << "    acc = (" << type_name << ")-1e9;\n";
+        out << "    acc = (" << stack_type << ")-1e9;\n";
         break;
     }
   }
@@ -178,10 +186,10 @@ static void write_kernel_function(std::ofstream& out,
   for (size_t i = 0; i < rpn_ops.size(); ++i) {
     uint8_t op = rpn_ops[i];
     if (op == OP_PUSH_INPUT) {
-      stack.push_back("input_blk[i]");
+      stack.push_back("((" + stack_type + ")input_blk[i])");
     } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
       std::string idx = std::to_string(op - OP_PUSH_OPERAND_0);
-      stack.push_back("op_blks[" + idx + "][i]");
+      stack.push_back("((" + stack_type + ")op_blks[" + idx + "][i])");
     } else if (IS_OP_SCALAR(op)) {
       // Decode scalar
       int32_t val;
@@ -196,20 +204,20 @@ static void write_kernel_function(std::ofstream& out,
       std::string s1 = stack.back();
       stack.pop_back();
       std::string res = get_tmp();
-      out << "            " << type_name << " " << res << " = ";
+      out << "            " << stack_type << " " << res << " = ";
 
       switch (op) {
         case OP_ADD_SCALAR:
-          out << s1 << " + " << scalar_literal << ";\n";
+          out << s1 << " + (" << stack_type << ")" << scalar_literal << ";\n";
           break;
         case OP_SUB_SCALAR:
-          out << s1 << " - " << scalar_literal << ";\n";
+          out << s1 << " - (" << stack_type << ")" << scalar_literal << ";\n";
           break;
         case OP_MUL_SCALAR:
-          out << s1 << " * " << scalar_literal << ";\n";
+          out << s1 << " * (" << stack_type << ")" << scalar_literal << ";\n";
           break;
         case OP_DIV_SCALAR:
-          out << s1 << " / " << scalar_literal << ";\n";
+          out << s1 << " / (" << stack_type << ")" << scalar_literal << ";\n";
           break;
         case OP_ASR_SCALAR:
           out << s1 << " >> " << scalar_literal << ";\n";
@@ -222,10 +230,10 @@ static void write_kernel_function(std::ofstream& out,
       stack.pop_back();
       std::string res = get_tmp();
       if (op == OP_NEGATE) {
-        out << "            " << type_name << " " << res << " = -" << s1
+        out << "            " << stack_type << " " << res << " = -" << s1
             << ";\n";
       } else if (op == OP_ABS) {
-        out << "            " << type_name << " " << res << ";\n";
+        out << "            " << stack_type << " " << res << ";\n";
         out << "            if (" << s1 << " < 0) " << res << " = -" << s1
             << ";\n";
         out << "            else " << res << " = " << s1 << ";\n";
@@ -237,7 +245,7 @@ static void write_kernel_function(std::ofstream& out,
       std::string s1 = stack.back();
       stack.pop_back();
       std::string res = get_tmp();
-      out << "            " << type_name << " " << res << " = ";
+      out << "            " << stack_type << " " << res << " = ";
       switch (op) {
         case OP_ADD:
           out << s1 << " + " << s2 << ";\n";
@@ -294,20 +302,16 @@ static void write_kernel_function(std::ofstream& out,
   // Reduction Writeback (replicated from pipeline.inl)
   if (is_reduction) {
     out << "    // Reduction Writeback\n";
-    out << "    enum { sd = (MINIMUM_WRITE_SIZE / sizeof(" << type_name
+    out << "    enum { sd = (MINIMUM_WRITE_SIZE / sizeof(" << stack_type
         << ")) };\n";
-    out << "    uint64_t bf = 0;\n";
-    out << "    memcpy(&bf, &acc, sizeof(" << type_name << "));\n";
-    out << "    mram_write((void *)&bf, (__mram_ptr uint64_t *)rs_ptr + id, "
-           "MINIMUM_WRITE_SIZE);\n";
+    out << "    uint64_t bf_scratch = 0;\n";
+    out << "    memcpy(&bf_scratch, &acc, sizeof(" << stack_type << "));\n";
+    out << "    reduction_scratchpad[id] = bf_scratch;\n";
     out << "    barrier_wait(&my_barrier);\n";
     out << "    if (id == 0) {\n";
-    out << "        " << type_name << " rb[NR_TASKLETS * sd];\n";
-    out << "        mram_read((__mram_ptr void const *)rs_ptr, rb, NR_TASKLETS "
-           "* MINIMUM_WRITE_SIZE);\n";
-    out << "        " << type_name << " tot = rb[0];\n";
-    out << "        for (i = 1; i < NR_TASKLETS; i++) {\n";
-    out << "          " << type_name << " v = rb[i * sd];\n";
+    out << "        " << stack_type << " tot = (" << stack_type << ")*("<< stack_type << "*)&reduction_scratchpad[0];\n";
+    out << "        for (int i = 1; i < NR_TASKLETS; i++) {\n";
+    out << "          " << stack_type << " v = *(" << stack_type << "*)&reduction_scratchpad[i];\n";
 
     switch (reduction_op) {
       case OP_SUM:
@@ -324,9 +328,9 @@ static void write_kernel_function(std::ofstream& out,
         break;
     }
     out << "        }\n";
-    out << "        bf = 0;\n";
-    out << "        memcpy(&bf, &tot, sizeof(" << type_name << "));\n";
-    out << "        mram_write(&bf, (__mram_ptr void *)rs_ptr, "
+    out << "        " << stack_type << " bf_final = 0;\n";
+    out << "        memcpy(&bf_final, &tot, sizeof(" << stack_type << "));\n";
+    out << "        mram_write(&bf_final, (__mram_ptr void *)rs_ptr, "
            "MINIMUM_WRITE_SIZE);\n";
     out << "    }\n";
   }
@@ -458,7 +462,7 @@ std::string jit_compile(
 
       if (!compile_dpu_source(c_path, obj_path, true, include_flags)) {
         trace::jit_compile_end();
-        exit(1);
+        throw std::runtime_error("JIT Compilation failed for " + c_path);
       }
 
       {
@@ -501,7 +505,7 @@ std::string jit_compile(
 
   if (!link_dpu_objects(main_c_path, object_files, binpath, include_flags)) {
     trace::jit_compile_end();
-    exit(1);
+    throw std::runtime_error("JIT Linking failed for " + binpath);
   }
 
   {
@@ -513,12 +517,17 @@ std::string jit_compile(
 }
 
 void jit_cleanup() {
+  std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
 #if DEBUG_KEEP_JIT_DIR
   return;
 #endif
   std::string build_dir = "build/jit";
   if (fs::exists(build_dir)) {
-    fs::remove_all(build_dir);
+    try {
+      fs::remove_all(build_dir);
+    } catch (...) {
+      // Ignore cleanup errors during shutdown
+    }
   }
 }
 

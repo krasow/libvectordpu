@@ -10,13 +10,7 @@
 #define BLOCK_SIZE_LOG2 6              // 64 elements per block (256 bytes for int32)
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
-#ifdef __dpu__
-#include <config.h>
-extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
-#endif
-
 typedef uint32_t KernelID;
-
 
 enum KernelCategory {
     KERNEL_UNARY = 0,
@@ -68,5 +62,11 @@ typedef struct {
         } pipeline;
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;
+
+#if defined(__dpu__) || defined(__dpu_v1A__)
+#include <config.h>
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
+extern DPU_LAUNCH_ARGS args;
+#endif
 
 #endif // COMMON_H

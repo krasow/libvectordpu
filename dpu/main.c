@@ -11,6 +11,7 @@
 __host DPU_LAUNCH_ARGS args;
 
 BARRIER_INIT(my_barrier, NR_TASKLETS);
+__dma_aligned uint64_t reduction_scratchpad[NR_TASKLETS];
 
 // Shared WRAM workspace for tasklets to avoid stack overflow.
 // Max size: input (1) + operands (3) + stack (4) = 8 blocks.

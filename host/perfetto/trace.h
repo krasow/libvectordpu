@@ -29,8 +29,7 @@ void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
 void jit_compile_begin(
     const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels);
 void jit_compile_end();
-void jit_binary_switch(const std::string& previous,
-                       const std::string& current);
+void jit_binary_switch(const std::string& previous, const std::string& current);
 #else
 inline void internal_reduction_begin(uint64_t flow_id) { (void)flow_id; }
 inline void internal_reduction_end() {}

@@ -57,7 +57,8 @@
   if (count % 100 == 0) {
 #if ENABLE_DPU_LOGGING >= 1
     Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[queue-heartbeat] callback fired (" << count << ") for id=" << me->id << std::endl;
+    logger.lock() << "[queue-heartbeat] callback fired (" << count
+                  << ") for id=" << me->id << std::endl;
 #endif
   }
 
@@ -366,10 +367,11 @@ void EventQueue::process_events(size_t wait_for_id) {
       Logger& logger = DpuRuntime::get().get_logger();
       std::lock_guard<std::mutex> lock(mtx_);
       logger.lock() << "[queue-heartbeat] process_events waiting for "
-                    << wait_for_id << " (last_finished="
-                    << this->get_last_finished_id()
+                    << wait_for_id
+                    << " (last_finished=" << this->get_last_finished_id()
                     << " ops=" << operations_.size()
-                    << " running=" << running_events_.size() << ")" << std::endl;
+                    << " running=" << running_events_.size() << ")"
+                    << std::endl;
 #endif
     }
   }
@@ -447,7 +449,7 @@ void EventQueue::flush_jit_batch() {
     ev->jit_future = future;
   }
 
-  // Clear pending events but KEEP pending_unique_kernels_ (Sticky Mega-Batching)
+  // Clear pending events but KEEP pending_unique_kernels_ 
   pending_jit_events_.clear();
 }
 
@@ -589,12 +591,13 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
           std::vector<uint8_t> e_rpn = e->rpn_ops;
           if (e_rpn.empty()) {
             if (e->is_scalar) {
+              if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
               e_rpn.push_back(e->opcode);
               const uint8_t* p =
                   reinterpret_cast<const uint8_t*>(&e->scalar_value);
               e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
             } else {
-              e_rpn.push_back(OP_PUSH_INPUT);
+              if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
               if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
               e_rpn.push_back(e->opcode);
             }

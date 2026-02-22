@@ -184,7 +184,7 @@ vector<T> dpu_vector<T>::to_cpu() {
 }
 
 template <typename T>
-T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
+typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
   // block and send to cpu
   auto a = da.to_cpu();
 
@@ -198,12 +198,12 @@ T reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
   assert(a.size() % runtime.num_dpus() == 0);
   size_t stride = a.size() / runtime.num_dpus();
   // initialize accumulator with the first partial result
-  T acc = a[0];
+  typename dpu_vector<T>::reduction_result_t acc = a[0];
 
   // reduce over the remaining DPUs
   auto op = kernel_infos[kernel_id].op;
   for (size_t i = stride; i < a.size(); i += stride) {
-    T x = a[i];
+    typename dpu_vector<T>::reduction_result_t x = a[i];
     switch (op) {
       case KERNEL_OP_SUM:
         acc += x;
@@ -574,8 +574,9 @@ pipeline_result<T> dpu_vector<T>::jit(
 
 #if PIPELINE
 template <typename T>
-T dpu_vector<T>::pipeline_reduce(const std::vector<uint8_t>& ops,
-                                 const std::vector<dpu_vector<T>>& operands) {
+typename dpu_vector<T>::reduction_result_t dpu_vector<T>::pipeline_reduce(
+    const std::vector<uint8_t>& ops,
+    const std::vector<dpu_vector<T>>& operands) {
   // A reduction pipeline must return a scalar.
   // We reuse pipeline() but return the aggregated result.
   dpu_vector<T> res = pipeline(ops, operands);
@@ -648,7 +649,7 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
 }
 
 template <typename T>
-T sum(const dpu_vector<T>& a) {
+typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));

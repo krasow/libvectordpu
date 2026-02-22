@@ -33,6 +33,9 @@ PERFETTO_HOME ?= /scratch/david/benchmark-upmem/opt/perfetto
 # this option prevents the automatic removal of the JIT build directory at shutdown
 DEBUG_KEEP_JIT_DIR ?= 0
 
+# if you are overflowing during summation/mul reductions
+ENABLE_PROMOTION_REDUCTIONS ?= 0
+
 # the default compiler on feta supports up to C++17
 # c++20 is needed for some debugging output from std::source_location
 CXX_STANDARD ?= c++17
@@ -128,6 +131,7 @@ reconfigure:
 	@echo "TRACE=$(TRACE)" >> $(CONFIG_STAMP)
 	@echo "PERFETTO_HOME=$(PERFETTO_HOME)" >> $(CONFIG_STAMP)
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

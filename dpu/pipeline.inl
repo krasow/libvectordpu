@@ -23,6 +23,7 @@
                    dpu_workspace[id][(MAX_PIPELINE_OPERANDS + 1) *            \
                                      BLOCK_SIZE * MINIMUM_WRITE_SIZE];        \
                                                                               \
+    int64_t acc_64 = 0;                                                       \
     TYPE acc;                                                                 \
     bool has_r = false;                                                       \
     uint8_t r_op = 0;                                                         \
@@ -53,9 +54,11 @@
     if (has_r) {                                                              \
       switch (r_op) {                                                         \
         case OP_SUM:                                                          \
+          acc_64 = 0;                                                         \
           acc = (TYPE)0;                                                      \
           break;                                                              \
         case OP_PRODUCT:                                                      \
+          acc_64 = 1;                                                         \
           acc = (TYPE)1;                                                      \
           break;                                                              \
         case OP_MIN:                                                          \
@@ -135,7 +138,7 @@
                   dest[i] = (scalar != (TYPE)0) ? s1[i] / scalar : (TYPE)0;   \
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
-                /* Shift only for integers */                                 \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;          \
                 break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
@@ -156,6 +159,7 @@
                   if (scalar != (TYPE)0) s1[i] /= scalar;                     \
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
+                for (i = 0; i < b_e; i++) s1[i] >>= scalar;                   \
                 break;                                                        \
             }                                                                 \
           }                                                                   \
@@ -206,6 +210,7 @@
                   dest[i] = (s1[i] != (TYPE)0) ? s2[i] / s1[i] : (TYPE)0;     \
                 break;                                                        \
               case OP_ASR:                                                    \
+                for (i = 0; i < b_e; i++) dest[i] = s2[i] >> s1[i];           \
                 break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
@@ -226,6 +231,7 @@
                   if (s1[i] != (TYPE)0) s2[i] /= s1[i];                       \
                 break;                                                        \
               case OP_ASR:                                                    \
+                for (i = 0; i < b_e; i++) s2[i] >>= s1[i];                    \
                 break;                                                        \
             }                                                                 \
           }                                                                   \
@@ -233,10 +239,10 @@
           TYPE *s = st_ptr[--sp];                                             \
           switch (op) {                                                       \
             case OP_SUM:                                                      \
-              for (i = 0; i < b_e; i++) acc += s[i];                          \
+              for (i = 0; i < b_e; i++) acc_64 += s[i];                       \
               break;                                                          \
             case OP_PRODUCT:                                                  \
-              for (i = 0; i < b_e; i++) acc *= s[i];                          \
+              for (i = 0; i < b_e; i++) acc_64 *= s[i];                       \
               break;                                                          \
             case OP_MIN:                                                      \
               for (i = 0; i < b_e; i++)                                       \
@@ -255,30 +261,53 @@
     }                                                                         \
                                                                               \
     if (has_r) {                                                              \
+      bool is_sum = (r_op == OP_SUM);                                         \
+      bool is_sum32 = (is_sum && sizeof(TYPE) == 4);                          \
       enum { sd = (MINIMUM_WRITE_SIZE / sizeof(TYPE)) };                      \
       uint64_t bf = 0;                                                        \
-      memcpy(&bf, &acc, sizeof(TYPE));                                        \
-      mram_write((void *)&bf, (__mram_ptr uint64_t *)rs_ptr + id,             \
-                 MINIMUM_WRITE_SIZE);                                         \
+      if (is_sum32) {                                                         \
+        bf = (uint64_t)acc_64;                                                \
+      } else {                                                                \
+        memcpy(&bf, &acc, sizeof(TYPE));                                      \
+      }                                                                       \
+      extern uint64_t reduction_scratchpad[NR_TASKLETS];                      \
+      reduction_scratchpad[id] = bf;                                          \
       barrier_wait(&my_barrier);                                              \
       if (id == 0) {                                                          \
-        TYPE rb[NR_TASKLETS * sd];                                            \
-        mram_read((__mram_ptr void const *)rs_ptr, rb,                        \
-                  NR_TASKLETS *MINIMUM_WRITE_SIZE);                           \
-        TYPE tot = rb[0];                                                     \
-        for (i = 1; i < NR_TASKLETS; i++) {                                   \
-          TYPE v = rb[i * sd];                                                \
-          if (r_op == OP_SUM)                                                 \
-            tot += v;                                                         \
-          else if (r_op == OP_MIN) {                                          \
-            if (v < tot) tot = v;                                             \
-          } else if (r_op == OP_MAX) {                                        \
-            if (v > tot) tot = v;                                             \
-          } else                                                              \
-            tot *= v;                                                         \
+        if (is_sum32) {                                                       \
+          int64_t tot_64 = 0;                                                 \
+          uint32_t i;                                                         \
+          for (i = 0; i < NR_TASKLETS; i++) {                                 \
+            tot_64 += (int64_t)reduction_scratchpad[i];                       \
+          }                                                                   \
+          bf = (uint64_t)tot_64;                                              \
+        } else {                                                              \
+          TYPE res_block_tot[NR_TASKLETS * sd] __attribute__((aligned(8)));   \
+          uint32_t i;                                                         \
+          for (i = 0; i < NR_TASKLETS; i++) {                                 \
+            res_block_tot[i * sd] = *(TYPE *)&reduction_scratchpad[i];        \
+          }                                                                   \
+          TYPE total = res_block_tot[0];                                      \
+          for (i = 1; i < NR_TASKLETS; i++) {                                 \
+            TYPE v = res_block_tot[i * sd];                                   \
+            switch (r_op) {                                                   \
+              case OP_SUM:                                                    \
+                total += v;                                                   \
+                break;                                                        \
+              case OP_PRODUCT:                                                \
+                total *= v;                                                   \
+                break;                                                        \
+              case OP_MIN:                                                    \
+                if (v < total) total = v;                                     \
+                break;                                                        \
+              case OP_MAX:                                                    \
+                if (v > total) total = v;                                     \
+                break;                                                        \
+            }                                                                 \
+          }                                                                   \
+          bf = 0;                                                             \
+          memcpy(&bf, &total, sizeof(TYPE));                                  \
         }                                                                     \
-        bf = 0;                                                               \
-        memcpy(&bf, &tot, sizeof(TYPE));                                      \
         mram_write(&bf, (__mram_ptr void *)rs_ptr, MINIMUM_WRITE_SIZE);       \
       }                                                                       \
     }                                                                         \
