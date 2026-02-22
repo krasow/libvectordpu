@@ -14,11 +14,6 @@ JIT ?= 0
 # this option sets the maximum number of unique kernels to fuse into a single JIT binary
 MAX_JIT_QUEUE_DEPTH ?= 8
 
-# JIT requires pipeline logic to dispatch events correctly
-ifeq ($(JIT),1)
-  PIPELINE := 1
-endif
-
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
 ENABLE_AUTO_FENCING ?= 1
@@ -44,6 +39,11 @@ CXX_STANDARD ?= c++17
 
 ifndef UPMEM_HOME
 $(error UPMEM_HOME is not defined. Please source upmem_env.sh.)
+endif
+
+# JIT requires pipeline logic to dispatch events correctly
+ifeq ($(JIT),1)
+  PIPELINE := 1
 endif
 
 DPU_DIR := dpu
