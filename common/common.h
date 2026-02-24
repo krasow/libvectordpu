@@ -21,10 +21,14 @@ enum KernelCategory {
 
 #include "opcodes.h"
 
-#define MAX_PIPELINE_OPS 16
-#define MAX_PIPELINE_OPERANDS 3
-#define MAX_PIPELINE_STACK_DEPTH 4
+#define MAX_PIPELINE_OPS 32
+#define MAX_PIPELINE_OPERANDS 5
+#define MAX_PIPELINE_STACK_DEPTH 2
 #define MINIMUM_WRITE_SIZE 8
+
+// Shared WRAM workspace for tasklets.
+// Max size: input (1) + operands (MAX_PIPELINE_OPERANDS) + stack (MAX_PIPELINE_STACK_DEPTH)
+#define TASKLET_WORKSPACE_SIZE ((1 + MAX_PIPELINE_OPERANDS + MAX_PIPELINE_STACK_DEPTH) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)
 
 typedef struct {
     uint32_t kernel;       // 4
@@ -63,9 +67,10 @@ typedef struct {
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;
 
-#if defined(__dpu__) || defined(__dpu_v1A__)
 #include <config.h>
-extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE * MINIMUM_WRITE_SIZE];
+
+#if defined(__dpu__) || defined(__dpu_v1A__)
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];
 extern DPU_LAUNCH_ARGS args;
 #endif
 

@@ -13,6 +13,8 @@ PIPELINE ?= 0
 JIT ?= 0
 # this option sets the maximum number of unique kernels to fuse into a single JIT binary
 MAX_JIT_QUEUE_DEPTH ?= 8
+# this option sets the maximum number of operations to look ahead for fusion
+MAX_FUSION_LOOKAHEAD_LENGTH ?= 32
 
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
@@ -132,6 +134,7 @@ reconfigure:
 	@echo "PERFETTO_HOME=$(PERFETTO_HOME)" >> $(CONFIG_STAMP)
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
+	@echo "MAX_FUSION_LOOKAHEAD_LENGTH=$(MAX_FUSION_LOOKAHEAD_LENGTH)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

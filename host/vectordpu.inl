@@ -184,7 +184,8 @@ vector<T> dpu_vector<T>::to_cpu() {
 }
 
 template <typename T>
-typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da, KernelID kernel_id) {
+typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da,
+                                                         KernelID kernel_id) {
   // block and send to cpu
   auto a = da.to_cpu();
 

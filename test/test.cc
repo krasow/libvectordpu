@@ -136,6 +136,46 @@ test_error test_jit_chain() {
 }
 #endif
 
+test_error test_fusion_lookahead() {
+  const uint32_t N = elements;
+  std::cout << "Testing fusion look-ahead..." << std::endl;
+
+  vector<int> a(N), b(N), c(N);
+  for (uint32_t i = 0; i < N; i++) {
+    a[i] = random_value<int>();
+    b[i] = random_value<int>();
+    c[i] = random_value<int>();
+  }
+  dpu_vector<int> da = dpu_vector<int>::from_cpu(a);
+  dpu_vector<int> db = dpu_vector<int>::from_cpu(b);
+  dpu_vector<int> dc = dpu_vector<int>::from_cpu(c);
+
+  // Submit multiple operations that should be fused via look-ahead
+  // res = ((da + db) + dc) + da
+  dpu_vector<int> res1 = da + db;
+  dpu_vector<int> res2 = res1 + dc;
+  dpu_vector<int> res3 = res2 + da;
+
+  // Compute same operations on CPU
+  vector<int> cpu_res(N);
+  for (uint32_t i = 0; i < N; i++) {
+    cpu_res[i] = ((a[i] + b[i]) + c[i]) + a[i];
+  }
+
+  // Transfer back and compare
+  vector<int> final_res = res3.to_cpu();
+
+  for (uint32_t i = 0; i < N; i++) {
+    if (final_res[i] != cpu_res[i]) {
+      std::cerr << "Mismatch at " << i << ": valid=" << cpu_res[i]
+                << " dpu=" << final_res[i] << std::endl;
+      return TEST_ERROR;
+    }
+  }
+
+  return TEST_SUCCESS;
+}
+
 #if JIT
 int test_jit_caching() {
   printf("Testing JIT caching...\n");
@@ -175,6 +215,7 @@ int main(void) {
   RUN_TEST(test_int_abs);
   RUN_TEST(test_chained_operations);
   RUN_TEST(test_int_sum_reduction);
+  RUN_TEST(test_fusion_lookahead);
 #if JIT
   RUN_TEST(test_jit_chain);
   RUN_TEST(test_jit_caching);

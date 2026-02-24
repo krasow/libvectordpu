@@ -39,13 +39,10 @@ class Event : public std::enable_shared_from_this<Event> {
   int jit_sub_kernel_idx = -1;
   std::shared_future<std::string> jit_future;
 
-  std::variant<std::monostate, detail::VectorDescRef> res;
-
-  Event(OperationType t) : op(t), res(std::monostate()) {}
+  Event(OperationType t) : op(t) {}
 
   template <typename Callable>
-  Event(OperationType t, Callable&& c)
-      : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
+  Event(OperationType t, Callable&& c) : op(t), cb(std::forward<Callable>(c)) {}
 
   size_t id = 0;
   std::string slice_name;
@@ -66,6 +63,7 @@ class EventQueue {
   EventQueue() = default;
   ~EventQueue() = default;
 
+  bool try_fuse(std::shared_ptr<Event> last, std::shared_ptr<Event> e);
   void lock_for_jit(std::shared_ptr<Event> e);
   void flush_jit_batch();
 
@@ -79,6 +77,7 @@ class EventQueue {
   void process_events(size_t wait_for_id);
   void debug_print_queue();
   void debug_active_events();
+  size_t count_internal_references(detail::VectorDescRef vec);
 
   bool has_pending() const { return !operations_.empty(); }
   std::size_t pending_count() const { return operations_.size(); }

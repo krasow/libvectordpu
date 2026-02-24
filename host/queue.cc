@@ -7,6 +7,7 @@
 
 #include "jit.h"
 #include "opinfo.h"
+#include "perfetto/trace.h"
 #include "perfetto/trace_internal.h"
 #include "runtime.h"
 #include "vectordpu.h"
@@ -140,7 +141,9 @@ bool EventQueue::process_next() {
                     << std::endl;
     }
 #endif
+#if ENABLE_DPU_LOGGING >= 1
     size_t loop_count = 0;
+#endif
     while (this->get_last_finished_id() < max_dep) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
 #if ENABLE_DPU_LOGGING >= 1
@@ -154,41 +157,49 @@ bool EventQueue::process_next() {
     }
   }
 
+  // 1. Initial Naming (Base)
   if (e->slice_name.empty()) {
     e->slice_name = operationtype_to_string(e->op);
-    if (e->op == Event::OperationType::COMPUTE) {
-      e->slice_name = kernel_id_to_string(e->kid);
-      if (!e->rpn_ops.empty()) {
-        e->slice_name += " (Fused)";
-      }
-    }
   }
 
+  // 2. Fusion and JIT Locking
   {
     std::lock_guard<std::mutex> lock(mtx_);
-    if (running_events_.empty()) {
-      trace::execution_begin(e);
-    }
-    running_events_.push_back(e);
-    current_event_ = e;
 
-    trace::active_ops_counter(running_events_.size());
-  }
+    // Look-ahead fusion
+#if PIPELINE
+    if (e->op == Event::OperationType::COMPUTE) {
+      size_t lookahead_count = 0;
+      while (lookahead_count < MAX_FUSION_LOOKAHEAD_LENGTH &&
+             !operations_.empty()) {
+        auto next = operations_.front();
+        if (next->op != Event::OperationType::COMPUTE) break;
+
+        if (try_fuse(e, next)) {
+          operations_.pop_front();
+          lookahead_count++;
+#if ENABLE_DPU_LOGGING >= 1
+          logger.lock() << "[queue-fuse] Look-ahead fused event id=" << next->id
+                        << " into id=" << e->id << std::endl;
+#endif
+        } else {
+          break;
+        }
+
+        if (operations_.empty()) {
+          std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+      }
+    }
+#endif
 
 #if JIT
-  if (e->op == Event::OperationType::COMPUTE && MAX_JIT_QUEUE_DEPTH > 0) {
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
+    if (e->op == Event::OperationType::COMPUTE && MAX_JIT_QUEUE_DEPTH > 0) {
       if (!e->is_locked_for_jit) {
         lock_for_jit(e);
       }
 
-      // Opportunistic batching: if we are about to flush, try to pull more
-      // compute events from the queue first.
       if (!e->jit_future.valid()) {
-        // If the queue is empty, give the submitter a tiny bit of time to add
-        // more compute events so we can mega-batch them. 200us is negligible
-        // compared to JIT compilation time (~100ms+) but enough to catch a loop.
         if (operations_.empty()) {
           std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
@@ -198,29 +209,68 @@ bool EventQueue::process_next() {
                it != operations_.end()) {
           auto next = *it;
           if (next->op != Event::OperationType::COMPUTE) break;
-
           lock_for_jit(next);
           if (e->jit_future.valid()) break;
           ++it;
         }
 
-        // Final flush if still not valid
         if (!e->jit_future.valid()) {
           flush_jit_batch();
         }
       }
     }
-    // Await background compilation
-    if (e->jit_future.valid()) {
-#if ENABLE_DPU_LOGGING >= 1
-      Logger& logger = DpuRuntime::get().get_logger();
-      logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
-                    << e->id << std::endl;
 #endif
-      e->jit_binary_path = e->jit_future.get();
-    }
+  }
+
+  // 3. JIT Wait (Outside mutex)
+#if JIT
+  if (e->op == Event::OperationType::COMPUTE && e->jit_future.valid()) {
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
+                  << e->id << std::endl;
+#endif
+    e->jit_binary_path = e->jit_future.get();
   }
 #endif
+
+  // 4. Refined Naming
+  if (e->op == Event::OperationType::COMPUTE) {
+    if (!e->rpn_ops.empty()) {
+      std::string ops_list;
+      for (size_t i = 0; i < e->rpn_ops.size(); ++i) {
+        uint8_t op = e->rpn_ops[i];
+        std::string s = opcode_to_string(op);
+        if (s.empty()) continue;
+        if (!ops_list.empty()) ops_list += ", ";
+        ops_list += s;
+        if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+      }
+      e->slice_name =
+          e->rpn_ops.size() > 2 ? "Fused: [" + ops_list + "]" : ops_list;
+    } else {
+      e->slice_name = kernel_id_to_string(e->kid);
+    }
+
+    if (!e->jit_binary_path.empty()) {
+      e->slice_name += " (from " + e->jit_binary_path + ")";
+    }
+  }
+
+#if ENABLE_DPU_LOGGING >= 1
+  logger.lock() << "[queue-exec] id=" << e->id << " name=\"" << e->slice_name
+                << "\"" << std::endl;
+#endif
+
+  // 5. Register with running events and start trace
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (running_events_.empty()) {
+      trace::execution_begin(e);
+    }
+    running_events_.push_back(e);
+    current_event_ = e;
+    trace::active_ops_counter(running_events_.size());
+  }
 
   // JIT Binary Handling
   std::string required_binary;
@@ -449,7 +499,7 @@ void EventQueue::flush_jit_batch() {
     ev->jit_future = future;
   }
 
-  // Clear pending events but KEEP pending_unique_kernels_ 
+  // Clear pending events but KEEP pending_unique_kernels_
   pending_jit_events_.clear();
 }
 
@@ -523,11 +573,232 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   pending_unique_kernels_.push_back(signature);
   pending_jit_events_.push_back(e);
 
-  // 5. Automatic flush when adding a new signature to ensure its future is
-  // available to following logic.
-  flush_jit_batch();
+  // 5. No automatic flush here to allow batching.
 }
 #endif
+
+bool EventQueue::try_fuse(std::shared_ptr<Event> last,
+                          std::shared_ptr<Event> e) {
+#if PIPELINE
+  if (last->op != Event::OperationType::COMPUTE ||
+      e->op != Event::OperationType::COMPUTE || last->output == nullptr) {
+    return false;
+  }
+
+  // Prevent fusion if already locked for JIT (signature is fixed)
+  if (last->is_locked_for_jit || e->is_locked_for_jit) {
+    return false;
+  }
+
+  // Prevent fusion if last is a reduction (must be the final op)
+  if (!last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back())) {
+    return false;
+  }
+
+  // Look for dependency: does any input of 'e' match 'last->output'?
+  bool dependent = false;
+  for (size_t i = 0; i < e->inputs.size(); ++i) {
+    if (e->inputs[i] == last->output) {
+      dependent = true;
+      break;
+    }
+  }
+
+  if (!dependent) return false;
+
+  // Safety check: if last->output is used by more than just (last, e),
+  // we must materialize it to MRAM for other consumers.
+  // shared_ptr use_count:
+  // 1: last->output
+  // 2: whoever else (user code, or another event in the queue)
+  // Each matching input in 'e' also holds a reference.
+  // So we count how many times 'last->output' appears in 'e->inputs'.
+  size_t internal_refs = 1;  // last->output
+  for (const auto& in : e->inputs) {
+    if (in == last->output) internal_refs++;
+  }
+
+  // Count references within the whole library's internal state
+  size_t lib_refs = count_internal_references(last->output);
+  // Add reference from 'e' which is not yet in the queue
+  for (const auto& in : e->inputs) {
+    if (in == last->output) lib_refs++;
+  }
+
+  // Safety check: if lib_refs > internal_refs, it means SOME OTHER event in the
+  // queue or JIT pending list also needs this vector as input/output.
+  if (lib_refs > internal_refs) {
+    return false;
+  }
+
+  if (last->output.use_count() > (long)lib_refs * 2 + 3) {
+    return false;
+  }
+  // 1. Total ops <= MAX_PIPELINE_OPS
+  // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
+
+  // Promote 'last' RPN if needed to estimate new size
+  std::vector<uint8_t> last_rpn = last->rpn_ops;
+  if (last_rpn.empty()) {
+    if (last->is_scalar) {
+      last_rpn.push_back(OP_PUSH_INPUT);
+      last_rpn.push_back(last->opcode);
+      const uint8_t* p = reinterpret_cast<const uint8_t*>(&last->scalar_value);
+      last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
+    } else {
+      last_rpn.push_back(OP_PUSH_INPUT);
+      if (last->inputs.size() > 1) last_rpn.push_back(OP_PUSH_OPERAND_0);
+      last_rpn.push_back(last->opcode);
+    }
+  }
+
+  // Promote 'e' RPN if needed
+  std::vector<uint8_t> e_rpn = e->rpn_ops;
+  if (e_rpn.empty()) {
+    if (e->is_scalar) {
+      if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
+      e_rpn.push_back(e->opcode);
+      const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
+      e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
+    } else {
+      if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
+      if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
+      e_rpn.push_back(e->opcode);
+    }
+  }
+
+  std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
+  auto get_operand_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
+    if (vec == last->output) return 0;  // Already on stack
+    if (combined_inputs.empty()) {
+      combined_inputs.push_back(vec);
+      return OP_PUSH_INPUT;
+    }
+    if (vec == combined_inputs[0]) return OP_PUSH_INPUT;
+    for (size_t i = 1; i < combined_inputs.size(); ++i) {
+      if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
+    }
+    if (combined_inputs.size() < MAX_PIPELINE_OPERANDS + 1) {
+      combined_inputs.push_back(vec);
+      return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
+    }
+    return 0xFF;  // Too many unique operands
+  };
+
+  std::vector<uint8_t> e_rpn_mapped;
+  bool possible = true;
+  for (size_t k = 0; k < e_rpn.size(); ++k) {
+    uint8_t op = e_rpn[k];
+    if (IS_OP_SCALAR(op)) {
+      e_rpn_mapped.push_back(op);
+      for (int m = 0; m < 4; ++m) {
+        if (++k < e_rpn.size()) e_rpn_mapped.push_back(e_rpn[k]);
+      }
+    } else if (op == OP_PUSH_INPUT) {
+      uint8_t push_op = get_operand_push_op(e->inputs[0]);
+      if (push_op == 0xFF) {
+        possible = false;
+        break;
+      }
+      if (push_op != 0) e_rpn_mapped.push_back(push_op);
+    } else if (op >= OP_PUSH_OPERAND_0 &&
+               op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
+      uint32_t orig_idx = op - OP_PUSH_OPERAND_0;
+      uint8_t push_op = get_operand_push_op(e->inputs[orig_idx + 1]);
+      if (push_op == 0xFF) {
+        possible = false;
+        break;
+      }
+      if (push_op != 0) e_rpn_mapped.push_back(push_op);
+    } else {
+      e_rpn_mapped.push_back(op);
+    }
+  }
+
+  if (possible && (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) {
+    possible = false;
+  }
+
+  if (possible) {
+    if (last->rpn_ops.empty()) {
+      last->rpn_ops = last_rpn;
+      last->kid = last->pipeline_kid;
+    }
+    last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
+                         e_rpn_mapped.end());
+    last->inputs = combined_inputs;
+    last->output = e->output;
+    last->max_id = std::max(last->max_id, e->id);
+
+    // Update dependencies for fused event
+    for (const auto& in : e->inputs) {
+      if (in && in->last_producer_id != 0 && in->last_producer_id != last->id) {
+        last->dependencies.insert(in->last_producer_id);
+      }
+    }
+    // Update last producer for the NEW output
+    if (last->output) {
+      last->output->last_producer_id = last->id;
+    }
+
+    // Build descriptive slice name for fused event
+    std::string ops_list;
+    for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
+      uint8_t op = last->rpn_ops[i];
+      std::string s = opcode_to_string(op);
+      if (s.empty()) continue;
+      if (!ops_list.empty()) ops_list += ", ";
+      ops_list += s;
+      if (IS_OP_SCALAR(op)) {
+        i += sizeof(uint32_t);
+      }
+    }
+    last->slice_name = "Fused: [" + ops_list + "]";
+
+#if ENABLE_DPU_LOGGING >= 1
+    Logger& logger = DpuRuntime::get().get_logger();
+    logger.lock() << "[queue-fuse] fused event id=" << e->id
+                  << " into last=" << last->id
+                  << " new_ops_count=" << last->rpn_ops.size() << std::endl;
+#endif
+    std::string fused_ops;
+    for (size_t i = 0; i < e_rpn_mapped.size(); ++i) {
+      uint8_t op = e_rpn_mapped[i];
+      std::string s = opcode_to_string(op);
+      if (s.empty()) continue;
+      if (!fused_ops.empty()) fused_ops += ", ";
+      fused_ops += s;
+      if (IS_OP_SCALAR(op)) {
+        i += sizeof(uint32_t);
+      }
+    }
+
+    trace::event_fused(e, last, fused_ops);
+    trace::inqueue_end(e);
+    return true;
+  }
+#endif
+  return false;
+}
+
+size_t EventQueue::count_internal_references(detail::VectorDescRef vec) {
+  if (!vec) return 0;
+  size_t count = 0;
+  auto count_in_event = [&](std::shared_ptr<Event> ev) {
+    if (!ev) return;
+    if (ev->output == vec) count++;
+    for (const auto& in : ev->inputs) {
+      if (in == vec) count++;
+    }
+  };
+
+  if (current_event_) count_in_event(current_event_);
+  for (auto& ev : operations_) count_in_event(ev);
+  for (auto& ev : running_events_) count_in_event(ev);
+  for (auto& ev : pending_jit_events_) count_in_event(ev);
+
+  return count;
+}
 
 void EventQueue::submit(std::shared_ptr<Event> e) {
   std::lock_guard<std::mutex> lock(mtx_);
@@ -554,184 +825,32 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
     auto last = operations_.back();
-    if (last->op == Event::OperationType::COMPUTE && last->output != nullptr) {
-      // Look for dependency: does any input of 'e' match 'last->output'?
-      bool dependent = false;
-      for (size_t i = 0; i < e->inputs.size(); ++i) {
-        if (e->inputs[i] == last->output) {
-          dependent = true;
-          break;
-        }
-      }
-
-      if (dependent) {
-        // Check fusion constraints:
-        // 1. Total ops <= MAX_PIPELINE_OPS
-        // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
-        if (dependent) {
-          // Promote 'last' RPN if needed to estimate new size
-          // Promote 'last' RPN if needed to estimate new size
-          std::vector<uint8_t> last_rpn = last->rpn_ops;
-          if (last_rpn.empty()) {
-            if (last->is_scalar) {
-              last_rpn.push_back(OP_PUSH_INPUT);
-              last_rpn.push_back(last->opcode);
-              const uint8_t* p =
-                  reinterpret_cast<const uint8_t*>(&last->scalar_value);
-              last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
-            } else {
-              last_rpn.push_back(OP_PUSH_INPUT);
-              if (last->inputs.size() > 1)
-                last_rpn.push_back(OP_PUSH_OPERAND_0);
-              last_rpn.push_back(last->opcode);
-            }
-          }
-
-          // Promote 'e' RPN if needed
-          std::vector<uint8_t> e_rpn = e->rpn_ops;
-          if (e_rpn.empty()) {
-            if (e->is_scalar) {
-              if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
-              e_rpn.push_back(e->opcode);
-              const uint8_t* p =
-                  reinterpret_cast<const uint8_t*>(&e->scalar_value);
-              e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
-            } else {
-              if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
-              if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
-              e_rpn.push_back(e->opcode);
-            }
-          }
-
-          std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
-          auto get_operand_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
-            if (vec == last->output) return 0;  // Already on stack
-            if (vec == combined_inputs[0]) return OP_PUSH_INPUT;
-            for (size_t i = 1; i < combined_inputs.size(); ++i) {
-              if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
-            }
-            if (combined_inputs.size() < MAX_PIPELINE_OPERANDS + 1) {
-              combined_inputs.push_back(vec);
-              return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
-            }
-            return 0xFF;  // Too many unique operands
-          };
-
-          std::vector<uint8_t> e_rpn_mapped;
-          bool possible = true;
-          for (size_t k = 0; k < e_rpn.size(); ++k) {
-            uint8_t op = e_rpn[k];
-            if (IS_OP_SCALAR(op)) {
-              e_rpn_mapped.push_back(op);
-              for (int m = 0; m < 4; ++m) {
-                if (++k < e_rpn.size()) e_rpn_mapped.push_back(e_rpn[k]);
-              }
-            } else if (op == OP_PUSH_INPUT) {
-              uint8_t push_op = get_operand_push_op(e->inputs[0]);
-              if (push_op == 0xFF) {
-                possible = false;
-                break;
-              }
-              if (push_op != 0) e_rpn_mapped.push_back(push_op);
-            } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
-              uint32_t orig_idx = op - OP_PUSH_OPERAND_0;
-              uint8_t push_op = get_operand_push_op(e->inputs[orig_idx + 1]);
-              if (push_op == 0xFF) {
-                possible = false;
-                break;
-              }
-              if (push_op != 0) e_rpn_mapped.push_back(push_op);
-            } else {
-              e_rpn_mapped.push_back(op);
-            }
-          }
-
-          if (possible &&
-              (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) {
-            possible = false;
-          }
-
-          if (possible) {
-            if (last->rpn_ops.empty()) {
-              last->rpn_ops = last_rpn;
-              last->kid = last->pipeline_kid;
-            }
-            last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
-                                 e_rpn_mapped.end());
-            last->inputs = combined_inputs;
-            last->output = e->output;
-            last->max_id = std::max(last->max_id, e->id);
-            fused = true;
-
-            // Update dependencies for fused event
-            for (const auto& in : e->inputs) {
-              if (in && in->last_producer_id != 0 &&
-                  in->last_producer_id != last->id) {
-                last->dependencies.insert(in->last_producer_id);
-              }
-            }
-            // Update last producer for the NEW output
-            if (last->output) {
-              last->output->last_producer_id = last->id;
-            }
-
-            // Build descriptive slice name for fused event
-            std::string ops_list;
-            for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
-              uint8_t op = last->rpn_ops[i];
-              std::string s = opcode_to_string(op);
-              if (s.empty()) continue;
-              if (!ops_list.empty()) ops_list += ", ";
-              ops_list += s;
-              if (IS_OP_SCALAR(op)) {
-                i += sizeof(uint32_t);
-              }
-            }
-            last->slice_name = "Fused: [" + ops_list + "]";
-
-#if ENABLE_DPU_LOGGING >= 1
-            Logger& logger = DpuRuntime::get().get_logger();
-            logger.lock() << "[queue-fuse] fused event id=" << e->id
-                          << " into last=" << last->id
-                          << " new_ops_count=" << last->rpn_ops.size()
-                          << std::endl;
-#endif
-            std::string fused_ops;
-            for (size_t i = 0; i < e_rpn_mapped.size(); ++i) {
-              uint8_t op = e_rpn_mapped[i];
-              std::string s = opcode_to_string(op);
-              if (s.empty()) continue;
-              if (!fused_ops.empty()) fused_ops += ", ";
-              fused_ops += s;
-              if (IS_OP_SCALAR(op)) {
-                i += sizeof(uint32_t);
-              }
-            }
-
-            trace::event_fused(e, last, fused_ops);
-            trace::inqueue_end(e);
-          }
-        }
-      }
+    if (try_fuse(last, e)) {
+      fused = true;
     }
   }
 #endif
 
   if (!fused) {
 #if JIT
-    // Lock the previous event for JIT since it won't be fused into anymore
-    if (!operations_.empty()) {
-      auto last = operations_.back();
-      if (last->op == Event::OperationType::COMPUTE &&
-          !last->is_locked_for_jit) {
-        lock_for_jit(last);
+    // If this is a pipeline breaker (reduction or non-compute), lock everything
+    if (e->op != Event::OperationType::COMPUTE ||
+        (IS_OP_REDUCTION(e->opcode) && !e->is_scalar)) {
+      bool any_locked = false;
+      for (auto& op : operations_) {
+        if (op->op == Event::OperationType::COMPUTE && !op->is_locked_for_jit) {
+          lock_for_jit(op);
+          any_locked = true;
+        }
+      }
+      if (any_locked) {
+        flush_jit_batch();
       }
     }
-    // Automatically promote all single compute events to batched kernels to
-    // avoid binary thrashing
+    // Automatically promote all single compute events to batched kernels
     if (e->op == Event::OperationType::COMPUTE && e->rpn_ops.empty() &&
         MAX_JIT_QUEUE_DEPTH > 0) {
-      e->kid = e->pipeline_kid;  // Ensure it behaves like a pipeline payload
+      e->kid = e->pipeline_kid;
     }
 #endif
     // Identify producers for all inputs

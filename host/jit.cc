@@ -67,8 +67,6 @@ static void write_dpu_main_header(std::ofstream& out) {
   out << "BARRIER_INIT(my_barrier, NR_TASKLETS);\n";
   out << "uint64_t reduction_scratchpad[NR_TASKLETS] "
          "__attribute__((aligned(8)));\n\n";
-  out << "#define TASKLET_WORKSPACE_SIZE (8 * BLOCK_SIZE * "
-         "MINIMUM_WRITE_SIZE)\n";
   out << "__dma_aligned uint8_t "
          "dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];\n\n";
 }
@@ -158,7 +156,7 @@ static void write_kernel_function(std::ofstream& out,
     out << "        mram_read((__mram_ptr void const *)(in_ptr + blk), "
            "input_blk, b_b);\n";
   }
-  for (int k = 0; k < 3; k++) {  // Max 3 operands per design
+  for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {
     if (uses_op[k]) {
       out << "        {\n";
       out << "            __mram_ptr " << type_name << " *p = (__mram_ptr "
@@ -309,9 +307,11 @@ static void write_kernel_function(std::ofstream& out,
     out << "    reduction_scratchpad[id] = bf_scratch;\n";
     out << "    barrier_wait(&my_barrier);\n";
     out << "    if (id == 0) {\n";
-    out << "        " << stack_type << " tot = (" << stack_type << ")*("<< stack_type << "*)&reduction_scratchpad[0];\n";
+    out << "        " << stack_type << " tot = (" << stack_type << ")*("
+        << stack_type << "*)&reduction_scratchpad[0];\n";
     out << "        for (int i = 1; i < NR_TASKLETS; i++) {\n";
-    out << "          " << stack_type << " v = *(" << stack_type << "*)&reduction_scratchpad[i];\n";
+    out << "          " << stack_type << " v = *(" << stack_type
+        << "*)&reduction_scratchpad[i];\n";
 
     switch (reduction_op) {
       case OP_SUM:

@@ -295,7 +295,6 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
@@ -323,7 +322,6 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
   e->output = res;
   e->rpn_ops = ops;
   e->kid = kernel_id;
-  e->res = res;
 
   // Detect reduction and flag result descriptor synchronously
   for (uint8_t op : ops) {
@@ -360,7 +358,6 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
@@ -392,8 +389,6 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
-  e->res = res;
   e->is_scalar = true;
   e->scalar_value = scalar;
   event_queue.submit(e);
@@ -429,7 +424,6 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
