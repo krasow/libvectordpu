@@ -162,7 +162,8 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
 
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
-    const std::vector<VectorDescRef>& operands, KernelID kernel_id);
+    const std::vector<VectorDescRef>& operands, KernelID kernel_id,
+    const std::vector<uint32_t>& scalars);
 #endif
 }  // namespace detail
 

@@ -7,7 +7,7 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 6              // 64 elements per block (256 bytes for int32)
+#define BLOCK_SIZE_LOG2 5              // 32 elements per block
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
 typedef uint32_t KernelID;
@@ -22,7 +22,7 @@ enum KernelCategory {
 #include "opcodes.h"
 
 #define MAX_PIPELINE_OPS 32
-#define MAX_PIPELINE_OPERANDS 5
+#define MAX_PIPELINE_OPERANDS 3
 #define MAX_PIPELINE_STACK_DEPTH 2
 #define MINIMUM_WRITE_SIZE 8
 
@@ -63,6 +63,7 @@ typedef struct {
             uint32_t num_ops;
             uint8_t ops[MAX_PIPELINE_OPS];          // Fixed size buffer for opcodes
             uint32_t binary_operands[MAX_PIPELINE_OPERANDS]; // Offsets for binary operands
+            uint32_t scalars[8]; // Scalar values for scalar operators
         } pipeline;
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;

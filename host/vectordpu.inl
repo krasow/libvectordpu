@@ -296,8 +296,10 @@ dpu_vector<T>& dpu_vector<T>::operator/=(const dpu_vector<T>& other) {
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator+=(T scalar) {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               static_cast<uint32_t>(scalar),
+                               scalar_bits,
                                OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
@@ -305,8 +307,10 @@ dpu_vector<T>& dpu_vector<T>::operator+=(T scalar) {
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator-=(T scalar) {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               static_cast<uint32_t>(scalar),
+                               scalar_bits,
                                OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
@@ -314,8 +318,10 @@ dpu_vector<T>& dpu_vector<T>::operator-=(T scalar) {
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator*=(T scalar) {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               static_cast<uint32_t>(scalar),
+                               scalar_bits,
                                OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
@@ -323,8 +329,10 @@ dpu_vector<T>& dpu_vector<T>::operator*=(T scalar) {
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator/=(T scalar) {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               static_cast<uint32_t>(scalar),
+                               scalar_bits,
                                OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
@@ -332,8 +340,10 @@ dpu_vector<T>& dpu_vector<T>::operator/=(T scalar) {
 
 template <typename T>
 dpu_vector<T>& dpu_vector<T>::operator>>=(T scalar) {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               static_cast<uint32_t>(scalar),
+                               scalar_bits,
                                OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;

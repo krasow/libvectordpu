@@ -12,6 +12,19 @@
 #include "runtime.h"
 #include "vectordpu.h"
 
+#if PIPELINE
+static uint8_t map_to_var_op(uint8_t op) {
+  switch (op) {
+    case OP_ADD_SCALAR: return OP_ADD_SCALAR_VAR;
+    case OP_SUB_SCALAR: return OP_SUB_SCALAR_VAR;
+    case OP_MUL_SCALAR: return OP_MUL_SCALAR_VAR;
+    case OP_DIV_SCALAR: return OP_DIV_SCALAR_VAR;
+    case OP_ASR_SCALAR: return OP_ASR_SCALAR_VAR;
+    default: return op;
+  }
+}
+#endif
+
 #ifndef DPURT
 #define DPURT
 #include <dpu>  // UPMEM rt syslib
@@ -244,6 +257,7 @@ bool EventQueue::process_next() {
         if (!ops_list.empty()) ops_list += ", ";
         ops_list += s;
         if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+        else if (IS_OP_SCALAR_VAR(op)) i += 1;
       }
       e->slice_name =
           e->rpn_ops.size() > 2 ? "Fused: [" + ops_list + "]" : ops_list;
@@ -344,7 +358,7 @@ bool EventQueue::process_next() {
                    ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
                                                         e->inputs.end())
                    : std::vector<detail::VectorDescRef>()),
-              dynamic_kid);
+              dynamic_kid, e->scalars);
         } else if (e->cb) {
           e->cb();
         }
@@ -514,9 +528,9 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   if (e->rpn_ops.empty()) {
     if (e->is_scalar) {
       e->rpn_ops.push_back(OP_PUSH_INPUT);
-      e->rpn_ops.push_back(e->opcode);
-      const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
-      e->rpn_ops.insert(e->rpn_ops.end(), p, p + sizeof(uint32_t));
+      e->rpn_ops.push_back(map_to_var_op(e->opcode));
+      e->rpn_ops.push_back(0); // placeholder index
+      e->scalars.push_back(e->scalar_value);
     } else {
       e->rpn_ops.push_back(OP_PUSH_INPUT);
       if (e->inputs.size() > 1) {
@@ -558,6 +572,10 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     // Found a match in the current batch!
     e->jit_sub_kernel_idx = idx;
     pending_jit_events_.push_back(e);
+    // Flush if we accumulated enough total events
+    if (pending_jit_events_.size() >= MAX_JIT_QUEUE_DEPTH) {
+      flush_jit_batch();
+    }
     return;
   }
 
@@ -572,6 +590,10 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   e->jit_sub_kernel_idx = pending_unique_kernels_.size();
   pending_unique_kernels_.push_back(signature);
   pending_jit_events_.push_back(e);
+
+  if (pending_jit_events_.size() >= MAX_JIT_QUEUE_DEPTH) {
+    flush_jit_batch();
+  }
 
   // 5. No automatic flush here to allow batching.
 }
@@ -642,9 +664,8 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (last_rpn.empty()) {
     if (last->is_scalar) {
       last_rpn.push_back(OP_PUSH_INPUT);
-      last_rpn.push_back(last->opcode);
-      const uint8_t* p = reinterpret_cast<const uint8_t*>(&last->scalar_value);
-      last_rpn.insert(last_rpn.end(), p, p + sizeof(uint32_t));
+      last_rpn.push_back(map_to_var_op(last->opcode));
+      last_rpn.push_back(0); // placeholder index
     } else {
       last_rpn.push_back(OP_PUSH_INPUT);
       if (last->inputs.size() > 1) last_rpn.push_back(OP_PUSH_OPERAND_0);
@@ -657,9 +678,8 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (e_rpn.empty()) {
     if (e->is_scalar) {
       if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
-      e_rpn.push_back(e->opcode);
-      const uint8_t* p = reinterpret_cast<const uint8_t*>(&e->scalar_value);
-      e_rpn.insert(e_rpn.end(), p, p + sizeof(uint32_t));
+      e_rpn.push_back(map_to_var_op(e->opcode));
+      e_rpn.push_back(0); // placeholder index
     } else {
       if (!e->inputs.empty()) e_rpn.push_back(OP_PUSH_INPUT);
       if (e->inputs.size() > 1) e_rpn.push_back(OP_PUSH_OPERAND_0);
@@ -687,12 +707,18 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
 
   std::vector<uint8_t> e_rpn_mapped;
   bool possible = true;
+  size_t last_scalars_size = last->rpn_ops.empty() && last->is_scalar ? 1 : last->scalars.size();
   for (size_t k = 0; k < e_rpn.size(); ++k) {
     uint8_t op = e_rpn[k];
     if (IS_OP_SCALAR(op)) {
       e_rpn_mapped.push_back(op);
       for (int m = 0; m < 4; ++m) {
         if (++k < e_rpn.size()) e_rpn_mapped.push_back(e_rpn[k]);
+      }
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      e_rpn_mapped.push_back(op);
+      if (++k < e_rpn.size()) {
+        e_rpn_mapped.push_back(last_scalars_size + e_rpn[k]);
       }
     } else if (op == OP_PUSH_INPUT) {
       uint8_t push_op = get_operand_push_op(e->inputs[0]);
@@ -723,9 +749,12 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     if (last->rpn_ops.empty()) {
       last->rpn_ops = last_rpn;
       last->kid = last->pipeline_kid;
+      if (last->is_scalar) last->scalars.push_back(last->scalar_value);
     }
     last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
                          e_rpn_mapped.end());
+    if (e->is_scalar) last->scalars.push_back(e->scalar_value);
+    else last->scalars.insert(last->scalars.end(), e->scalars.begin(), e->scalars.end());
     last->inputs = combined_inputs;
     last->output = e->output;
     last->max_id = std::max(last->max_id, e->id);
@@ -751,6 +780,8 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       ops_list += s;
       if (IS_OP_SCALAR(op)) {
         i += sizeof(uint32_t);
+      } else if (IS_OP_SCALAR_VAR(op)) {
+        i += 1;
       }
     }
     last->slice_name = "Fused: [" + ops_list + "]";
@@ -770,6 +801,8 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       fused_ops += s;
       if (IS_OP_SCALAR(op)) {
         i += sizeof(uint32_t);
+      } else if (IS_OP_SCALAR_VAR(op)) {
+        i += 1;
       }
     }
 

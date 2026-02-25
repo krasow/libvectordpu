@@ -218,7 +218,8 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 // Redefine signatures to include KernelID
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
-    const std::vector<VectorDescRef>& operands, KernelID kernel_id) {
+    const std::vector<VectorDescRef>& operands, KernelID kernel_id,
+    const std::vector<uint32_t>& scalars) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
@@ -254,6 +255,15 @@ void internal_launch_universal_pipeline(
         args[i].pipeline.binary_operands[j] = operands[j]->desc[i].ptr;
       } else {
         args[i].pipeline.binary_operands[j] = 0;
+      }
+    }
+
+    // Map scalar arguments
+    for (size_t j = 0; j < 8; ++j) {
+      if (j < scalars.size()) {
+        args[i].pipeline.scalars[j] = scalars[j];
+      } else {
+        args[i].pipeline.scalars[j] = 0;
       }
     }
   }

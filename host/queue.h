@@ -25,6 +25,7 @@ class Event : public std::enable_shared_from_this<Event> {
   std::vector<detail::VectorDescRef> inputs;
   detail::VectorDescRef output;
   std::vector<uint8_t> rpn_ops;
+  std::vector<uint32_t> scalars;
   KernelID kid = 0;
   KernelID pipeline_kid = 0;  // For lazy promotion
   uint8_t opcode = 0;         // For lazy promotion

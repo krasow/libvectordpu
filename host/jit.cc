@@ -141,6 +141,8 @@ static void write_kernel_function(std::ofstream& out,
       uses_op[op - OP_PUSH_OPERAND_0] = true;
     } else if (IS_OP_SCALAR(op)) {
       i += 4;  // Skip scalar data
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      i += 1;  // Skip scalar index
     }
   }
 
@@ -219,6 +221,36 @@ static void write_kernel_function(std::ofstream& out,
           break;
         case OP_ASR_SCALAR:
           out << s1 << " >> " << scalar_literal << ";\n";
+          break;
+      }
+      stack.push_back(res);
+
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      // Decode scalar index
+      uint8_t idx = rpn_ops[i + 1];
+      i += 1;
+
+      std::string scalar_val = "args.pipeline.scalars[" + std::to_string(idx) + "]";
+      std::string s1 = stack.back();
+      stack.pop_back();
+      std::string res = get_tmp();
+      out << "            " << stack_type << " " << res << " = ";
+
+      switch (op) {
+        case OP_ADD_SCALAR_VAR:
+          out << s1 << " + (" << stack_type << ")" << scalar_val << ";\n";
+          break;
+        case OP_SUB_SCALAR_VAR:
+          out << s1 << " - (" << stack_type << ")" << scalar_val << ";\n";
+          break;
+        case OP_MUL_SCALAR_VAR:
+          out << s1 << " * (" << stack_type << ")" << scalar_val << ";\n";
+          break;
+        case OP_DIV_SCALAR_VAR:
+          out << s1 << " / (" << stack_type << ")" << scalar_val << ";\n";
+          break;
+        case OP_ASR_SCALAR_VAR:
+          out << s1 << " >> " << scalar_val << ";\n";
           break;
       }
       stack.push_back(res);

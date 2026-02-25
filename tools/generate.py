@@ -173,6 +173,11 @@ pipeline_ops = [
     ('push_operand_5', 'PUSH_OPERAND_5'),
     ('push_operand_6', 'PUSH_OPERAND_6'),
     ('push_operand_7', 'PUSH_OPERAND_7'),
+    ('add_scalar_var', 'ADD_SCALAR_VAR'),
+    ('sub_scalar_var', 'SUB_SCALAR_VAR'),
+    ('mul_scalar_var', 'MUL_SCALAR_VAR'),
+    ('div_scalar_var', 'DIV_SCALAR_VAR'),
+    ('asr_scalar_var', 'ASR_SCALAR_VAR'),
 ]
 
 with open("common/opcodes.h", "w") as out:
@@ -189,6 +194,7 @@ with open("common/opcodes.h", "w") as out:
     out.write('#define IS_OP_UNARY(op) ((op) >= OP_NEGATE && (op) <= OP_ABS)\n')
     out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_ASR)\n')
     out.write('#define IS_OP_SCALAR(op) ((op) >= OP_ADD_SCALAR && (op) <= OP_ASR_SCALAR)\n')
+    out.write('#define IS_OP_SCALAR_VAR(op) ((op) >= OP_ADD_SCALAR_VAR && (op) <= OP_ASR_SCALAR_VAR)\n')
     out.write('#define IS_OP_REDUCTION(op) ((op) >= OP_MIN && (op) <= OP_PRODUCT)\n\n')
 
     out.write('#endif // OPCODES_H\n')
