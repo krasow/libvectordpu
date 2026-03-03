@@ -544,7 +544,7 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   const char* type_name = "int32_t";  // Default
   if (e->output && e->output->type_name) {
     std::string tn = e->output->type_name;
-    if (tn == "i" || tn == "int")
+    if (tn == "i" || tn == "int" || tn == "int32_t")
       type_name = "int32_t";
     else if (tn == "j" || tn == "uint32_t")
       type_name = "uint32_t";
@@ -552,6 +552,14 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
       type_name = "float";
     else if (tn == "d" || tn == "double")
       type_name = "double";
+    else if (tn == "l" || tn == "int64_t")
+      type_name = "int64_t";
+    else if (tn == "m" || tn == "uint64_t")
+      type_name = "uint64_t";
+    else if (tn == "x" || tn == "long long")
+      type_name = "int64_t";
+    else if (tn == "y" || tn == "unsigned long long")
+      type_name = "uint64_t";
     else
       type_name = e->output->type_name;
   }

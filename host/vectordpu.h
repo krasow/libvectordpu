@@ -67,8 +67,11 @@ class dpu_vector {
   dpu_vector& operator=(dpu_vector&& other) noexcept;  // move assignment
 
   vector<T> to_cpu();
+  void to_cpu(T* cpu_ptr, uint32_t n);
 
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
+                                LOGGER_ARGS_WITH_DEFAULTS);
+  static dpu_vector<T> from_cpu(const T* cpu_ptr, uint32_t n,
                                 LOGGER_ARGS_WITH_DEFAULTS);
   void add_fence();
   dpu_vector<T>& operator+=(const dpu_vector<T>& other);

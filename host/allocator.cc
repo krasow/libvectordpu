@@ -22,12 +22,12 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
                                                        bool lazy) {
   bool uniform = (n % num_dpus_ == 0) && (n / num_dpus_ * size_type >= 8);
   {
-    std::lock_guard<std::mutex> lock(this->lock);
+    std::lock_guard<std::recursive_mutex> lock(this->lock);
     if (is_synchronized_ && uniform)
       return allocate_upmem_vector_broadcast(n, reserved, size_type, lazy);
     is_synchronized_ = false;
   }
-  std::lock_guard<std::mutex> lock(this->lock);
+  std::lock_guard<std::recursive_mutex> lock(this->lock);
   size_t eff = n / num_dpus_, rem = (eff / size_type) % num_dpus_;
   if (eff * size_type == 4) eff = 2;
 
@@ -61,7 +61,7 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
 
 void allocator::realize_allocation(detail::VectorDescRef data) {
   if (data->ptr_allocated) return;
-  std::lock_guard<std::mutex> lock(this->lock);
+  std::lock_guard<std::recursive_mutex> lock(this->lock);
   if (is_synchronized_) {
     uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].allocated_bytes);
     for (auto& s : data->desc) s.ptr = addr;
@@ -113,15 +113,21 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
 void allocator::deallocate_upmem_vector(detail::VectorDesc* data) {
   if (!data->ptr_allocated) return;
   data->ptr_allocated = false;
-  std::lock_guard<std::mutex> lock(this->lock);
+  std::lock_guard<std::recursive_mutex> lock(this->lock);
   if (is_synchronized_ && !data->desc.empty()) {
-    raw_deallocate(DPU_BROADCAST, data->desc[0].ptr,
-                   data->desc[0].allocated_bytes);
+    if (data->desc[0].ptr != 0) {
+      raw_deallocate(DPU_BROADCAST, data->desc[0].ptr,
+                     data->desc[0].allocated_bytes);
+    }
     return;
   }
   is_synchronized_ = false;
-  for (size_t i = 0; i < num_dpus_; i++)
-    raw_deallocate(i, data->desc[i].ptr, data->desc[i].allocated_bytes);
+  for (size_t i = 0; i < data->desc.size(); i++) {
+    if (data->desc[i].ptr != 0) {
+      raw_deallocate(static_cast<int>(i), data->desc[i].ptr,
+                     data->desc[i].allocated_bytes);
+    }
+  }
 }
 
 void allocator::deallocate_upmem_vector_broadcast(detail::VectorDesc* data) {

@@ -458,6 +458,12 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   // Mark result description as reduction synchronously
   res->is_reduction_result = true;
   res->reduction_rid = static_cast<KernelID>(opcode);
+
+#if ENABLE_PROMOTION_REDUCTIONS == 1
+  if (res->element_size == 8) {
+    res->type_name = "int64_t";
+  }
+#endif
 #else
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_reduction, res, rhs, kernel_id);

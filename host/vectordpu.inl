@@ -106,80 +106,82 @@ template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
                                       std::source_location loc) {
-  dpu_vector<T> vec(cpu_vec.size(), 0, false, name, loc);
+  return from_cpu(cpu_vec.data(), static_cast<uint32_t>(cpu_vec.size()), name,
+                  loc);
+}
+
+template <typename T>
+dpu_vector<T> dpu_vector<T>::from_cpu(const T* cpu_ptr, uint32_t n,
+                                      std::string_view name,
+                                      std::source_location loc) {
+  dpu_vector<T> vec(n, 0, false, name, loc);
   auto desc = vec.data_desc_ref();
 
-  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(detail::vec_xfer_to_dpu, cpu_buffer, desc);
+  const char* cpu_buffer = reinterpret_cast<const char*>(cpu_ptr);
+  // Remove const for the callback (internal detail, it doesn't mutate)
+  auto bound_cb =
+      std::bind(detail::vec_xfer_to_dpu, const_cast<char*>(cpu_buffer), desc);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::DPU_TRANSFER, bound_cb);
   e->output = desc;
-  e->host_ptr = cpu_buffer;
-  e->transfer_size = cpu_vec.size() * sizeof(T);
+  e->host_ptr = const_cast<char*>(cpu_buffer);
+  e->transfer_size = n * sizeof(T);
 
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=DPU_TRANSFER size=" << cpu_vec.size()
-                << std::endl;
+  logger.lock() << "[queue-append] type=DPU_TRANSFER size=" << n << std::endl;
 #endif
   return vec;
 }
 
 template <typename T>
-vector<T> dpu_vector<T>::to_cpu() {
+void dpu_vector<T>::to_cpu(T* cpu_ptr, uint32_t n) {
   auto desc = this->data_desc_ref();
-  // Allocate CPU buffer large enough to hold all data
-  size_t total_size = this->size();
-  auto& runtime = DpuRuntime::get();
-  size_t num_dpus = runtime.num_dpus();
-  size_t min_xfer = 8;  // 8 bytes
-
-  // Compute bytes per DPU
-  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
-
-  // Ensure at least 8 bytes per DPU
-  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
-    // Round up to the number of elements that makes 8 bytes per DPU
-    size_t elems_per_dpu =
-        (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /sizeof(T))
-    total_size = num_dpus * elems_per_dpu;
-  }
-
-  vector<T> cpu_vec(total_size);
-
-  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
+  char* cpu_buffer = reinterpret_cast<char*>(cpu_ptr);
   auto bound_cb = std::bind(detail::vec_xfer_from_dpu, cpu_buffer, desc);
+  auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
   e->inputs = {desc};
   e->host_ptr = cpu_buffer;
-  e->transfer_size = cpu_vec.size() * sizeof(T);
+  e->transfer_size = n * sizeof(T);
 
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << cpu_vec.size()
-                << std::endl;
+  Logger& logger = runtime.get_logger();
+  logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << n << std::endl;
 #endif
 
-// Auto-fence after DPU->HOST transfer if enabled
-#if ENABLE_AUTO_FENCING == 1
   event_queue.process_events(e->id);
-// need the event to be completed before reading printf output
-#if ENABLE_DPU_PRINTING == 1
-  // read and print DPU logs to host stdout
+
+#if ENABLE_AUTO_FENCING == 1 && ENABLE_DPU_PRINTING == 1
   runtime.debug_read_dpu_log();
 #endif
-#endif
+}
 
+template <typename T>
+vector<T> dpu_vector<T>::to_cpu() {
+  size_t total_size = this->size();
+  auto& runtime = DpuRuntime::get();
+  size_t num_dpus = runtime.num_dpus();
+  size_t min_xfer = 8;
+  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
+
+  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
+    size_t elems_per_dpu = (min_xfer + sizeof(T) - 1) / sizeof(T);
+    total_size = num_dpus * elems_per_dpu;
+  }
+
+  vector<T> cpu_vec(total_size);
+  to_cpu(cpu_vec.data(), static_cast<uint32_t>(cpu_vec.size()));
   return cpu_vec;
 }
 

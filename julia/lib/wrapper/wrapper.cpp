@@ -65,17 +65,17 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
     // ---- host <-> DPU transfers ----
 
     mod.method("from_cpu_int32", [](jlcxx::ArrayRef<int32_t> arr) {
-        std::vector<int32_t> vec(arr.data(), arr.data() + arr.size());
-        auto result = dpu_vector<int32_t>::from_cpu(vec);
-        result.add_fence();
+        auto result = dpu_vector<int32_t>::from_cpu(arr.data(), static_cast<uint32_t>(arr.size()));
+        // Wait for transfer to complete before returning to Julia 
+        // to ensure Julia doesn't move/reclaim the buffer.
+        DpuRuntime::get().get_event_queue().process_events(result.data_desc().last_producer_id);
         return result;
     });
 
     mod.method("to_cpu!", [](dpu_vector<int32_t>& v, jlcxx::ArrayRef<int32_t> out) {
-        auto cpu = v.to_cpu();
         size_t n = std::min(static_cast<size_t>(v.size()),
                             static_cast<size_t>(out.size()));
-        std::copy(cpu.begin(), cpu.begin() + n, out.data());
+        v.to_cpu(out.data(), static_cast<uint32_t>(n));
     });
 
     // ---- modular dispatchers ----
@@ -128,12 +128,22 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
         auto& e = reduction_ops[op_idx];
 
         auto& runtime = DpuRuntime::get();
+#if ENABLE_PROMOTION_REDUCTIONS == 1
+        // Use 64-bit buffer to avoid truncation of partial results
+        dpu_vector<int64_t> buf(runtime.num_dpus(),
+                                runtime.num_tasklets() * 8);
+        detail::launch_reduction(buf.data_desc_ref(), input.data_desc_ref(),
+                                 e.kid, e.opcode,
+                                 OpInfo<int32_t>::universal_pipeline);
+        return reduction_cpu(buf, e.kid);
+#else
         dpu_vector<int32_t> buf(runtime.num_dpus(),
                                 runtime.num_tasklets() * sizeof(size_t));
         detail::launch_reduction(buf.data_desc_ref(), input.data_desc_ref(),
                                  e.kid, e.opcode,
                                  OpInfo<int32_t>::universal_pipeline);
         return reduction_cpu(buf, e.kid);
+#endif
     });
 
     // ---- synchronization ----

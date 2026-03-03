@@ -26,9 +26,13 @@ mutable struct DpuVector
 end
 
 # Construct from a Julia vector -- transfer to DPU memory
-function DpuVector(data::AbstractVector{Int32})
-    handle = UpmemVector.from_cpu_int32(collect(Int32, data))
+function DpuVector(data::Vector{Int32})
+    handle = UpmemVector.from_cpu_int32(data)
     return DpuVector(handle)
+end
+
+function DpuVector(data::AbstractVector{Int32})
+    return DpuVector(collect(Int32, data))
 end
 
 # Accept any integer array by converting to Int32
