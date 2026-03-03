@@ -11,8 +11,14 @@ test_error memory_test() {
     size_t num_dpus = runtime.num_dpus();
     std::cout << "Running on " << num_dpus << " DPUs." << std::endl;
 
-    // N = (15MB * num_dpus) / 4 bytes
-    size_t N = (15 * 1024 * 1024 * num_dpus) / 4;
+    // N = (MB_PER_DPU * num_dpus) / 4 bytes
+#if PIPELINE
+    size_t mb_per_dpu = 15;
+#else
+    size_t mb_per_dpu =
+        5;  // Need more space for intermediates when fusion is off
+#endif
+    size_t N = (mb_per_dpu * 1024 * 1024 * num_dpus) / 4;
 
     std::cout << "Allocating a, b, c (" << (N * 4 / 1024 / 1024)
               << " MB total, " << (N * 4 / num_dpus / 1024 / 1024)

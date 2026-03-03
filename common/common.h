@@ -7,16 +7,10 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 6              // 64 elements per block (256 bytes for int32)
+#define BLOCK_SIZE_LOG2 5              // 32 elements per block
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
-#ifdef __dpu__
-#include <config.h>
-extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][8 * BLOCK_SIZE];
-#endif
-
 typedef uint32_t KernelID;
-
 
 enum KernelCategory {
     KERNEL_UNARY = 0,
@@ -27,10 +21,14 @@ enum KernelCategory {
 
 #include "opcodes.h"
 
-#define MAX_PIPELINE_OPS 16
+#define MAX_PIPELINE_OPS 32
 #define MAX_PIPELINE_OPERANDS 3
-#define MAX_PIPELINE_STACK_DEPTH 4
+#define MAX_PIPELINE_STACK_DEPTH 2
 #define MINIMUM_WRITE_SIZE 8
+
+// Shared WRAM workspace for tasklets.
+// Max size: input (1) + operands (MAX_PIPELINE_OPERANDS) + stack (MAX_PIPELINE_STACK_DEPTH)
+#define TASKLET_WORKSPACE_SIZE ((1 + MAX_PIPELINE_OPERANDS + MAX_PIPELINE_STACK_DEPTH) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)
 
 typedef struct {
     uint32_t kernel;       // 4
@@ -65,8 +63,16 @@ typedef struct {
             uint32_t num_ops;
             uint8_t ops[MAX_PIPELINE_OPS];          // Fixed size buffer for opcodes
             uint32_t binary_operands[MAX_PIPELINE_OPERANDS]; // Offsets for binary operands
+            uint32_t scalars[8]; // Scalar values for scalar operators
         } pipeline;
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;
+
+#include <config.h>
+
+#if defined(__dpu__) || defined(__dpu_v1A__)
+extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];
+extern DPU_LAUNCH_ARGS args;
+#endif
 
 #endif // COMMON_H

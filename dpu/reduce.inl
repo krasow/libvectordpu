@@ -9,8 +9,6 @@
 #define PRODUCT(a, b) ((a) * (b))
 #define SUM(a, b) ((a) + (b))
 
-// MINIMUM_WRITE_SIZE is defined in common.h
-
 #if ENABLE_DPU_PRINTING == 1
 void print_args(DPU_LAUNCH_ARGS args) {
   printf("Reduction kernel launched with arguments:\n");
@@ -20,10 +18,13 @@ void print_args(DPU_LAUNCH_ARGS args) {
 }
 #else
 void print_args(DPU_LAUNCH_ARGS args) {
-  // do nothing
-  (void)args;  // remove unused parameter warning
+  /* do nothing */
+  (void)args; /* remove unused parameter warning */
 }
 #endif
+
+#define STR(x) #x
+#define XSTR(x) STR(x)
 
 #define DEFINE_REDUCTION_KERNEL(TYPE, OP, FUNC)                                \
   int reduction_##TYPE##_##OP(void) {                                          \
@@ -38,6 +39,11 @@ void print_args(DPU_LAUNCH_ARGS args) {
     TYPE *res_block =                                                          \
         (TYPE *)&dpu_workspace[tasklet_id][BLOCK_SIZE * sizeof(TYPE)];         \
                                                                                \
+    const char op_name[] = XSTR(OP);                                           \
+    bool is_sum = (op_name[0] == 's' || op_name[0] == 'S');                    \
+    bool is_sum32 = (sizeof(TYPE) == 4 && is_sum);                             \
+                                                                               \
+    int64_t local_red_64 = 0;                                                  \
     TYPE local_red = (TYPE)0;                                                  \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                   \
          block_loc < num_elems;                                                \
@@ -53,34 +59,59 @@ void print_args(DPU_LAUNCH_ARGS args) {
                 block_bytes);                                                  \
                                                                                \
       /* Compute in WRAM */                                                    \
-      for (uint32_t i = 0; i < block_elems; i++) {                             \
-        local_red = FUNC(local_red, rhs_block[i]);                             \
+      if (is_sum32) {                                                          \
+        for (uint32_t i = 0; i < block_elems; i++) {                           \
+          local_red_64 += rhs_block[i];                                        \
+        }                                                                      \
+      } else {                                                                 \
+        for (uint32_t i = 0; i < block_elems; i++) {                           \
+          local_red = FUNC(local_red, rhs_block[i]);                           \
+        }                                                                      \
       }                                                                        \
     }                                                                          \
-                                                                               \
-    /* write local result into MRAM using MINIMUM_WRITE_SIZE bytes */          \
-    uint64_t buff = 0;                                                         \
-    memcpy(&buff, &local_red, sizeof(TYPE));                                   \
-    mram_write((void *)&buff, (__mram_ptr uint64_t *)res_ptr + tasklet_id,     \
-               MINIMUM_WRITE_SIZE);                                            \
+    /* write local result into preceding reserved area (one 8-byte slot per    \
+     * tasklet) */                                                             \
+    uint64_t *buff_ptr =                                                       \
+        (uint64_t *)&dpu_workspace[tasklet_id][BLOCK_SIZE * 2 * sizeof(TYPE)]; \
+    *buff_ptr = 0;                                                             \
+    if (is_sum32) {                                                            \
+      *buff_ptr = (uint64_t)local_red_64;                                      \
+    } else {                                                                   \
+      memcpy(buff_ptr, &local_red, sizeof(TYPE));                              \
+    }                                                                          \
+    extern uint64_t reduction_scratchpad[NR_TASKLETS];                         \
+    /* partial results go into the dedicated WRAM scratchpad */                \
+    reduction_scratchpad[tasklet_id] = *buff_ptr;                              \
                                                                                \
     barrier_wait(&my_barrier);                                                 \
                                                                                \
-    /* Tasklet 0 performs final reduction */                                   \
+    /* Tasklet 0 performs final reduction from partial slots */                \
     if (tasklet_id == 0) {                                                     \
-      buff = 0;                                                                \
-      uint32_t total_slots = NR_TASKLETS * stride;                             \
-      /* read all slots back into WRAM (total_slots * sizeof(TYPE) bytes) */   \
-      mram_read((__mram_ptr void const *)res_ptr, res_block,                   \
-                total_slots * sizeof(TYPE));                                   \
-      TYPE total = res_block[0];                                               \
-      for (uint32_t i = 1; i < NR_TASKLETS; i++) {                             \
-        total = FUNC(total, res_block[i * stride]);                            \
+      if (is_sum32) {                                                          \
+        int64_t total_64 = 0;                                                  \
+        uint32_t i;                                                            \
+        for (i = 0; i < NR_TASKLETS; i++) {                                    \
+          total_64 += (int64_t)reduction_scratchpad[i];                        \
+        }                                                                      \
+        *buff_ptr = (uint64_t)total_64;                                        \
+      } else {                                                                 \
+        uint32_t total_slots = NR_TASKLETS * stride;                           \
+        TYPE res_block_tot[NR_TASKLETS * stride] __attribute__((aligned(8)));  \
+        uint32_t i;                                                            \
+        /* read all slots back from WRAM scratchpad */                         \
+        for (i = 0; i < NR_TASKLETS; i++) {                                    \
+          res_block_tot[i * stride] = *(TYPE *)&reduction_scratchpad[i];       \
+        }                                                                      \
+        TYPE total = res_block_tot[0];                                         \
+        for (i = 1; i < NR_TASKLETS; i++) {                                    \
+          total = FUNC(total, res_block_tot[i * stride]);                      \
+        }                                                                      \
+        memcpy(buff_ptr, &total, sizeof(TYPE));                                \
       }                                                                        \
-      memcpy(&buff, &total, sizeof(TYPE));                                     \
                                                                                \
-      mram_write(&buff, (__mram_ptr void *)(res_ptr), MINIMUM_WRITE_SIZE);     \
-      print_args(args);                                                        \
+      /* Final total goes into the data area (res_ptr) */                      \
+      mram_write((void *)buff_ptr, (__mram_ptr void *)(res_ptr),               \
+                 MINIMUM_WRITE_SIZE);                                          \
     }                                                                          \
     return 0;                                                                  \
   }

@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,7 @@ class Event : public std::enable_shared_from_this<Event> {
   std::vector<detail::VectorDescRef> inputs;
   detail::VectorDescRef output;
   std::vector<uint8_t> rpn_ops;
+  std::vector<uint32_t> scalars;
   KernelID kid = 0;
   KernelID pipeline_kid = 0;  // For lazy promotion
   uint8_t opcode = 0;         // For lazy promotion
@@ -32,13 +34,16 @@ class Event : public std::enable_shared_from_this<Event> {
   void* host_ptr = nullptr;   // For transfers
   size_t transfer_size = 0;   // For transfers
 
-  std::variant<std::monostate, detail::VectorDescRef> res;
+  // JIT
+  std::string jit_binary_path;
+  bool is_locked_for_jit = false;
+  int jit_sub_kernel_idx = -1;
+  std::shared_future<std::string> jit_future;
 
-  Event(OperationType t) : op(t), res(std::monostate()) {}
+  Event(OperationType t) : op(t) {}
 
   template <typename Callable>
-  Event(OperationType t, Callable&& c)
-      : op(t), cb(std::forward<Callable>(c)), res(std::monostate()) {}
+  Event(OperationType t, Callable&& c) : op(t), cb(std::forward<Callable>(c)) {}
 
   size_t id = 0;
   std::string slice_name;
@@ -59,6 +64,10 @@ class EventQueue {
   EventQueue() = default;
   ~EventQueue() = default;
 
+  bool try_fuse(std::shared_ptr<Event> last, std::shared_ptr<Event> e);
+  void lock_for_jit(std::shared_ptr<Event> e);
+  void flush_jit_batch();
+
   void submit(std::shared_ptr<Event> e);
   void set_max_queue_depth(size_t depth) { max_queue_depth_ = depth; }
   size_t max_queue_depth() const { return max_queue_depth_; }
@@ -69,6 +78,7 @@ class EventQueue {
   void process_events(size_t wait_for_id);
   void debug_print_queue();
   void debug_active_events();
+  size_t count_internal_references(detail::VectorDescRef vec);
 
   bool has_pending() const { return !operations_.empty(); }
   std::size_t pending_count() const { return operations_.size(); }
@@ -108,4 +118,11 @@ class EventQueue {
   std::shared_ptr<Event> current_event_ = nullptr;
   std::deque<std::shared_ptr<Event>> operations_;
   std::list<std::shared_ptr<Event>> running_events_;
+
+  // JIT Batching State
+  std::vector<std::pair<std::vector<uint8_t>, std::string>>
+      pending_unique_kernels_;
+  std::vector<std::shared_ptr<Event>> pending_jit_events_;
+
+  std::string current_binary_path_;
 };

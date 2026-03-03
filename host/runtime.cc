@@ -4,20 +4,26 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
+
+namespace fs = std::filesystem;
 
 // dl function info
 #include <dlfcn.h>
 #include <libgen.h>
 #include <limits.h>
 
+#include "jit.h"
 #include "perfetto/trace.h"
 #include "runtime.h"
 
 // (Moved to trace.cc)
+
+std::string get_runtime_dpu_binary();
 
 allocator& DpuRuntime::get_allocator() { return *allocator_; }
 EventQueue& DpuRuntime::get_event_queue() { return *event_queue_; }
@@ -26,26 +32,41 @@ dpu_set_t& DpuRuntime::dpu_set() { return *dpu_set_; }
 uint32_t DpuRuntime::num_dpus() const { return num_dpus_; }
 uint32_t DpuRuntime::num_tasklets() const { return NR_TASKLETS; }
 
+std::string DpuRuntime::get_default_binary_path() const {
+  return get_runtime_dpu_binary();
+}
+
 extern "C" void vectordpu_dladdr_anchor() {}
 
 std::string get_runtime_dpu_binary() {
   Dl_info info;
   void* fptr = (void*)&vectordpu_dladdr_anchor;
   if (dladdr(fptr, &info) == 0) {
-    std::__throw_runtime_error("Failed to get library path");
+    throw std::runtime_error("Failed to get library path");
   }
-  // Full path to libvectordpu.so
-  const char* lib_path = info.dli_fname;
-  // Directory containing the library
-  std::string lib_dir = dirname(const_cast<char*>(lib_path));
-  // Compute path to runtime.dpu relative to the library
-  std::string dpu_file = lib_dir + "/../bin/runtime.dpu";
-  // Canonicalize to absolute path
-  char resolved[PATH_MAX];
-  if (!realpath(dpu_file.c_str(), resolved)) {
-    std::__throw_runtime_error("Failed to resolve runtime.dpu path");
+
+  // Use std::filesystem to resolve path
+  fs::path lib_path = fs::absolute(info.dli_fname);
+
+  // Try relative to library: lib/libvectordpu.so -> ../bin/runtime.dpu
+  fs::path bin_path =
+      lib_path.parent_path().parent_path() / "bin" / "runtime.dpu";
+
+  if (!fs::exists(bin_path)) {
+    // Fallback: try relative from CWD/build
+    // If running from source root: build/bin/runtime.dpu
+    bin_path = fs::absolute("build/bin/runtime.dpu");
+    if (!fs::exists(bin_path)) {
+      std::stringstream ss;
+      ss << "Failed to resolve runtime.dpu path.\n"
+         << "lib_path: " << lib_path << "\n"
+         << "CWD: " << fs::current_path() << "\n"
+         << "Checked: " << bin_path;
+      throw std::runtime_error(ss.str());
+    }
   }
-  return std::string(resolved);
+
+  return fs::absolute(bin_path).string();
 }
 
 void DpuRuntime::init(uint32_t num_dpus) {
@@ -135,6 +156,11 @@ void DpuRuntime::shutdown() {
 
   logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();
+
+#if JIT
+  logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
+  jit_cleanup();
+#endif
 
   logger_->lock() << "[runtime] Shutdown complete." << std::endl;
 

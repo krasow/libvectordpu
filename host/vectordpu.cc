@@ -23,6 +23,14 @@ VectorDesc::~VectorDesc() {
   }
 }
 
+template <typename T>
+bool all_identical(const T* arr, size_t n) {
+  for (size_t i = 1; i < n; i++) {
+    if (std::memcmp(&arr[0], &arr[i], sizeof(T)) != 0) return false;
+  }
+  return true;
+}
+
 void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(desc);
@@ -99,11 +107,16 @@ void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
   dpu_set_t dpu;
   uint32_t idx_dpu = 0;
 
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  if (all_identical(args, nr_of_dpus)) {
+    CHECK_UPMEM(dpu_broadcast_to(dpu_set, "args", 0, &args[0], sizeof(args[0]),
+                                 DPU_XFER_DEFAULT));
+  } else {
+    DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+      CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+    }
+    CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                              sizeof(args[0]), DPU_XFER_DEFAULT));
   }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
@@ -136,11 +149,16 @@ void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
   dpu_set_t dpu;
   uint32_t idx_dpu = 0;
 
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  if (all_identical(args, nr_of_dpus)) {
+    CHECK_UPMEM(dpu_broadcast_to(dpu_set, "args", 0, &args[0], sizeof(args[0]),
+                                 DPU_XFER_DEFAULT));
+  } else {
+    DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+      CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+    }
+    CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                              sizeof(args[0]), DPU_XFER_DEFAULT));
   }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
@@ -171,11 +189,16 @@ void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
   dpu_set_t dpu;
   uint32_t idx_dpu = 0;
 
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  if (all_identical(args, nr_of_dpus)) {
+    CHECK_UPMEM(dpu_broadcast_to(dpu_set, "args", 0, &args[0], sizeof(args[0]),
+                                 DPU_XFER_DEFAULT));
+  } else {
+    DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+      CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+    }
+    CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                              sizeof(args[0]), DPU_XFER_DEFAULT));
   }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
@@ -206,11 +229,16 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
   dpu_set_t dpu;
   uint32_t idx_dpu = 0;
 
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+  if (all_identical(args, nr_of_dpus)) {
+    CHECK_UPMEM(dpu_broadcast_to(dpu_set, "args", 0, &args[0], sizeof(args[0]),
+                                 DPU_XFER_DEFAULT));
+  } else {
+    DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+      CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+    }
+    CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                              sizeof(args[0]), DPU_XFER_DEFAULT));
   }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 
@@ -218,7 +246,8 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 // Redefine signatures to include KernelID
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
-    const std::vector<VectorDescRef>& operands, KernelID kernel_id) {
+    const std::vector<VectorDescRef>& operands, KernelID kernel_id,
+    const std::vector<uint32_t>& scalars) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
@@ -256,6 +285,15 @@ void internal_launch_universal_pipeline(
         args[i].pipeline.binary_operands[j] = 0;
       }
     }
+
+    // Map scalar arguments
+    for (size_t j = 0; j < 8; ++j) {
+      if (j < scalars.size()) {
+        args[i].pipeline.scalars[j] = scalars[j];
+      } else {
+        args[i].pipeline.scalars[j] = 0;
+      }
+    }
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -266,11 +304,17 @@ void internal_launch_universal_pipeline(
   dpu_set_t& dpu_set = runtime.dpu_set();
   dpu_set_t dpu;
   uint32_t idx_dpu = 0;
-  DPU_FOREACH(dpu_set, dpu, idx_dpu) {
-    CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+
+  if (all_identical(args, nr_of_dpus)) {
+    CHECK_UPMEM(dpu_broadcast_to(dpu_set, "args", 0, &args[0], sizeof(args[0]),
+                                 DPU_XFER_DEFAULT));
+  } else {
+    DPU_FOREACH(dpu_set, dpu, idx_dpu) {
+      CHECK_UPMEM(dpu_prepare_xfer(dpu, &args[idx_dpu]));
+    }
+    CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
+                              sizeof(args[0]), DPU_XFER_DEFAULT));
   }
-  CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, "args", 0,
-                            sizeof(args[0]), DPU_XFER_DEFAULT));
   CHECK_UPMEM(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
 }
 #endif
@@ -295,7 +339,6 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
@@ -323,7 +366,6 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
   e->output = res;
   e->rpn_ops = ops;
   e->kid = kernel_id;
-  e->res = res;
 
   // Detect reduction and flag result descriptor synchronously
   for (uint8_t op : ops) {
@@ -360,7 +402,6 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
@@ -392,8 +433,6 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
-  e->res = res;
   e->is_scalar = true;
   e->scalar_value = scalar;
   event_queue.submit(e);
@@ -429,7 +468,6 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->res = res;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2

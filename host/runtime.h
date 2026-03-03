@@ -42,5 +42,7 @@ class DpuRuntime {
   uint32_t num_dpus() const;
   uint32_t num_tasklets() const;
 
+  std::string get_default_binary_path() const;
+
   void shutdown();
 };

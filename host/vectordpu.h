@@ -3,6 +3,7 @@
 #include <common.h>
 #include <config.h>
 
+#include <cstring>
 #include <string_view>
 #include <vector>
 
@@ -41,6 +42,16 @@ using std::vector;
 template <typename T>
 struct pipeline_result;
 #endif
+
+template <typename T>
+struct reduction_result {
+  using type = T;
+};
+
+template <>
+struct reduction_result<int32_t> {
+  using type = int64_t;
+};
 
 template <typename T>
 class dpu_vector {
@@ -91,15 +102,25 @@ class dpu_vector {
 
   const char* debug_file = nullptr;
   int debug_line = -1;
-  bool copied = false;
+  mutable bool copied = false;
+
+  static std::vector<uint8_t> prepare_rpn(const std::vector<uint8_t>& ops);
 
  public:
+  using reduction_result_t = typename reduction_result<T>::type;
+
 #if PIPELINE
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops);
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops,
                               const std::vector<dpu_vector<T>>& operands);
-  T pipeline_reduce(const std::vector<uint8_t>& ops,
-                    const std::vector<dpu_vector<T>>& operands = {});
+  reduction_result_t pipeline_reduce(
+      const std::vector<uint8_t>& ops,
+      const std::vector<dpu_vector<T>>& operands = {});
+#endif
+#if JIT
+  pipeline_result<T> jit(const std::vector<uint8_t>& ops);
+  pipeline_result<T> jit(const std::vector<uint8_t>& ops,
+                         const std::vector<dpu_vector<T>>& operands);
 #endif
 };
 
@@ -109,6 +130,7 @@ struct pipeline_result {
   dpu_vector<T> vec;
   pipeline_result(dpu_vector<T> v) : vec(std::move(v)) {}
   operator T();
+  operator int64_t();
   operator dpu_vector<T>() { return std::move(vec); }
   dpu_vector<T>* operator->() { return &vec; }
 };
@@ -140,7 +162,8 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
 
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
-    const std::vector<VectorDescRef>& operands, KernelID kernel_id);
+    const std::vector<VectorDescRef>& operands, KernelID kernel_id,
+    const std::vector<uint32_t>& scalars);
 #endif
 }  // namespace detail
 

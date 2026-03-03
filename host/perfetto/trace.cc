@@ -51,6 +51,16 @@ std::string opcode_to_string(uint8_t op) {
       return "DIV_SCALAR";
     case OP_ASR_SCALAR:
       return "ASR_SCALAR";
+    case OP_ADD_SCALAR_VAR:
+      return "ADD_SCALAR_VAR";
+    case OP_SUB_SCALAR_VAR:
+      return "SUB_SCALAR_VAR";
+    case OP_MUL_SCALAR_VAR:
+      return "MUL_SCALAR_VAR";
+    case OP_DIV_SCALAR_VAR:
+      return "DIV_SCALAR_VAR";
+    case OP_ASR_SCALAR_VAR:
+      return "ASR_SCALAR_VAR";
     case OP_MIN:
       return "MIN";
     case OP_MAX:
@@ -157,6 +167,24 @@ static std::string get_pipeline_breakdown(const Event& e) {
                    opcode_to_string(op) + "(" + s1 + ", " +
                    std::to_string(scalar) + ")\n";
       stack.push_back(res);
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      if (stack.size() < 1) {
+        breakdown += "!!STK_ERR!!\n";
+        break;
+      }
+      if (i + 1 >= size) {
+        breakdown += "!!SCALAR_ERR!!\n";
+        break;
+      }
+      uint8_t scalar_idx = ops[i + 1];
+      i += 1;
+      std::string s1 = stack.back();
+      stack.pop_back();
+      std::string res = "st[" + std::to_string(stack.size()) + "]";
+      breakdown += std::to_string(op_idx++) + ". " + res + " = " +
+                   opcode_to_string(op) + "(" + s1 + ", VAR[" +
+                   std::to_string(scalar_idx) + "])\n";
+      stack.push_back(res);
     } else if (IS_OP_REDUCTION(op)) {
       if (stack.size() < 1) {
         breakdown += "!!STK_ERR!!\n";
@@ -226,8 +254,15 @@ void initialize() {
 
   auto track_desc = perfetto::Track(DPU_TRACK_ID).Serialize();
   track_desc.set_name("DPU Hardware");
+  track_desc.set_parent_uuid(perfetto::ProcessTrack::Current().uuid);
   perfetto::TrackEvent::SetTrackDescriptor(perfetto::Track(DPU_TRACK_ID),
                                            track_desc);
+
+  auto jit_track_desc = perfetto::Track(8080).Serialize();
+  jit_track_desc.set_name("JIT Compiler");
+  jit_track_desc.set_parent_uuid(perfetto::ProcessTrack::Current().uuid);
+  perfetto::TrackEvent::SetTrackDescriptor(perfetto::Track(8080),
+                                           jit_track_desc);
 }
 
 void shutdown() {
@@ -397,6 +432,49 @@ void ensure_callback_thread_named() {
     perfetto::TrackEvent::SetTrackDescriptor(track, desc);
     thread_named = true;
   }
+}
+
+static std::string rpn_ops_to_string(const std::vector<uint8_t>& rpn_ops) {
+  std::string ops_str;
+  for (size_t i = 0; i < rpn_ops.size(); ++i) {
+    uint8_t op = rpn_ops[i];
+    std::string s = opcode_to_string(op);
+    if (s.empty()) continue;
+    if (!ops_str.empty()) ops_str += ", ";
+    ops_str += s;
+    if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+  }
+  return ops_str;
+}
+
+void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
+                       const char* type_name) {
+  std::string ops_str = rpn_ops_to_string(rpn_ops);
+  TRACE_EVENT_BEGIN("runtime", "jit_compile", perfetto::Track(8080), "type",
+                    perfetto::DynamicString(type_name), "ops",
+                    perfetto::DynamicString(ops_str));
+}
+
+void jit_compile_begin(
+    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+  std::string summary =
+      "Batched " + std::to_string(kernels.size()) + " kernels\n";
+  for (size_t i = 0; i < kernels.size(); ++i) {
+    summary += "K" + std::to_string(i) + " [" + kernels[i].second +
+               "]: " + rpn_ops_to_string(kernels[i].first) + "\n";
+  }
+  TRACE_EVENT_BEGIN("runtime", "jit_compile_batch", perfetto::Track(8080),
+                    "kernels", (int)kernels.size(), "details",
+                    perfetto::DynamicString(summary));
+}
+
+void jit_compile_end() { TRACE_EVENT_END("runtime", perfetto::Track(8080)); }
+
+void jit_binary_switch(const std::string& previous,
+                       const std::string& current) {
+  TRACE_EVENT_INSTANT("runtime", "binary_switch", perfetto::Track(8080), "from",
+                      perfetto::DynamicString(previous), "to",
+                      perfetto::DynamicString(current));
 }
 
 }  // namespace trace
