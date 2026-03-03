@@ -1,0 +1,10 @@
+name = "UpmemVector"
+uuid = "e8a3c0f1-7b2d-4a5e-9c1f-3d6e8b4a2f10"
+version = "0.1.0"
+
+[deps]
+CxxWrap = "1f15a43c-97ca-5a2a-ae31-89f07a497df4"
+
+[compat]
+CxxWrap = "0.17"
+julia = "1.10"
