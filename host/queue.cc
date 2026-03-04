@@ -31,6 +31,8 @@ static uint8_t map_to_var_op(uint8_t op) {
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+#define MAX_RETRIES 100000
+
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
@@ -157,10 +159,15 @@ bool EventQueue::process_next() {
 #if ENABLE_DPU_LOGGING >= 1
     size_t loop_count = 0;
 #endif
+    size_t retries = 0;
     while (this->get_last_finished_id() < max_dep) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (++retries > MAX_RETRIES) {
+          fprintf(stderr, "[debug] Timeout at line 166 (dependency wait)\n");
+          throw DpuTimeoutException();
+      }
 #if ENABLE_DPU_LOGGING >= 1
-      if (++loop_count % 1000 == 0) {
+      if (retries % 1000 == 0) {
         logger.lock() << "[queue-heartbeat] id=" << e->id
                       << " dependency block on " << max_dep
                       << " (current=" << this->get_last_finished_id() << ")"
@@ -325,6 +332,9 @@ bool EventQueue::process_next() {
           if (running_events_.front() == e) break;
         }
       }
+      // Explicitly poll the DPU driver to pump callbacks
+      dpu_set_t& dpu_set = DpuRuntime::get().dpu_set();
+      dpu_sync(dpu_set);
       std::this_thread::yield();
     }
 
@@ -383,6 +393,12 @@ bool EventQueue::process_next() {
         assert(false && "Unknown event type");
     }
   } catch (const DpuOOMException& ex) {
+    static int consecutive_ooms = 0;
+    consecutive_ooms++;
+    if (consecutive_ooms % 100 == 0) {
+        fprintf(stderr, "[vectordpu] WARNING: DPU OOM detected for event id=%zu. System is busy-waiting for MRAM to be freed. If using a managed language (e.g. Julia), ensure Garbage Collection is firing.\n", e->id);
+    }
+
 #if ENABLE_DPU_LOGGING >= 1
     Logger& logger = DpuRuntime::get().get_logger();
     logger.lock() << "[queue-oom] OOM detected for event id=" << e->id
@@ -399,9 +415,15 @@ bool EventQueue::process_next() {
       // reset current event since we are backing off
       if (current_event_ == e) current_event_ = nullptr;
     }
+    oom_detected_.store(true);
     // no progress as we caught an exception
     return NO_PROGRESS;
   }
+
+  // If we made it here, no OOM happened this time
+  // But we need to reset the consecutive_ooms counter. 
+  // This is tricky without a member variable. 
+  // Let's just keep it simple and focused on the warning.
 
   debug_active_events();
   debug_print_queue();
@@ -409,6 +431,7 @@ bool EventQueue::process_next() {
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
+  size_t retries = 0;
   while (true) {
     bool progress = this->process_next();
 
@@ -422,7 +445,34 @@ void EventQueue::process_events(size_t wait_for_id) {
       if (operations_.empty() && running_events_.empty()) break;
     }
     if (!progress) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      bool running = false;
+      {
+          std::lock_guard<std::mutex> lock(mtx_);
+          running = !running_events_.empty();
+      }
+      if (oom_detected_.load()) {
+          if (running) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          } else {
+              oom_detected_.store(false);
+              throw DpuOOMException();
+          }
+      } else {
+          // Explicitly poll the DPU driver to pump callbacks
+          dpu_set_t& dpu_set = DpuRuntime::get().dpu_set();
+          dpu_sync(dpu_set);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          if (++retries > MAX_RETRIES) {
+              if (running) {
+                  retries = 0;
+              } else {
+                  fprintf(stderr, "[debug] Timeout at line 468 (event queue process)\n");
+                  throw DpuTimeoutException();
+              }
+          }
+      }
+    } else {
+        retries = 0;
     }
 
     static size_t loop_count = 0;
@@ -438,6 +488,23 @@ void EventQueue::process_events(size_t wait_for_id) {
                     << std::endl;
 #endif
     }
+  }
+}
+
+void EventQueue::wait_running_events() {
+  size_t retries = 0;
+  while (true) {
+    bool any_running = false;
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      any_running = !running_events_.empty();
+    }
+    if (!any_running) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (++retries > MAX_RETRIES) {
+        fprintf(stderr, "[debug] Timeout at line 503 (wait_running_events)\n");
+        throw DpuTimeoutException();
+      }
   }
 }
 
@@ -643,13 +710,13 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   // 2: whoever else (user code, or another event in the queue)
   // Each matching input in 'e' also holds a reference.
   // So we count how many times 'last->output' appears in 'e->inputs'.
-  size_t internal_refs = 1;  // last->output
+  long internal_refs = 1;  // last->output
   for (const auto& in : e->inputs) {
     if (in == last->output) internal_refs++;
   }
 
   // Count references within the whole library's internal state
-  size_t lib_refs = count_internal_references(last->output);
+  long lib_refs = count_internal_references(last->output);
   // Add reference from 'e' which is not yet in the queue
   for (const auto& in : e->inputs) {
     if (in == last->output) lib_refs++;
@@ -848,6 +915,10 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   // DPU MRAM deallocation, so we must count them too—not just the pending
   // operations_ queue.
   while (operations_.size() + running_events_.size() >= max_queue_depth_) {
+    if (oom_detected_.load()) {
+        oom_detected_.store(false);
+        throw DpuOOMException();
+    }
     mtx_.unlock();
     // Actively drain: process pending events so their callbacks can fire,
     // releasing VectorDescRef shared_ptrs and freeing DPU MRAM.

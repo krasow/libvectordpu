@@ -59,7 +59,7 @@ class Event : public std::enable_shared_from_this<Event> {
 
 class EventQueue {
  public:
-  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 64;
+  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 1024;
 
   EventQueue() = default;
   ~EventQueue() = default;
@@ -76,6 +76,7 @@ class EventQueue {
 
   bool process_next();
   void process_events(size_t wait_for_id);
+  void wait_running_events();
   void debug_print_queue();
   void debug_active_events();
   size_t count_internal_references(detail::VectorDescRef vec);
@@ -110,6 +111,7 @@ class EventQueue {
 
   std::atomic<size_t> last_finished_id_{0};
   std::atomic<int> outstanding_callbacks_{0};
+  std::atomic<bool> oom_detected_{false};
 
  private:
   std::mutex mtx_;

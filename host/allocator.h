@@ -20,6 +20,11 @@ class DpuOOMException : public std::runtime_error {
   DpuOOMException() : std::runtime_error("DPU OOM") {}
 };
 
+class DpuTimeoutException : public std::runtime_error {
+ public:
+  DpuTimeoutException() : std::runtime_error("DPU Timeout: MRAM exhausted and no progress made after retries. Ensure Garbage Collection is firing.") {}
+};
+
 struct FreeBlock {
   uint32_t addr;
   size_t size;
@@ -43,6 +48,9 @@ class allocator {
 
   // Realize a lazy allocation
   void realize_allocation(detail::VectorDescRef data);
+  size_t get_total_allocated() const { return total_allocated_bytes_; }
+  size_t get_max_dpu_memory() const { return dpu_mem_; }
+  size_t get_num_dpus() const { return num_dpus_; }
 
  private:
   uint32_t start_addr_;  // starting base address

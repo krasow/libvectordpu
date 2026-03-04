@@ -96,6 +96,7 @@ class dpu_vector {
 
   uint32_t size() const { return size_; }
   uint32_t reserved() const { return reserved_; }
+  void free();
 
  private:
   detail::VectorDescRef data_;

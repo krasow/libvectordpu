@@ -78,6 +78,10 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
         v.to_cpu(out.data(), static_cast<uint32_t>(n));
     });
 
+    mod.method("free_vector", [](dpu_vector<int32_t>& v) {
+        v.free();
+    });
+
     // ---- modular dispatchers ----
 
     // Binary vector-vector: op_idx in {0..4} = {ADD,SUB,MUL,DIV,ASR}
@@ -91,6 +95,16 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
                               rhs.data_desc_ref(), e.kid, e.opcode,
                               OpInfo<int32_t>::universal_pipeline);
         return res;
+    });
+
+    mod.method("launch_binary_inplace", [](dpu_vector<int32_t>& lhs,
+                                           const dpu_vector<int32_t>& rhs,
+                                           int32_t op_idx) {
+        assert(op_idx >= 0 && op_idx < NUM_BINARY_OPS);
+        auto& e = binary_ops[op_idx];
+        detail::launch_binary(lhs.data_desc_ref(), lhs.data_desc_ref(),
+                              rhs.data_desc_ref(), e.kid, e.opcode,
+                              OpInfo<int32_t>::universal_pipeline);
     });
 
     // Binary vector-scalar: op_idx in {0..4} = {ADD,SUB,MUL,DIV,ASR}
@@ -150,5 +164,9 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
 
     mod.method("dpu_fence", [](dpu_vector<int32_t>& v) {
         v.add_fence();
+    });
+
+    mod.method("dpu_wait_running_events", []() {
+        DpuRuntime::get().get_event_queue().wait_running_events();
     });
 }

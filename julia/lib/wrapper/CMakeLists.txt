@@ -48,6 +48,6 @@ target_link_libraries(upmemvector_wrapper
 )
 
 # Install the built library next to the source for easy discovery
-install(TARGETS upmemvector_wrapper
-    LIBRARY DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/build
-)
+# install(TARGETS upmemvector_wrapper
+#     LIBRARY DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/build
+# )

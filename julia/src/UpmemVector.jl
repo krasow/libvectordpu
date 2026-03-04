@@ -11,6 +11,7 @@ function __init__()
     @initcxx
 end
 
+include("utils.jl")
 include("types.jl")
 include("operations.jl")
 include("display.jl")

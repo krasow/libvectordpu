@@ -3,7 +3,7 @@
 BUILDDIR ?= build
 NR_TASKLETS ?= 12
 
-BACKEND ?= simulator
+BACKEND ?= hw
 DEBUG ?= 0
 LOGGING ?= 0
 

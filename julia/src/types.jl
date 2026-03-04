@@ -27,7 +27,9 @@ end
 
 # Construct from a Julia vector -- transfer to DPU memory
 function DpuVector(data::Vector{Int32})
-    handle = UpmemVector.from_cpu_int32(data)
+    handle = retry_on_oom() do
+        UpmemVector.from_cpu_int32(data)
+    end
     return DpuVector(handle)
 end
 
@@ -42,7 +44,9 @@ end
 
 # Allocate an uninitialised DPU vector of length n
 function DpuVector(n::Integer)
-    handle = UpmemVector.DpuVectorInt32(UInt32(n))
+    handle = retry_on_oom() do
+        UpmemVector.DpuVectorInt32(UInt32(n))
+    end
     return DpuVector(handle)
 end
 
@@ -55,7 +59,9 @@ Transfer DPU vector contents back to the host as a Julia `Vector{Int32}`.
 """
 function Base.Array(v::DpuVector)
     out = Vector{Int32}(undef, v.len)
-    UpmemVector.to_cpu!(v.handle, out)
+    retry_on_oom() do
+        UpmemVector.to_cpu!(v.handle, out)
+    end
     return out
 end
 
@@ -66,7 +72,11 @@ Base.collect(v::DpuVector) = Array(v)
 
 Base.length(v::DpuVector) = v.len
 Base.size(v::DpuVector) = (v.len,)
+Base.ndims(::Type{DpuVector}) = 1
+Base.axes(v::DpuVector) = (Base.OneTo(v.len),)
+Base.broadcastable(v::DpuVector) = v
 Base.eltype(::DpuVector) = Int32
+Base.BroadcastStyle(::Type{<:DpuVector}) = Base.Broadcast.DefaultArrayStyle{1}()
 
 # Scalar indexing (requires full transfer -- use sparingly)
 function Base.getindex(v::DpuVector, i::Int)
@@ -80,7 +90,18 @@ end
 Explicitly synchronize: block until all pending DPU operations on `v` complete.
 """
 function fence(v::DpuVector)
-    UpmemVector.dpu_fence(v.handle)
+    retry_on_oom() do
+        UpmemVector.dpu_fence(v.handle)
+    end
 end
 
-export fence
+"""
+    free!(v::DpuVector)
+
+Explicitly drops the underlying C++ reference so memory can be freed before GC.
+"""
+function free!(v::DpuVector)
+    UpmemVector.free_vector(v.handle)
+end
+
+export fence, free!

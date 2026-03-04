@@ -20,7 +20,7 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
                                                        std::size_t reserved,
                                                        std::size_t size_type,
                                                        bool lazy) {
-  bool uniform = (n % num_dpus_ == 0) && (n / num_dpus_ * size_type >= 8);
+  bool uniform = (n % num_dpus_ == 0);
   {
     std::lock_guard<std::recursive_mutex> lock(this->lock);
     if (is_synchronized_ && uniform)
