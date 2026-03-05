@@ -209,7 +209,7 @@ bool EventQueue::process_next() {
         }
 
         if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(500));
+          std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
       }
     }
@@ -223,7 +223,7 @@ bool EventQueue::process_next() {
 
       if (!e->jit_future.valid()) {
         if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(1000));
+          std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
 
         auto it = operations_.begin();
@@ -251,10 +251,13 @@ bool EventQueue::process_next() {
     logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
                   << e->id << std::endl;
 #endif
-    if (latest_jit_future_.valid()) {
+    e->jit_binary_path = e->jit_future.get();
+
+    // If a LATER future is already ready, use it instead (monotonically better)
+    if (latest_jit_future_.valid() &&
+        latest_jit_future_.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready) {
       e->jit_binary_path = latest_jit_future_.get();
-    } else {
-      e->jit_binary_path = e->jit_future.get();
     }
   }
 #endif
