@@ -36,11 +36,10 @@ static uint8_t map_to_var_op(uint8_t op) {
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
-  auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
-  std::shared_ptr<Event> me = *self_ptr;
+  auto* cb_data = static_cast<CallbackData*>(data);
+  std::shared_ptr<Event> me = cb_data->event;
+  EventQueue& queue = *(cb_data->queue);
 
-  auto& runtime = DpuRuntime::get();
-  auto& queue = runtime.get_event_queue();
   auto& events = queue.get_active_events();
   std::mutex& mtx = queue.get_mutex();
 
@@ -66,20 +65,23 @@ static uint8_t map_to_var_op(uint8_t op) {
         // slice.
       }
     }
-  }
 
-  static std::atomic<size_t> callback_count{0};
-  size_t count = ++callback_count;
-  if (count % 100 == 0) {
+    static std::atomic<size_t> callback_count{0};
+    size_t count = ++callback_count;
+    if (count % 100 == 0) {
 #if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[queue-heartbeat] callback fired (" << count
-                  << ") for id=" << me->id << std::endl;
+      // Safe to access singleton here because outstanding_callbacks_ > 0
+      // and we hold the lock, so shutdown() is blocked.
+      Logger& logger = DpuRuntime::get().get_logger();
+      logger.lock() << "[queue-heartbeat] callback fired (" << count
+                    << ") for id=" << me->id << std::endl;
 #endif
+    }
+
+    queue.outstanding_callbacks_--;
   }
 
-  delete self_ptr;
-  queue.outstanding_callbacks_--;
+  delete cb_data;
 
   return DPU_OK;
 }
@@ -92,10 +94,10 @@ void Event::add_completion_callback(std::shared_ptr<Event> self) {
   dpu_set_t& dpu_set = runtime.dpu_set();
 
   queue.outstanding_callbacks_++;
-  auto wrapper = new std::shared_ptr<Event>(self);
+  auto* cb_data = new CallbackData{self, &queue};
 
   CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)wrapper,
+      dpu_set, &upmem_callback, (void*)cb_data,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
 }
@@ -108,10 +110,10 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   dpu_set_t& dpu_set = runtime.dpu_set();
 
   queue.outstanding_callbacks_++;
-  auto wrapper = new std::shared_ptr<Event>(std::move(e));
+  auto* cb_data = new CallbackData{std::move(e), &queue};
 
   CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)wrapper,
+      dpu_set, &upmem_callback, (void*)cb_data,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
 }
@@ -207,7 +209,7 @@ bool EventQueue::process_next() {
         }
 
         if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(50));
+          std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
       }
     }
@@ -221,7 +223,7 @@ bool EventQueue::process_next() {
 
       if (!e->jit_future.valid()) {
         if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(200));
+          std::this_thread::sleep_for(std::chrono::microseconds(1000));
         }
 
         auto it = operations_.begin();
@@ -249,7 +251,11 @@ bool EventQueue::process_next() {
     logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
                   << e->id << std::endl;
 #endif
-    e->jit_binary_path = e->jit_future.get();
+    if (latest_jit_future_.valid()) {
+      e->jit_binary_path = latest_jit_future_.get();
+    } else {
+      e->jit_binary_path = e->jit_future.get();
+    }
   }
 #endif
 
@@ -574,6 +580,8 @@ void EventQueue::flush_jit_batch() {
 
   std::shared_future<std::string> future =
       std::async(std::launch::async, [batch]() { return jit_compile(batch); });
+
+  latest_jit_future_ = future;
 
   // Assign future to all pending events
   for (auto ev : pending_jit_events_) {

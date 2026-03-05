@@ -143,7 +143,7 @@ struct pipeline_result {
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
                    KernelID kernel_id, uint8_t opcode, KernelID pipeline_kid);
-void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint64_t scalar,
                           KernelID kernel_id, uint8_t opcode,
                           KernelID pipeline_kid);
 void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
@@ -153,6 +153,8 @@ void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id,
 
 void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
                             VectorDescRef rhs, KernelID kernel_id);
+void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
+                                   uint64_t scalar, KernelID kernel_id);
 void internal_launch_unary(VectorDescRef res, VectorDescRef lhs,
                            KernelID kernel_id);
 void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,

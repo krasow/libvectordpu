@@ -14,12 +14,14 @@ namespace detail {
 VectorDesc::~VectorDesc() {
   if (ptr_allocated) {
     auto& runtime = DpuRuntime::get();
+    if (runtime.is_initialized()) {
 #if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = runtime.get_logger();
-    log_deallocation(logger, type_name, num_elements,
-                     (debug_name ? debug_name : ""), debug_file, debug_line);
+      Logger& logger = runtime.get_logger();
+      log_deallocation(logger, type_name, num_elements,
+                       (debug_name ? debug_name : ""), debug_file, debug_line);
 #endif
-    runtime.get_allocator().deallocate_upmem_vector(this);
+      runtime.get_allocator().deallocate_upmem_vector(this);
+    }
   }
 }
 
@@ -80,7 +82,7 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
 }
 
 void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
-                                   uint32_t scalar, KernelID kernel_id) {
+                                   uint64_t scalar, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(res);
   runtime.get_allocator().realize_allocation(lhs);
@@ -94,8 +96,8 @@ void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
     args[i].num_elements = lhs->desc[i].size_bytes / lhs->element_size;
     args[i].size_type = lhs->element_size;
     args[i].binary_scalar.lhs_offset = (lhs->desc[i].ptr);
-    args[i].binary_scalar.rhs_scalar = scalar;
     args[i].binary_scalar.res_offset = (res->desc[i].ptr);
+    args[i].binary_scalar.rhs_scalar = scalar;
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -411,7 +413,7 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
 #endif
 }
 
-void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint64_t scalar,
                           KernelID kernel_id, uint8_t opcode,
                           KernelID pipeline_kid) {
   auto& runtime = DpuRuntime::get();

@@ -98,7 +98,7 @@ __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p $
 COMMON_FLAGS := -Wall -Wextra -I${COMMON_DIR} -I${HOST_DIR}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu`
 # DPU-specific flags
-DPU_FLAGS := ${COMMON_FLAGS} -O3 -DNR_TASKLETS=${NR_TASKLETS}
+DPU_FLAGS := ${COMMON_FLAGS} -Os -DNR_TASKLETS=${NR_TASKLETS}
 
 all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"

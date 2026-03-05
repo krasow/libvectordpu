@@ -44,39 +44,39 @@ export Ops
 
 # ---- generic dispatch functions ----
 
-function binary_op(a::DpuVector, b::DpuVector, op::Ops.BinaryOp)
+function binary_op(a::DpuVector{T}, b::DpuVector{T}, op::Ops.BinaryOp) where T
     handle = retry_on_oom() do
-        UpmemVector.launch_binary(a.handle, b.handle, Int32(op))
+        launch_binary(T, a.handle, b.handle, Int32(op))
     end
-    return DpuVector(handle)
+    return DpuVector{T}(handle)
 end
 
-function scalar_op(a::DpuVector, s::Integer, op::Ops.ScalarOp)
+function scalar_op(a::DpuVector{T}, s::Integer, op::Ops.ScalarOp) where T
     handle = retry_on_oom() do
-        UpmemVector.launch_binary_scalar(a.handle, Int32(s), Int32(op))
+        launch_binary_scalar(T, a.handle, Int64(s), Int32(op))
     end
-    return DpuVector(handle)
+    return DpuVector{T}(handle)
 end
 
-function unary_op(a::DpuVector, op::Ops.UnaryOp)
+function unary_op(a::DpuVector{T}, op::Ops.UnaryOp) where T
     handle = retry_on_oom() do
-        UpmemVector.launch_unary(a.handle, Int32(op))
+        launch_unary(T, a.handle, Int32(op))
     end
-    return DpuVector(handle)
+    return DpuVector{T}(handle)
 end
 
-function reduce_op(a::DpuVector, op::Ops.ReductionOp)
+function reduce_op(a::DpuVector{T}, op::Ops.ReductionOp) where T
     return retry_on_oom() do
-        UpmemVector.launch_reduction(a.handle, Int32(op))
+        launch_reduction(T, a.handle, Int32(op))
     end
 end
 
 # ---- Base overloads: binary vector ⊕ vector ----
 
-Base.:+(a::DpuVector, b::DpuVector) = binary_op(a, b, Ops.BINARY_ADD)
-Base.:-(a::DpuVector, b::DpuVector) = binary_op(a, b, Ops.BINARY_SUB)
-Base.:*(a::DpuVector, b::DpuVector) = binary_op(a, b, Ops.BINARY_MUL)
-Base.div(a::DpuVector, b::DpuVector) = binary_op(a, b, Ops.BINARY_DIV)
+Base.:+(a::DpuVector{T}, b::DpuVector{T}) where T = binary_op(a, b, Ops.BINARY_ADD)
+Base.:-(a::DpuVector{T}, b::DpuVector{T}) where T = binary_op(a, b, Ops.BINARY_SUB)
+Base.:*(a::DpuVector{T}, b::DpuVector{T}) where T = binary_op(a, b, Ops.BINARY_MUL)
+Base.div(a::DpuVector{T}, b::DpuVector{T}) where T = binary_op(a, b, Ops.BINARY_DIV)
 
 # ---- In-place overloads ----
 
@@ -87,13 +87,13 @@ const INPLACE_OPS = Dict(
     (div) => Ops.BINARY_DIV
 )
 
-function Base.materialize!(dest::DpuVector, bc::Base.Broadcast.Broadcasted)
+function Base.materialize!(dest::DpuVector{T}, bc::Base.Broadcast.Broadcasted) where T
     if length(bc.args) == 2 && haskey(INPLACE_OPS, bc.f)
         a, b = bc.args
         if a === dest
             op = INPLACE_OPS[bc.f]
             retry_on_oom() do
-                UpmemVector.launch_binary_inplace(dest.handle, b.handle, Int32(op))
+                launch_binary_inplace(T, dest.handle, b.handle, Int32(op))
             end
             return dest
         end

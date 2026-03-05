@@ -9,36 +9,21 @@ find_package(JlCxx REQUIRED)
 get_target_property(JLCXX_LOCATION JlCxx::cxxwrap_julia LOCATION)
 message(STATUS "Found JlCxx at: ${JLCXX_LOCATION}")
 
-# ---- vectordpu installation path ----
-set(VECTORDPU_DIR "$ENV{HOME}/vectordpu" CACHE PATH "Path to installed vectordpu library")
-
-if(NOT EXISTS "${VECTORDPU_DIR}/include/vectordpu/vectordpu.h")
-    message(FATAL_ERROR
-        "vectordpu not found at ${VECTORDPU_DIR}.\n"
-        "Build and install it first:\n"
-        "  cd /path/to/upmem-vector && make install BACKEND=hw JIT=1\n"
-        "Or set -DVECTORDPU_DIR=/path/to/vectordpu")
-endif()
-
-# ---- UPMEM SDK (for transitive DPU library dependency) ----
-set(UPMEM_HOME "$ENV{UPMEM_HOME}" CACHE PATH "Path to UPMEM SDK")
-
-if(UPMEM_HOME STREQUAL "")
-    message(FATAL_ERROR
-        "UPMEM_HOME is not set. Source the UPMEM environment first:\n"
-        "  source /usr/upmem_env.sh")
-endif()
+# ---- vectordpu repo path ----
+set(VECTORDPU_SRC_DIR "/scratch/david/benchmark-upmem/opt/vectordpu_src")
 
 # ---- Build the wrapper shared library ----
 add_library(upmemvector_wrapper SHARED wrapper.cpp)
 
 target_include_directories(upmemvector_wrapper PRIVATE
-    ${VECTORDPU_DIR}/include/vectordpu
+    ${VECTORDPU_SRC_DIR}/host
+    ${VECTORDPU_SRC_DIR}/common
 )
 
 target_link_directories(upmemvector_wrapper PRIVATE
-    ${VECTORDPU_DIR}/lib
+    ${VECTORDPU_SRC_DIR}/build/lib
     ${UPMEM_HOME}/lib
+    /scratch/david/julia-1.11.3/lib/julia
 )
 
 target_link_libraries(upmemvector_wrapper
@@ -46,6 +31,8 @@ target_link_libraries(upmemvector_wrapper
     vectordpu
     dpu
 )
+
+set_target_properties(upmemvector_wrapper PROPERTIES RUNPATH "${VECTORDPU_SRC_DIR}/build/lib;/scratch/david/julia-1.11.3/lib/julia;${UPMEM_HOME}/lib")
 
 # Install the built library next to the source for easy discovery
 # install(TARGETS upmemvector_wrapper

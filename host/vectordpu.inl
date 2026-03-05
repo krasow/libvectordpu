@@ -671,9 +671,10 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
 template <typename T>
 typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> buf(runtime.num_dpus(),
-                    runtime.num_tasklets() * sizeof(size_t));
-  buf.data_desc_ref()->type_name = typeid(T).name();
+  using RED_TYPE = typename dpu_vector<T>::reduction_result_t;
+  dpu_vector<RED_TYPE> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * 8);
+  buf.data_desc_ref()->type_name = typeid(RED_TYPE).name();
   buf.data_desc_ref()->debug_name = "reduction_buffer";
   buf.data_desc_ref()->debug_file = __FILE__;
   buf.data_desc_ref()->debug_line = __LINE__;
@@ -684,11 +685,12 @@ typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
 }
 
 template <typename T>
-T product(const dpu_vector<T>& a) {
+typename dpu_vector<T>::reduction_result_t product(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> buf(runtime.num_dpus(),
-                    runtime.num_tasklets() * sizeof(size_t));
-  buf.data_desc_ref()->type_name = typeid(T).name();
+  using RED_TYPE = typename dpu_vector<T>::reduction_result_t;
+  dpu_vector<RED_TYPE> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * 8);
+  buf.data_desc_ref()->type_name = typeid(RED_TYPE).name();
   buf.data_desc_ref()->debug_name = "reduction_buffer";
   buf.data_desc_ref()->debug_file = __FILE__;
   buf.data_desc_ref()->debug_line = __LINE__;

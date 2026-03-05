@@ -14,6 +14,9 @@
 #include "common.h"
 #include "vectordesc.h"
 
+class Event;
+class EventQueue;
+
 class Event : public std::enable_shared_from_this<Event> {
  public:
   enum class OperationType { COMPUTE, DPU_TRANSFER, HOST_TRANSFER, FENCE };
@@ -55,6 +58,11 @@ class Event : public std::enable_shared_from_this<Event> {
   void add_completion_callback(std::shared_ptr<Event> self);
   void mark_finished() { this->finished.store(true); }
   bool operator==(const Event& other) const { return this->id == other.id; }
+};
+
+struct CallbackData {
+  std::shared_ptr<Event> event;
+  EventQueue* queue;
 };
 
 class EventQueue {
@@ -125,6 +133,6 @@ class EventQueue {
   std::vector<std::pair<std::vector<uint8_t>, std::string>>
       pending_unique_kernels_;
   std::vector<std::shared_ptr<Event>> pending_jit_events_;
-
+  std::shared_future<std::string> latest_jit_future_;
   std::string current_binary_path_;
 };

@@ -9,6 +9,9 @@ const _wrapper_lib = joinpath(@__DIR__, "..", "lib", "wrapper", "build", "libupm
 
 function __init__()
     @initcxx
+    atexit() do
+        dpu_shutdown()
+    end
 end
 
 include("utils.jl")

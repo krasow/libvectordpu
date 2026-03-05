@@ -10,163 +10,131 @@
 #include <vector>
 
 // ============================================================
-// Opcode-to-KernelID lookup tables (one per operation category)
+// Templated helpers for type registration and dispatch
 // ============================================================
 
-struct OpEntry { KernelID kid; uint8_t opcode; };
-
-// Binary vector-vector:  ADD=0, SUB=1, MUL=2, DIV=3, ASR=4
-static constexpr OpEntry binary_ops[] = {
-    { OpInfo<int32_t>::add, OpInfo<int32_t>::add_op },
-    { OpInfo<int32_t>::sub, OpInfo<int32_t>::sub_op },
-    { OpInfo<int32_t>::mul, OpInfo<int32_t>::mul_op },
-    { OpInfo<int32_t>::div, OpInfo<int32_t>::div_op },
-    { OpInfo<int32_t>::asr, OpInfo<int32_t>::asr_op },
-};
-static constexpr int NUM_BINARY_OPS = sizeof(binary_ops) / sizeof(binary_ops[0]);
-
-// Binary vector-scalar:  ADD=0, SUB=1, MUL=2, DIV=3, ASR=4
-static constexpr OpEntry scalar_ops[] = {
-    { OpInfo<int32_t>::add_scalar, OpInfo<int32_t>::add_scalar_op },
-    { OpInfo<int32_t>::sub_scalar, OpInfo<int32_t>::sub_scalar_op },
-    { OpInfo<int32_t>::mul_scalar, OpInfo<int32_t>::mul_scalar_op },
-    { OpInfo<int32_t>::div_scalar, OpInfo<int32_t>::div_scalar_op },
-    { OpInfo<int32_t>::asr_scalar, OpInfo<int32_t>::asr_scalar_op },
-};
-static constexpr int NUM_SCALAR_OPS = sizeof(scalar_ops) / sizeof(scalar_ops[0]);
-
-// Unary:  NEGATE=0, ABS=1
-static constexpr OpEntry unary_ops[] = {
-    { OpInfo<int32_t>::negate, OpInfo<int32_t>::negate_op },
-    { OpInfo<int32_t>::abs,    OpInfo<int32_t>::abs_op },
-};
-static constexpr int NUM_UNARY_OPS = sizeof(unary_ops) / sizeof(unary_ops[0]);
-
-// Reduction:  MIN=0, MAX=1, SUM=2, PRODUCT=3
-static constexpr OpEntry reduction_ops[] = {
-    { OpInfo<int32_t>::min,     OpInfo<int32_t>::min_op },
-    { OpInfo<int32_t>::max,     OpInfo<int32_t>::max_op },
-    { OpInfo<int32_t>::sum,     OpInfo<int32_t>::sum_op },
-    { OpInfo<int32_t>::product, OpInfo<int32_t>::product_op },
-};
-static constexpr int NUM_REDUCTION_OPS = sizeof(reduction_ops) / sizeof(reduction_ops[0]);
-
-// ============================================================
-
-JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
-{
-    // ---- wrapped type ----
-    mod.add_type<dpu_vector<int32_t>>("DpuVectorInt32")
-        .constructor<uint32_t>()
-        .method("cpp_length", [](const dpu_vector<int32_t>& v) -> int64_t {
+template<typename T>
+void register_vector_ops(jlcxx::Module& mod, const std::string& type_suffix) {
+    std::string type_name = "DpuVector" + type_suffix;
+    mod.add_type<dpu_vector<T>>(type_name)
+        .template constructor<uint32_t>()
+        .method("cpp_length", [](const dpu_vector<T>& v) -> int64_t {
             return static_cast<int64_t>(v.size());
         });
 
-    // ---- host <-> DPU transfers ----
+    // Also register cpp_length as a free function so Julia can call UpmemVector.cpp_length_Int32(handle)
+    mod.method("cpp_length_" + type_suffix, [](const dpu_vector<T>& v) -> int64_t {
+        return static_cast<int64_t>(v.size());
+    });
 
-    mod.method("from_cpu_int32", [](jlcxx::ArrayRef<int32_t> arr) {
-        auto result = dpu_vector<int32_t>::from_cpu(arr.data(), static_cast<uint32_t>(arr.size()));
-        // Wait for transfer to complete before returning to Julia 
-        // to ensure Julia doesn't move/reclaim the buffer.
+    mod.method("from_cpu_" + type_suffix, [](jlcxx::ArrayRef<T> arr) {
+        auto result = dpu_vector<T>::from_cpu(arr.data(), static_cast<uint32_t>(arr.size()));
         DpuRuntime::get().get_event_queue().process_events(result.data_desc().last_producer_id);
         return result;
     });
 
-    mod.method("to_cpu!", [](dpu_vector<int32_t>& v, jlcxx::ArrayRef<int32_t> out) {
-        size_t n = std::min(static_cast<size_t>(v.size()),
-                            static_cast<size_t>(out.size()));
+    mod.method("to_cpu_" + type_suffix + "!", [](dpu_vector<T>& v, jlcxx::ArrayRef<T> out) {
+        size_t n = std::min(static_cast<size_t>(v.size()), static_cast<size_t>(out.size()));
         v.to_cpu(out.data(), static_cast<uint32_t>(n));
     });
 
-    mod.method("free_vector", [](dpu_vector<int32_t>& v) {
+    mod.method("free_vector_" + type_suffix, [](dpu_vector<T>& v) {
         v.free();
     });
 
-    // ---- modular dispatchers ----
-
-    // Binary vector-vector: op_idx in {0..4} = {ADD,SUB,MUL,DIV,ASR}
-    mod.method("launch_binary", [](const dpu_vector<int32_t>& lhs,
-                                   const dpu_vector<int32_t>& rhs,
-                                   int32_t op_idx) {
-        assert(op_idx >= 0 && op_idx < NUM_BINARY_OPS);
-        auto& e = binary_ops[op_idx];
-        dpu_vector<int32_t> res(lhs.size(), 0, true);
-        detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
-                              rhs.data_desc_ref(), e.kid, e.opcode,
-                              OpInfo<int32_t>::universal_pipeline);
+    // Dispatchers for this type
+    mod.method("launch_binary_" + type_suffix, [](const dpu_vector<T>& lhs, const dpu_vector<T>& rhs, int32_t op_idx) {
+        // We use a fixed set of opcodes, kid comes from OpInfo<T>
+        uint8_t opcode = 0;
+        KernelID kid = 0;
+        switch(op_idx) {
+            case 0: kid = OpInfo<T>::add; opcode = OpInfo<T>::add_op; break;
+            case 1: kid = OpInfo<T>::sub; opcode = OpInfo<T>::sub_op; break;
+            case 2: kid = OpInfo<T>::mul; opcode = OpInfo<T>::mul_op; break;
+            case 3: kid = OpInfo<T>::div; opcode = OpInfo<T>::div_op; break;
+            case 4: kid = OpInfo<T>::asr; opcode = OpInfo<T>::asr_op; break;
+            default: assert(false);
+        }
+        dpu_vector<T> res(lhs.size(), 0, true);
+        detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(), rhs.data_desc_ref(), kid, opcode, OpInfo<T>::universal_pipeline);
         return res;
     });
 
-    mod.method("launch_binary_inplace", [](dpu_vector<int32_t>& lhs,
-                                           const dpu_vector<int32_t>& rhs,
-                                           int32_t op_idx) {
-        assert(op_idx >= 0 && op_idx < NUM_BINARY_OPS);
-        auto& e = binary_ops[op_idx];
-        detail::launch_binary(lhs.data_desc_ref(), lhs.data_desc_ref(),
-                              rhs.data_desc_ref(), e.kid, e.opcode,
-                              OpInfo<int32_t>::universal_pipeline);
+    mod.method("launch_binary_inplace_" + type_suffix, [](dpu_vector<T>& lhs, const dpu_vector<T>& rhs, int32_t op_idx) {
+        uint8_t opcode = 0;
+        KernelID kid = 0;
+        switch(op_idx) {
+            case 0: kid = OpInfo<T>::add; opcode = OpInfo<T>::add_op; break;
+            case 1: kid = OpInfo<T>::sub; opcode = OpInfo<T>::sub_op; break;
+            case 2: kid = OpInfo<T>::mul; opcode = OpInfo<T>::mul_op; break;
+            case 3: kid = OpInfo<T>::div; opcode = OpInfo<T>::div_op; break;
+            case 4: kid = OpInfo<T>::asr; opcode = OpInfo<T>::asr_op; break;
+            default: assert(false);
+        }
+        detail::launch_binary(lhs.data_desc_ref(), lhs.data_desc_ref(), rhs.data_desc_ref(), kid, opcode, OpInfo<T>::universal_pipeline);
     });
 
-    // Binary vector-scalar: op_idx in {0..4} = {ADD,SUB,MUL,DIV,ASR}
-    mod.method("launch_binary_scalar", [](const dpu_vector<int32_t>& lhs,
-                                          int32_t scalar,
-                                          int32_t op_idx) {
-        assert(op_idx >= 0 && op_idx < NUM_SCALAR_OPS);
-        auto& e = scalar_ops[op_idx];
-        uint32_t scalar_bits = 0;
-        std::memcpy(&scalar_bits, &scalar, sizeof(int32_t));
-        dpu_vector<int32_t> res(lhs.size(), 0, true);
-        detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(),
-                                     scalar_bits, e.kid, e.opcode,
-                                     OpInfo<int32_t>::universal_pipeline);
+    mod.method("launch_binary_scalar_" + type_suffix, [](const dpu_vector<T>& lhs, int64_t scalar, int32_t op_idx) {
+        uint8_t opcode = 0;
+        KernelID kid = 0;
+        switch(op_idx) {
+            case 0: kid = OpInfo<T>::add_scalar; opcode = OpInfo<T>::add_scalar_op; break;
+            case 1: kid = OpInfo<T>::sub_scalar; opcode = OpInfo<T>::sub_scalar_op; break;
+            case 2: kid = OpInfo<T>::mul_scalar; opcode = OpInfo<T>::mul_scalar_op; break;
+            case 3: kid = OpInfo<T>::div_scalar; opcode = OpInfo<T>::div_scalar_op; break;
+            case 4: kid = OpInfo<T>::asr_scalar; opcode = OpInfo<T>::asr_scalar_op; break;
+            default: assert(false);
+        }
+        dpu_vector<T> res(lhs.size(), 0, true);
+        detail::launch_binary_scalar(res.data_desc_ref(), lhs.data_desc_ref(), static_cast<uint64_t>(scalar), kid, opcode, OpInfo<T>::universal_pipeline);
         return res;
     });
 
-    // Unary: op_idx in {0,1} = {NEGATE, ABS}
-    mod.method("launch_unary", [](const dpu_vector<int32_t>& input,
-                                  int32_t op_idx) {
-        assert(op_idx >= 0 && op_idx < NUM_UNARY_OPS);
-        auto& e = unary_ops[op_idx];
-        dpu_vector<int32_t> res(input.size(), 0, true);
-        detail::launch_unary(res.data_desc_ref(), input.data_desc_ref(),
-                             e.kid, e.opcode,
-                             OpInfo<int32_t>::universal_pipeline);
+    mod.method("launch_unary_" + type_suffix, [](const dpu_vector<T>& input, int32_t op_idx) {
+        uint8_t opcode = 0;
+        KernelID kid = 0;
+        switch(op_idx) {
+            case 0: kid = OpInfo<T>::negate; opcode = OpInfo<T>::negate_op; break;
+            case 1: kid = OpInfo<T>::abs;    opcode = OpInfo<T>::abs_op; break;
+            default: assert(false);
+        }
+        dpu_vector<T> res(input.size(), 0, true);
+        detail::launch_unary(res.data_desc_ref(), input.data_desc_ref(), kid, opcode, OpInfo<T>::universal_pipeline);
         return res;
     });
 
-    // Reduction: op_idx in {0..3} = {MIN, MAX, SUM, PRODUCT}
-    // Always returns int64_t (Julia can narrow if needed).
-    mod.method("launch_reduction", [](const dpu_vector<int32_t>& input,
-                                      int32_t op_idx) -> int64_t {
-        assert(op_idx >= 0 && op_idx < NUM_REDUCTION_OPS);
-        auto& e = reduction_ops[op_idx];
-
-        auto& runtime = DpuRuntime::get();
-#if ENABLE_PROMOTION_REDUCTIONS == 1
-        // Use 64-bit buffer to avoid truncation of partial results
-        dpu_vector<int64_t> buf(runtime.num_dpus(),
-                                runtime.num_tasklets() * 8);
-        detail::launch_reduction(buf.data_desc_ref(), input.data_desc_ref(),
-                                 e.kid, e.opcode,
-                                 OpInfo<int32_t>::universal_pipeline);
-        return reduction_cpu(buf, e.kid);
-#else
-        dpu_vector<int32_t> buf(runtime.num_dpus(),
-                                runtime.num_tasklets() * sizeof(size_t));
-        detail::launch_reduction(buf.data_desc_ref(), input.data_desc_ref(),
-                                 e.kid, e.opcode,
-                                 OpInfo<int32_t>::universal_pipeline);
-        return reduction_cpu(buf, e.kid);
-#endif
+    mod.method("launch_reduction_" + type_suffix, [](const dpu_vector<T>& input, int32_t op_idx) -> int64_t {
+         uint8_t opcode = 0;
+         KernelID kid = 0;
+         switch(op_idx) {
+             case 0: kid = OpInfo<T>::min;     opcode = OpInfo<T>::min_op; break;
+             case 1: kid = OpInfo<T>::max;     opcode = OpInfo<T>::max_op; break;
+             case 2: kid = OpInfo<T>::sum;     opcode = OpInfo<T>::sum_op; break;
+             case 3: kid = OpInfo<T>::product; opcode = OpInfo<T>::product_op; break;
+             default: assert(false);
+         }
+         auto& runtime = DpuRuntime::get();
+         // Always promote to 64-bit for reductions returned to Julia
+         dpu_vector<int64_t> buf(runtime.num_dpus(), runtime.num_tasklets() * 8);
+         detail::launch_reduction(buf.data_desc_ref(), input.data_desc_ref(), kid, opcode, OpInfo<T>::universal_pipeline);
+         return reduction_cpu(buf, kid);
     });
 
-    // ---- synchronization ----
-
-    mod.method("dpu_fence", [](dpu_vector<int32_t>& v) {
+    mod.method("dpu_fence_" + type_suffix, [](dpu_vector<T>& v) {
         v.add_fence();
     });
+}
+
+JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
+{
+    register_vector_ops<int32_t>(mod, "Int32");
+    register_vector_ops<int64_t>(mod, "Int64");
 
     mod.method("dpu_wait_running_events", []() {
         DpuRuntime::get().get_event_queue().wait_running_events();
+    });
+
+    mod.method("dpu_shutdown", []() {
+        DpuRuntime::get().shutdown();
     });
 }

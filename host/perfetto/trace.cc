@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <vector>
 
@@ -279,7 +280,12 @@ void shutdown() {
     std::ofstream out(filename, std::ios::binary);
     out.write(trace_data.data(), trace_data.size());
     out.close();
-    logger.lock() << "Trace written to " << filename << " ("
+
+    std::error_code ec;
+    std::string full_path = std::filesystem::absolute(filename, ec).string();
+    if (ec) full_path = filename; // Fallback to raw filename if absolute() fails
+
+    logger.lock() << "Trace written to " << full_path << " ("
                   << trace_data.size() << " bytes)" << std::endl;
     tracing_session_.reset();
     perfetto::Tracing::Shutdown();
