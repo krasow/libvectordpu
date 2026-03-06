@@ -41,7 +41,7 @@ void print_args(DPU_LAUNCH_ARGS args) {
                                                                                \
     const char op_name[] = XSTR(OP);                                           \
     bool is_sum = (op_name[0] == 's' || op_name[0] == 'S');                    \
-    bool is_sum32 = (sizeof(TYPE) == 4 && is_sum);                             \
+    bool is_sum32 = (sizeof(TYPE) == 4 && is_sum && ENABLE_PROMOTION_REDUCTIONS == 1); \
                                                                                \
     int64_t local_red_64 = 0;                                                  \
     TYPE local_red = (TYPE)0;                                                  \

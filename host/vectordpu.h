@@ -48,10 +48,12 @@ struct reduction_result {
   using type = T;
 };
 
+#if ENABLE_PROMOTION_REDUCTIONS == 1
 template <>
 struct reduction_result<int32_t> {
   using type = int64_t;
 };
+#endif
 
 template <typename T>
 class dpu_vector {

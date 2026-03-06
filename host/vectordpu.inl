@@ -142,7 +142,6 @@ dpu_vector<T> dpu_vector<T>::from_cpu(const T* cpu_ptr, uint32_t n,
 template <typename T>
 void dpu_vector<T>::free() {
   if (!data_) return;
-  add_fence();
   data_.reset();
 }
 

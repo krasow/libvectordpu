@@ -449,6 +449,7 @@ static std::string rpn_ops_to_string(const std::vector<uint8_t>& rpn_ops) {
     if (!ops_str.empty()) ops_str += ", ";
     ops_str += s;
     if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+    else if (IS_OP_SCALAR_VAR(op)) i += 1;
   }
   return ops_str;
 }
