@@ -462,12 +462,12 @@ void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
 }
 
 void jit_compile_begin(
-    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+    const std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>& kernels) {
   std::string summary =
       "Batched " + std::to_string(kernels.size()) + " kernels\n";
   for (size_t i = 0; i < kernels.size(); ++i) {
-    summary += "K" + std::to_string(i) + " [" + kernels[i].second +
-               "]: " + rpn_ops_to_string(kernels[i].first) + "\n";
+    summary += "K" + std::to_string(i) + " [" + std::get<1>(kernels[i]) + " / " + std::get<2>(kernels[i]) +
+               "]: " + rpn_ops_to_string(std::get<0>(kernels[i])) + "\n";
   }
   TRACE_EVENT_BEGIN("runtime", "jit_compile_batch", perfetto::Track(8080),
                     "kernels", (int)kernels.size(), "details",

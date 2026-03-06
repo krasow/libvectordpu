@@ -130,7 +130,7 @@ class EventQueue {
   std::list<std::shared_ptr<Event>> running_events_;
 
   // JIT Batching State
-  std::vector<std::pair<std::vector<uint8_t>, std::string>>
+  std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>
       pending_unique_kernels_;
   std::vector<std::shared_ptr<Event>> pending_jit_events_;
   std::shared_future<std::string> latest_jit_future_;

@@ -192,8 +192,14 @@ bool EventQueue::process_next() {
 #if PIPELINE
     if (e->op == Event::OperationType::COMPUTE) {
       size_t lookahead_count = 0;
-      while (lookahead_count < MAX_FUSION_LOOKAHEAD_LENGTH &&
-             !operations_.empty()) {
+      while (lookahead_count < MAX_FUSION_LOOKAHEAD_LENGTH) {
+        if (operations_.empty()) {
+          mtx_.unlock();
+          std::this_thread::sleep_for(std::chrono::microseconds(10));
+          mtx_.lock();
+          if (operations_.empty()) break;
+        }
+
         auto next = operations_.front();
         if (next->op != Event::OperationType::COMPUTE) break;
 
@@ -207,10 +213,6 @@ bool EventQueue::process_next() {
         } else {
           break;
         }
-
-        if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(10));
-        }
       }
     }
 #endif
@@ -222,18 +224,25 @@ bool EventQueue::process_next() {
       }
 
       if (!e->jit_future.valid()) {
-        if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(10));
-        }
+        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH) {
+            if (operations_.empty()) {
+                mtx_.unlock();
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                mtx_.lock();
+                if (operations_.empty()) break;
+            }
 
-        auto it = operations_.begin();
-        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH &&
-               it != operations_.end()) {
-          auto next = *it;
-          if (next->op != Event::OperationType::COMPUTE) break;
-          lock_for_jit(next);
-          if (e->jit_future.valid()) break;
-          ++it;
+            auto it = operations_.begin();
+            bool found_compute = false;
+            while (it != operations_.end()) {
+              auto next = *it;
+              if (next->op != Event::OperationType::COMPUTE) break;
+              lock_for_jit(next);
+              found_compute = true;
+              it = operations_.erase(it); // Note: it's a deque, erase is fine here if it's the front
+              if (e->jit_future.valid()) break;
+            }
+            if (!found_compute || e->jit_future.valid()) break;
         }
 
         if (!e->jit_future.valid()) {
@@ -251,13 +260,13 @@ bool EventQueue::process_next() {
     logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
                   << e->id << std::endl;
 #endif
-    e->jit_binary_path = e->jit_future.get();
-
-    // If a LATER future is already ready, use it instead (monotonically better)
+    // Optimize: check if the absolute latest batch is already ready first
     if (latest_jit_future_.valid() &&
         latest_jit_future_.wait_for(std::chrono::seconds(0)) ==
             std::future_status::ready) {
       e->jit_binary_path = latest_jit_future_.get();
+    } else {
+      e->jit_binary_path = e->jit_future.get();
     }
   }
 #endif
@@ -571,7 +580,7 @@ void EventQueue::debug_active_events() {
 void EventQueue::flush_jit_batch() {
   if (pending_unique_kernels_.empty()) return;
 
-  std::vector<std::pair<std::vector<uint8_t>, std::string>> batch =
+  std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>> batch =
       pending_unique_kernels_;
 
   // Create an async task
@@ -618,32 +627,19 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     }
   }
 
-  // 2. Identify type name
-  const char* type_name = "int32_t";  // Default
+  // 2. Identify types
+  std::string output_type = "int32_t";
   if (e->output && e->output->type_name) {
-    std::string tn = e->output->type_name;
-    if (tn == "i" || tn == "int" || tn == "int32_t")
-      type_name = "int32_t";
-    else if (tn == "j" || tn == "uint32_t")
-      type_name = "uint32_t";
-    else if (tn == "f" || tn == "float")
-      type_name = "float";
-    else if (tn == "d" || tn == "double")
-      type_name = "double";
-    else if (tn == "l" || tn == "int64_t")
-      type_name = "int64_t";
-    else if (tn == "m" || tn == "uint64_t")
-      type_name = "uint64_t";
-    else if (tn == "x" || tn == "long long")
-      type_name = "int64_t";
-    else if (tn == "y" || tn == "unsigned long long")
-      type_name = "uint64_t";
-    else
-      type_name = e->output->type_name;
+    output_type = normalize_type_name(e->output->type_name);
   }
 
-  std::pair<std::vector<uint8_t>, std::string> signature = {e->rpn_ops,
-                                                            type_name};
+  std::string input_type = output_type;
+  if (!e->inputs.empty() && e->inputs[0]->type_name) {
+    input_type = normalize_type_name(e->inputs[0]->type_name);
+  }
+
+  std::tuple<std::vector<uint8_t>, std::string, std::string> signature = {
+      e->rpn_ops, output_type, input_type};
 
   // 3. Find if this kernel exists in the current pending batch
   int idx = -1;
