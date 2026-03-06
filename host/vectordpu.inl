@@ -237,6 +237,7 @@ typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da,
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::add, OpInfo<T>::add_op,
                         OpInfo<T>::universal_pipeline);
@@ -246,6 +247,7 @@ dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::sub, OpInfo<T>::sub_op,
                         OpInfo<T>::universal_pipeline);
@@ -255,6 +257,7 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator*(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::mul, OpInfo<T>::mul_op,
                         OpInfo<T>::universal_pipeline);
@@ -264,6 +267,7 @@ dpu_vector<T> operator*(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator/(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::div, OpInfo<T>::div_op,
                         OpInfo<T>::universal_pipeline);
@@ -669,20 +673,30 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
 }
 
 template <typename T>
-typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
+typename reduction_result<T>::type sum(const dpu_vector<T>& a) {
+  return (typename reduction_result<T>::type)lazy_sum(a);
+}
+
+#if PIPELINE
+template <typename T>
+pipeline_result<typename reduction_result<T>::type> lazy_sum(
+    const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   using RED_TYPE = typename dpu_vector<T>::reduction_result_t;
-  dpu_vector<RED_TYPE> buf(runtime.num_dpus(),
-                    runtime.num_tasklets() * 8);
+  dpu_vector<RED_TYPE> buf(runtime.num_dpus(), runtime.num_tasklets() * 8, true);
   buf.data_desc_ref()->type_name = typeid(RED_TYPE).name();
   buf.data_desc_ref()->debug_name = "reduction_buffer";
   buf.data_desc_ref()->debug_file = __FILE__;
   buf.data_desc_ref()->debug_line = __LINE__;
+  buf.data_desc_ref()->is_reduction_result = true;
+  buf.data_desc_ref()->reduction_rid = OpInfo<T>::sum;
+
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::sum, OpInfo<T>::sum_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::sum);
+  return pipeline_result<RED_TYPE>(std::move(buf));
 }
+#endif
 
 template <typename T>
 typename dpu_vector<T>::reduction_result_t product(const dpu_vector<T>& a) {

@@ -9,6 +9,7 @@
 std::string opcode_to_string(uint8_t op);
 #include "queue.h"
 std::string operationtype_to_string(Event::OperationType op);
+std::string compact_ops_list(const std::vector<uint8_t>& rpn_ops);
 
 namespace trace {
 

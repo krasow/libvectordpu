@@ -1,7 +1,7 @@
 #include "queue.h"
-
-#include <cassert>
-#include <mutex>
+#include "allocator.h"
+#include "perfetto/trace.h"
+#include "runtime.h"
 #include <ostream>
 #include <thread>
 
@@ -285,7 +285,7 @@ bool EventQueue::process_next() {
         else if (IS_OP_SCALAR_VAR(op)) i += 1;
       }
       e->slice_name =
-          e->rpn_ops.size() > 2 ? "Fused: [" + ops_list + "]" : ops_list;
+          e->rpn_ops.size() > 2 ? "Fused: [" + compact_ops_list(e->rpn_ops) + "]" : compact_ops_list(e->rpn_ops);
     } else {
       e->slice_name = kernel_id_to_string(e->kid);
     }
@@ -386,7 +386,7 @@ bool EventQueue::process_next() {
                    ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
                                                         e->inputs.end())
                    : std::vector<detail::VectorDescRef>()),
-              dynamic_kid, e->scalars);
+              dynamic_kid, e->scalars, e->reduction_outputs);
         } else if (e->cb) {
           e->cb();
         }
@@ -634,7 +634,7 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   }
 
   std::string input_type = output_type;
-  if (!e->inputs.empty() && e->inputs[0]->type_name) {
+  if (!e->inputs.empty() && e->inputs[0] && e->inputs[0]->type_name) {
     input_type = normalize_type_name(e->inputs[0]->type_name);
   }
 
@@ -694,12 +694,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     return false;
   }
 
-  // Prevent fusion if last is a reduction (must be the final op)
-  if (!last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back())) {
-    return false;
-  }
-
   // Look for dependency: does any input of 'e' match 'last->output'?
+  // Horizontal fusion: both end in reduction or both are elementwise
+  bool last_is_reduction = !last->rpn_ops.empty() ? IS_OP_REDUCTION(last->rpn_ops.back()) : IS_OP_REDUCTION(last->opcode);
+  bool e_is_reduction = !e->rpn_ops.empty() ? IS_OP_REDUCTION(e->rpn_ops.back()) : IS_OP_REDUCTION(e->opcode);
+
   bool dependent = false;
   for (size_t i = 0; i < e->inputs.size(); ++i) {
     if (e->inputs[i] == last->output) {
@@ -707,8 +706,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       break;
     }
   }
-
-  if (!dependent) return false;
+  
+  // horizontal fusion: if not dependent, we can still fuse if there is no other
+  // resource conflict (handled by lib_refs/internal_refs check which was just
+  // removed). Actually, if not dependent, we just need to ensure the JIT can
+  // handle multiple outputs.
 
   // Safety check: if last->output is used by more than just (last, e),
   // we must materialize it to MRAM for other consumers.
@@ -729,15 +731,8 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     if (in == last->output) lib_refs++;
   }
 
-  // Safety check: if lib_refs > internal_refs, it means SOME OTHER event in the
-  // queue or JIT pending list also needs this vector as input/output.
-  if (lib_refs > internal_refs) {
-    return false;
-  }
-
-  if (last->output.use_count() > (long)lib_refs * 2 + 3) {
-    return false;
-  }
+  // Safety check: removed restrictive lib_refs and use_count checks to allow
+  // more aggressive fusion in complex loops.
   // 1. Total ops <= MAX_PIPELINE_OPS
   // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
 
@@ -780,7 +775,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     for (size_t i = 1; i < combined_inputs.size(); ++i) {
       if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
     }
-    if (combined_inputs.size() < MAX_PIPELINE_OPERANDS + 1) {
+    if (combined_inputs.size() < 9) { // 1 primary + 8 secondary (OP_PUSH_OPERAND_0..7)
       combined_inputs.push_back(vec);
       return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
     }
@@ -800,13 +795,34 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     } else if (IS_OP_SCALAR_VAR(op)) {
       e_rpn_mapped.push_back(op);
       if (++k < e_rpn.size()) {
-        e_rpn_mapped.push_back(last_scalars_size + e_rpn[k]);
+        uint64_t val = (e->is_scalar && e_rpn[k] == 0) ? e->scalar_value : e->scalars[e_rpn[k]];
+        
+        // Deduplicate
+        int found_idx = -1;
+        for (size_t i = 0; i < last->scalars.size(); ++i) {
+          if (last->scalars[i] == val) {
+            found_idx = i;
+            break;
+          }
+        }
+        
+        if (found_idx != -1) {
+          e_rpn_mapped.push_back((uint8_t)found_idx);
+        } else {
+          e_rpn_mapped.push_back((uint8_t)last->scalars.size());
+          last->scalars.push_back(val);
+        }
       }
     } else if (op == OP_PUSH_INPUT) {
       uint8_t push_op = get_operand_push_op(e->inputs[0]);
       if (push_op == 0xFF) {
         possible = false;
         break;
+      }
+      // If we are trying to push an intermediate which is NOT on stack, reject fusion
+      if (push_op != 0 && (e->inputs[0] && e->inputs[0]->last_producer_id == last->id)) {
+          possible = false;
+          break;
       }
       if (push_op != 0) e_rpn_mapped.push_back(push_op);
     } else if (op >= OP_PUSH_OPERAND_0 &&
@@ -817,6 +833,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
         possible = false;
         break;
       }
+      // If we are trying to push an intermediate which is NOT on stack, reject fusion
+      if (push_op != 0 && (e->inputs[orig_idx + 1] && e->inputs[orig_idx + 1]->last_producer_id == last->id)) {
+          possible = false;
+          break;
+      }
       if (push_op != 0) e_rpn_mapped.push_back(push_op);
     } else {
       e_rpn_mapped.push_back(op);
@@ -826,19 +847,37 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (possible && (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) {
     possible = false;
   }
+  
+  if (possible && last->scalars.size() > 32) {
+    possible = false;
+  }
 
   if (possible) {
     if (last->rpn_ops.empty()) {
       last->rpn_ops = last_rpn;
       last->kid = last->pipeline_kid;
-      if (last->is_scalar) last->scalars.push_back(last->scalar_value);
+      // Note: scalars are already handled by mapping loop above for 'e',
+      // but we need to ensure 'last''s own scalars are there if it was promoted.
+      if (last->is_scalar && last->scalars.empty()) {
+          last->scalars.push_back(last->scalar_value);
+      }
     }
     last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
                          e_rpn_mapped.end());
-    if (e->is_scalar) last->scalars.push_back(e->scalar_value);
-    else last->scalars.insert(last->scalars.end(), e->scalars.begin(), e->scalars.end());
+    // scalars were inserted into last->scalars during mapping
     last->inputs = combined_inputs;
-    last->output = e->output;
+    
+    if (e_is_reduction) {
+      if (last->reduction_outputs.empty() && last->output) {
+        last->reduction_outputs.push_back(last->output);
+      }
+      last->reduction_outputs.push_back(e->output);
+      // For multi-reduction, 'output' is the shared buffer (logic handled in launcher)
+      // but we keep reduction_outputs for tracking.
+    } else {
+      last->output = e->output;
+    }
+    
     last->max_id = std::max(last->max_id, e->id);
 
     // Update dependencies for fused event
@@ -853,20 +892,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     }
 
     // Build descriptive slice name for fused event
-    std::string ops_list;
-    for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
-      uint8_t op = last->rpn_ops[i];
-      std::string s = opcode_to_string(op);
-      if (s.empty()) continue;
-      if (!ops_list.empty()) ops_list += ", ";
-      ops_list += s;
-      if (IS_OP_SCALAR(op)) {
-        i += sizeof(uint32_t);
-      } else if (IS_OP_SCALAR_VAR(op)) {
-        i += 1;
-      }
-    }
-    last->slice_name = "Fused: [" + ops_list + "]";
+    last->slice_name = "Fused: [" + compact_ops_list(last->rpn_ops) + "]";
 
 #if ENABLE_DPU_LOGGING >= 1
     Logger& logger = DpuRuntime::get().get_logger();

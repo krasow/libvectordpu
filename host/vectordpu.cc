@@ -249,12 +249,16 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
-    const std::vector<uint32_t>& scalars) {
+    const std::vector<uint32_t>& scalars,
+    const std::vector<VectorDescRef>& reduction_outputs) {
   auto& runtime = DpuRuntime::get();
-  runtime.get_allocator().realize_allocation(res);
+  if (res) runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
   for (auto& op : operands) {
     runtime.get_allocator().realize_allocation(op);
+  }
+  for (auto& red : reduction_outputs) {
+    runtime.get_allocator().realize_allocation(red);
   }
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -289,7 +293,7 @@ void internal_launch_universal_pipeline(
     }
 
     // Map scalar arguments
-    for (size_t j = 0; j < 8; ++j) {
+    for (size_t j = 0; j < 32; ++j) {
       if (j < scalars.size()) {
         args[i].pipeline.scalars[j] = scalars[j];
       } else {

@@ -17,6 +17,6 @@ std::string jit_compile(
 void jit_cleanup();
 
 // Normalizes a type name (e.g. "i" -> "int32_t")
-std::string normalize_type_name(const std::string& name);
+std::string normalize_type_name(const char* name);
 
 #endif

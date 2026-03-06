@@ -27,6 +27,7 @@ class Event : public std::enable_shared_from_this<Event> {
   // Metadata for fusion
   std::vector<detail::VectorDescRef> inputs;
   detail::VectorDescRef output;
+  std::vector<detail::VectorDescRef> reduction_outputs;
   std::vector<uint8_t> rpn_ops;
   std::vector<uint32_t> scalars;
   KernelID kid = 0;
