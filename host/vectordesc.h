@@ -28,6 +28,7 @@ struct VectorDesc {
 
   bool ptr_allocated =
       true;  // Default to true for backwards/eager compatibility
+  bool is_broadcast = false;
   size_t last_producer_id = 0;
   const char* type_name = nullptr;
   const char* debug_name = nullptr;

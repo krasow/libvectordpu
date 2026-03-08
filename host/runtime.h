@@ -9,7 +9,7 @@ struct dpu_set_t;
 
 class DpuRuntime {
  private:
-  DpuRuntime() : initialized_(false) {}
+  DpuRuntime();
   ~DpuRuntime() = default;
 
   bool initialized_;
@@ -24,11 +24,8 @@ class DpuRuntime {
   DpuRuntime(const DpuRuntime&) = delete;
   DpuRuntime& operator=(const DpuRuntime&) = delete;
 
-  // Get singleton instance
-  static DpuRuntime& get() {
-    static DpuRuntime instance;
-    return instance;
-  }
+  // Get singleton instance (leaked to avoid static destruction order issues)
+  static DpuRuntime& get();
 
   void init(uint32_t num_dpus);
   bool is_initialized() const { return initialized_; }

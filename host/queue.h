@@ -14,6 +14,9 @@
 #include "common.h"
 #include "vectordesc.h"
 
+class Event;
+class EventQueue;
+
 class Event : public std::enable_shared_from_this<Event> {
  public:
   enum class OperationType { COMPUTE, DPU_TRANSFER, HOST_TRANSFER, FENCE };
@@ -24,6 +27,7 @@ class Event : public std::enable_shared_from_this<Event> {
   // Metadata for fusion
   std::vector<detail::VectorDescRef> inputs;
   detail::VectorDescRef output;
+  std::vector<detail::VectorDescRef> reduction_outputs;
   std::vector<uint8_t> rpn_ops;
   std::vector<uint32_t> scalars;
   KernelID kid = 0;
@@ -57,9 +61,14 @@ class Event : public std::enable_shared_from_this<Event> {
   bool operator==(const Event& other) const { return this->id == other.id; }
 };
 
+struct CallbackData {
+  std::shared_ptr<Event> event;
+  EventQueue* queue;
+};
+
 class EventQueue {
  public:
-  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 64;
+  static constexpr size_t DEFAULT_MAX_QUEUE_DEPTH = 1024;
 
   EventQueue() = default;
   ~EventQueue() = default;
@@ -76,6 +85,7 @@ class EventQueue {
 
   bool process_next();
   void process_events(size_t wait_for_id);
+  void wait_running_events();
   void debug_print_queue();
   void debug_active_events();
   size_t count_internal_references(detail::VectorDescRef vec);
@@ -110,6 +120,7 @@ class EventQueue {
 
   std::atomic<size_t> last_finished_id_{0};
   std::atomic<int> outstanding_callbacks_{0};
+  std::atomic<bool> oom_detected_{false};
 
  private:
   std::mutex mtx_;
@@ -120,9 +131,9 @@ class EventQueue {
   std::list<std::shared_ptr<Event>> running_events_;
 
   // JIT Batching State
-  std::vector<std::pair<std::vector<uint8_t>, std::string>>
+  std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>
       pending_unique_kernels_;
   std::vector<std::shared_ptr<Event>> pending_jit_events_;
-
+  std::shared_future<std::string> latest_jit_future_;
   std::string current_binary_path_;
 };

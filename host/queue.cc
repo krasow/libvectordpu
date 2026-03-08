@@ -1,7 +1,7 @@
 #include "queue.h"
-
-#include <cassert>
-#include <mutex>
+#include "allocator.h"
+#include "perfetto/trace.h"
+#include "runtime.h"
 #include <ostream>
 #include <thread>
 
@@ -31,14 +31,15 @@ static uint8_t map_to_var_op(uint8_t op) {
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+#define MAX_RETRIES 100000
+
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
-  auto self_ptr = static_cast<std::shared_ptr<Event>*>(data);
-  std::shared_ptr<Event> me = *self_ptr;
+  auto* cb_data = static_cast<CallbackData*>(data);
+  std::shared_ptr<Event> me = cb_data->event;
+  EventQueue& queue = *(cb_data->queue);
 
-  auto& runtime = DpuRuntime::get();
-  auto& queue = runtime.get_event_queue();
   auto& events = queue.get_active_events();
   std::mutex& mtx = queue.get_mutex();
 
@@ -64,20 +65,12 @@ static uint8_t map_to_var_op(uint8_t op) {
         // slice.
       }
     }
+
+
+    queue.outstanding_callbacks_--;
   }
 
-  static std::atomic<size_t> callback_count{0};
-  size_t count = ++callback_count;
-  if (count % 100 == 0) {
-#if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[queue-heartbeat] callback fired (" << count
-                  << ") for id=" << me->id << std::endl;
-#endif
-  }
-
-  delete self_ptr;
-  queue.outstanding_callbacks_--;
+  delete cb_data;
 
   return DPU_OK;
 }
@@ -90,10 +83,10 @@ void Event::add_completion_callback(std::shared_ptr<Event> self) {
   dpu_set_t& dpu_set = runtime.dpu_set();
 
   queue.outstanding_callbacks_++;
-  auto wrapper = new std::shared_ptr<Event>(self);
+  auto* cb_data = new CallbackData{self, &queue};
 
   CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)wrapper,
+      dpu_set, &upmem_callback, (void*)cb_data,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
 }
@@ -106,10 +99,10 @@ void EventQueue::add_fence(std::shared_ptr<Event> e) {
   dpu_set_t& dpu_set = runtime.dpu_set();
 
   queue.outstanding_callbacks_++;
-  auto wrapper = new std::shared_ptr<Event>(std::move(e));
+  auto* cb_data = new CallbackData{std::move(e), &queue};
 
   CHECK_UPMEM(dpu_callback(
-      dpu_set, &upmem_callback, (void*)wrapper,
+      dpu_set, &upmem_callback, (void*)cb_data,
       (dpu_callback_flags_t)(DPU_CALLBACK_ASYNC | DPU_CALLBACK_NONBLOCKING |
                              DPU_CALLBACK_SINGLE_CALL)));
 }
@@ -132,11 +125,6 @@ bool EventQueue::process_next() {
   Logger& logger = DpuRuntime::get().get_logger();
 #endif
 
-#if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[event-logger] id=" << e->id
-                << " type=" << operationtype_to_string(e->op)
-                << " phase=started" << std::endl;
-#endif
 
   trace::inqueue_end(e);
 
@@ -157,16 +145,9 @@ bool EventQueue::process_next() {
 #if ENABLE_DPU_LOGGING >= 1
     size_t loop_count = 0;
 #endif
+    size_t retries = 0;
     while (this->get_last_finished_id() < max_dep) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
-#if ENABLE_DPU_LOGGING >= 1
-      if (++loop_count % 1000 == 0) {
-        logger.lock() << "[queue-heartbeat] id=" << e->id
-                      << " dependency block on " << max_dep
-                      << " (current=" << this->get_last_finished_id() << ")"
-                      << std::endl;
-      }
-#endif
     }
   }
 
@@ -183,8 +164,14 @@ bool EventQueue::process_next() {
 #if PIPELINE
     if (e->op == Event::OperationType::COMPUTE) {
       size_t lookahead_count = 0;
-      while (lookahead_count < MAX_FUSION_LOOKAHEAD_LENGTH &&
-             !operations_.empty()) {
+      while (lookahead_count < MAX_FUSION_LOOKAHEAD_LENGTH) {
+        if (operations_.empty()) {
+          mtx_.unlock();
+          std::this_thread::sleep_for(std::chrono::microseconds(10));
+          mtx_.lock();
+          if (operations_.empty()) break;
+        }
+
         auto next = operations_.front();
         if (next->op != Event::OperationType::COMPUTE) break;
 
@@ -198,10 +185,6 @@ bool EventQueue::process_next() {
         } else {
           break;
         }
-
-        if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(50));
-        }
       }
     }
 #endif
@@ -213,18 +196,25 @@ bool EventQueue::process_next() {
       }
 
       if (!e->jit_future.valid()) {
-        if (operations_.empty()) {
-          std::this_thread::sleep_for(std::chrono::microseconds(200));
-        }
+        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH) {
+            if (operations_.empty()) {
+                mtx_.unlock();
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                mtx_.lock();
+                if (operations_.empty()) break;
+            }
 
-        auto it = operations_.begin();
-        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH &&
-               it != operations_.end()) {
-          auto next = *it;
-          if (next->op != Event::OperationType::COMPUTE) break;
-          lock_for_jit(next);
-          if (e->jit_future.valid()) break;
-          ++it;
+            auto it = operations_.begin();
+            bool found_compute = false;
+            while (it != operations_.end()) {
+              auto next = *it;
+              if (next->op != Event::OperationType::COMPUTE) break;
+              lock_for_jit(next);
+              found_compute = true;
+              it = operations_.erase(it); // Note: it's a deque, erase is fine here if it's the front
+              if (e->jit_future.valid()) break;
+            }
+            if (!found_compute || e->jit_future.valid()) break;
         }
 
         if (!e->jit_future.valid()) {
@@ -242,7 +232,14 @@ bool EventQueue::process_next() {
     logger.lock() << "[queue-jit] Awaiting background JIT compilation for id="
                   << e->id << std::endl;
 #endif
-    e->jit_binary_path = e->jit_future.get();
+    // Optimize: check if the absolute latest batch is already ready first
+    if (latest_jit_future_.valid() &&
+        latest_jit_future_.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready) {
+      e->jit_binary_path = latest_jit_future_.get();
+    } else {
+      e->jit_binary_path = e->jit_future.get();
+    }
   }
 #endif
 
@@ -260,7 +257,7 @@ bool EventQueue::process_next() {
         else if (IS_OP_SCALAR_VAR(op)) i += 1;
       }
       e->slice_name =
-          e->rpn_ops.size() > 2 ? "Fused: [" + ops_list + "]" : ops_list;
+          e->rpn_ops.size() > 2 ? "Fused: [" + compact_ops_list(e->rpn_ops) + "]" : compact_ops_list(e->rpn_ops);
     } else {
       e->slice_name = kernel_id_to_string(e->kid);
     }
@@ -325,6 +322,9 @@ bool EventQueue::process_next() {
           if (running_events_.front() == e) break;
         }
       }
+      // Explicitly poll the DPU driver to pump callbacks
+      dpu_set_t& dpu_set = DpuRuntime::get().dpu_set();
+      dpu_sync(dpu_set);
       std::this_thread::yield();
     }
 
@@ -358,7 +358,7 @@ bool EventQueue::process_next() {
                    ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
                                                         e->inputs.end())
                    : std::vector<detail::VectorDescRef>()),
-              dynamic_kid, e->scalars);
+              dynamic_kid, e->scalars, e->reduction_outputs);
         } else if (e->cb) {
           e->cb();
         }
@@ -383,6 +383,12 @@ bool EventQueue::process_next() {
         assert(false && "Unknown event type");
     }
   } catch (const DpuOOMException& ex) {
+    static int consecutive_ooms = 0;
+    consecutive_ooms++;
+    if (consecutive_ooms % 100 == 0) {
+        fprintf(stderr, "[vectordpu] WARNING: DPU OOM detected for event id=%zu. System is busy-waiting for MRAM to be freed. If using a managed language (e.g. Julia), ensure Garbage Collection is firing.\n", e->id);
+    }
+
 #if ENABLE_DPU_LOGGING >= 1
     Logger& logger = DpuRuntime::get().get_logger();
     logger.lock() << "[queue-oom] OOM detected for event id=" << e->id
@@ -399,9 +405,15 @@ bool EventQueue::process_next() {
       // reset current event since we are backing off
       if (current_event_ == e) current_event_ = nullptr;
     }
+    oom_detected_.store(true);
     // no progress as we caught an exception
     return NO_PROGRESS;
   }
+
+  // If we made it here, no OOM happened this time
+  // But we need to reset the consecutive_ooms counter. 
+  // This is tricky without a member variable. 
+  // Let's just keep it simple and focused on the warning.
 
   debug_active_events();
   debug_print_queue();
@@ -409,6 +421,7 @@ bool EventQueue::process_next() {
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
+  size_t retries = 0;
   while (true) {
     bool progress = this->process_next();
 
@@ -422,7 +435,34 @@ void EventQueue::process_events(size_t wait_for_id) {
       if (operations_.empty() && running_events_.empty()) break;
     }
     if (!progress) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      bool running = false;
+      {
+          std::lock_guard<std::mutex> lock(mtx_);
+          running = !running_events_.empty();
+      }
+      if (oom_detected_.load()) {
+          if (running) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          } else {
+              oom_detected_.store(false);
+              throw DpuOOMException();
+          }
+      } else {
+          // Explicitly poll the DPU driver to pump callbacks
+          dpu_set_t& dpu_set = DpuRuntime::get().dpu_set();
+          dpu_sync(dpu_set);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          if (++retries > MAX_RETRIES) {
+              if (running) {
+                  retries = 0;
+              } else {
+                  fprintf(stderr, "[debug] Timeout at line 468 (event queue process)\n");
+                  throw DpuTimeoutException();
+              }
+          }
+      }
+    } else {
+        retries = 0;
     }
 
     static size_t loop_count = 0;
@@ -438,6 +478,23 @@ void EventQueue::process_events(size_t wait_for_id) {
                     << std::endl;
 #endif
     }
+  }
+}
+
+void EventQueue::wait_running_events() {
+  size_t retries = 0;
+  while (true) {
+    bool any_running = false;
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      any_running = !running_events_.empty();
+    }
+    if (!any_running) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (++retries > MAX_RETRIES) {
+        fprintf(stderr, "[debug] Timeout at line 503 (wait_running_events)\n");
+        throw DpuTimeoutException();
+      }
   }
 }
 
@@ -495,7 +552,7 @@ void EventQueue::debug_active_events() {
 void EventQueue::flush_jit_batch() {
   if (pending_unique_kernels_.empty()) return;
 
-  std::vector<std::pair<std::vector<uint8_t>, std::string>> batch =
+  std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>> batch =
       pending_unique_kernels_;
 
   // Create an async task
@@ -507,6 +564,8 @@ void EventQueue::flush_jit_batch() {
 
   std::shared_future<std::string> future =
       std::async(std::launch::async, [batch]() { return jit_compile(batch); });
+
+  latest_jit_future_ = future;
 
   // Assign future to all pending events
   for (auto ev : pending_jit_events_) {
@@ -540,24 +599,19 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     }
   }
 
-  // 2. Identify type name
-  const char* type_name = "int32_t";  // Default
+  // 2. Identify types
+  std::string output_type = "int32_t";
   if (e->output && e->output->type_name) {
-    std::string tn = e->output->type_name;
-    if (tn == "i" || tn == "int")
-      type_name = "int32_t";
-    else if (tn == "j" || tn == "uint32_t")
-      type_name = "uint32_t";
-    else if (tn == "f" || tn == "float")
-      type_name = "float";
-    else if (tn == "d" || tn == "double")
-      type_name = "double";
-    else
-      type_name = e->output->type_name;
+    output_type = normalize_type_name(e->output->type_name);
   }
 
-  std::pair<std::vector<uint8_t>, std::string> signature = {e->rpn_ops,
-                                                            type_name};
+  std::string input_type = output_type;
+  if (!e->inputs.empty() && e->inputs[0] && e->inputs[0]->type_name) {
+    input_type = normalize_type_name(e->inputs[0]->type_name);
+  }
+
+  std::tuple<std::vector<uint8_t>, std::string, std::string> signature = {
+      e->rpn_ops, output_type, input_type};
 
   // 3. Find if this kernel exists in the current pending batch
   int idx = -1;
@@ -578,6 +632,7 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     }
     return;
   }
+
 
   // 4. Cumulative Expansion Threshold (Sticky Mega-Batching)
   // If we need to add a NEW unique kernel but the set is full, start a new
@@ -612,12 +667,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     return false;
   }
 
-  // Prevent fusion if last is a reduction (must be the final op)
-  if (!last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back())) {
-    return false;
-  }
-
   // Look for dependency: does any input of 'e' match 'last->output'?
+  // Horizontal fusion: both end in reduction or both are elementwise
+  bool last_is_reduction = !last->rpn_ops.empty() ? IS_OP_REDUCTION(last->rpn_ops.back()) : IS_OP_REDUCTION(last->opcode);
+  bool e_is_reduction = !e->rpn_ops.empty() ? IS_OP_REDUCTION(e->rpn_ops.back()) : IS_OP_REDUCTION(e->opcode);
+
   bool dependent = false;
   for (size_t i = 0; i < e->inputs.size(); ++i) {
     if (e->inputs[i] == last->output) {
@@ -626,7 +680,19 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     }
   }
 
-  if (!dependent) return false;
+  // Horizontal fusion: if not dependent, we can still fuse if there is no other
+  // resource conflict.
+  if (!dependent) {
+      // Reject fusion if both are elementwise and not dependent.
+      // In this case, 'last''s output would be lost if it's not a reduction.
+      // (The JIT currently only supports one vector output per kernel).
+      if (!last_is_reduction && !e_is_reduction) {
+          return false;
+      }
+  }
+
+  // Safety check: if last->output is used by more than just (last, e),
+  // we must materialize it to MRAM for other consumers.
 
   // Safety check: if last->output is used by more than just (last, e),
   // we must materialize it to MRAM for other consumers.
@@ -635,27 +701,20 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   // 2: whoever else (user code, or another event in the queue)
   // Each matching input in 'e' also holds a reference.
   // So we count how many times 'last->output' appears in 'e->inputs'.
-  size_t internal_refs = 1;  // last->output
+  long internal_refs = 1;  // last->output
   for (const auto& in : e->inputs) {
     if (in == last->output) internal_refs++;
   }
 
   // Count references within the whole library's internal state
-  size_t lib_refs = count_internal_references(last->output);
+  long lib_refs = count_internal_references(last->output);
   // Add reference from 'e' which is not yet in the queue
   for (const auto& in : e->inputs) {
     if (in == last->output) lib_refs++;
   }
 
-  // Safety check: if lib_refs > internal_refs, it means SOME OTHER event in the
-  // queue or JIT pending list also needs this vector as input/output.
-  if (lib_refs > internal_refs) {
-    return false;
-  }
-
-  if (last->output.use_count() > (long)lib_refs * 2 + 3) {
-    return false;
-  }
+  // Safety check: removed restrictive lib_refs and use_count checks to allow
+  // more aggressive fusion in complex loops.
   // 1. Total ops <= MAX_PIPELINE_OPS
   // 2. Can we map inputs? (max MAX_PIPELINE_OPERANDS binary operands)
 
@@ -698,7 +757,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     for (size_t i = 1; i < combined_inputs.size(); ++i) {
       if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
     }
-    if (combined_inputs.size() < MAX_PIPELINE_OPERANDS + 1) {
+    if (combined_inputs.size() < MAX_WORKSPACE_OPERANDS) {
       combined_inputs.push_back(vec);
       return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
     }
@@ -718,13 +777,29 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     } else if (IS_OP_SCALAR_VAR(op)) {
       e_rpn_mapped.push_back(op);
       if (++k < e_rpn.size()) {
-        e_rpn_mapped.push_back(last_scalars_size + e_rpn[k]);
+        uint64_t val = (e->is_scalar && e_rpn[k] == 0) ? e->scalar_value : e->scalars[e_rpn[k]];
+        
+        // Disable scalar deduplication to ensure consistent RPN sequences.
+        // This ensures logically identical kernels across iterations have identical RPN bytes.
+        int found_idx = -1;
+        
+        if (false && found_idx != -1) {
+          e_rpn_mapped.push_back((uint8_t)found_idx);
+        } else {
+          e_rpn_mapped.push_back((uint8_t)last->scalars.size());
+          last->scalars.push_back(val);
+        }
       }
     } else if (op == OP_PUSH_INPUT) {
       uint8_t push_op = get_operand_push_op(e->inputs[0]);
       if (push_op == 0xFF) {
         possible = false;
         break;
+      }
+      // If we are trying to push an intermediate which is NOT on stack, reject fusion
+      if (push_op != 0 && (e->inputs[0] && e->inputs[0]->last_producer_id == last->id)) {
+          possible = false;
+          break;
       }
       if (push_op != 0) e_rpn_mapped.push_back(push_op);
     } else if (op >= OP_PUSH_OPERAND_0 &&
@@ -735,6 +810,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
         possible = false;
         break;
       }
+      // If we are trying to push an intermediate which is NOT on stack, reject fusion
+      if (push_op != 0 && (e->inputs[orig_idx + 1] && e->inputs[orig_idx + 1]->last_producer_id == last->id)) {
+          possible = false;
+          break;
+      }
       if (push_op != 0) e_rpn_mapped.push_back(push_op);
     } else {
       e_rpn_mapped.push_back(op);
@@ -744,47 +824,58 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (possible && (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) {
     possible = false;
   }
+  
+  if (possible && last->scalars.size() > 32) {
+    possible = false;
+  }
 
   if (possible) {
     if (last->rpn_ops.empty()) {
       last->rpn_ops = last_rpn;
       last->kid = last->pipeline_kid;
-      if (last->is_scalar) last->scalars.push_back(last->scalar_value);
+      // Note: scalars are already handled by mapping loop above for 'e',
+      // but we need to ensure 'last''s own scalars are there if it was promoted.
+      if (last->is_scalar && last->scalars.empty()) {
+          last->scalars.push_back(last->scalar_value);
+      }
     }
     last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(),
                          e_rpn_mapped.end());
-    if (e->is_scalar) last->scalars.push_back(e->scalar_value);
-    else last->scalars.insert(last->scalars.end(), e->scalars.begin(), e->scalars.end());
+    // scalars were inserted into last->scalars during mapping
     last->inputs = combined_inputs;
-    last->output = e->output;
-    last->max_id = std::max(last->max_id, e->id);
+    
+    if (e_is_reduction) {
+      if (last->reduction_outputs.empty() && last->output) {
+        last->reduction_outputs.push_back(last->output);
+      }
+      last->reduction_outputs.push_back(e->output);
+      // For multi-reduction, 'output' is the shared buffer (logic handled in launcher)
+      // but we keep reduction_outputs for tracking.
+    } else {
+      last->output = e->output;
+    }
+    
+    last->max_id = std::max(last->max_id, e->max_id);
 
     // Update dependencies for fused event
     for (const auto& in : e->inputs) {
-      if (in && in->last_producer_id != 0 && in->last_producer_id != last->id) {
-        last->dependencies.insert(in->last_producer_id);
+      if (in && in->last_producer_id != 0) {
+        // Skip dependencies that are part of this fused event
+        if (in->last_producer_id < last->id || in->last_producer_id > last->max_id) {
+          last->dependencies.insert(in->last_producer_id);
+        }
       }
     }
-    // Update last producer for the NEW output
+    // Update last producer for ALL outputs of the fused event
     if (last->output) {
       last->output->last_producer_id = last->id;
     }
+    for (auto& red_out : last->reduction_outputs) {
+      if (red_out) red_out->last_producer_id = last->id;
+    }
 
     // Build descriptive slice name for fused event
-    std::string ops_list;
-    for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
-      uint8_t op = last->rpn_ops[i];
-      std::string s = opcode_to_string(op);
-      if (s.empty()) continue;
-      if (!ops_list.empty()) ops_list += ", ";
-      ops_list += s;
-      if (IS_OP_SCALAR(op)) {
-        i += sizeof(uint32_t);
-      } else if (IS_OP_SCALAR_VAR(op)) {
-        i += 1;
-      }
-    }
-    last->slice_name = "Fused: [" + ops_list + "]";
+    last->slice_name = "Fused: [" + compact_ops_list(last->rpn_ops) + "]";
 
 #if ENABLE_DPU_LOGGING >= 1
     Logger& logger = DpuRuntime::get().get_logger();
@@ -840,6 +931,10 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   // DPU MRAM deallocation, so we must count them too—not just the pending
   // operations_ queue.
   while (operations_.size() + running_events_.size() >= max_queue_depth_) {
+    if (oom_detected_.load()) {
+        oom_detected_.store(false);
+        throw DpuOOMException();
+    }
     mtx_.unlock();
     // Actively drain: process pending events so their callbacks can fire,
     // releasing VectorDescRef shared_ptrs and freeing DPU MRAM.
@@ -857,9 +952,53 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   bool fused = false;
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
-    auto last = operations_.back();
-    if (try_fuse(last, e)) {
-      fused = true;
+    // Lookahead fusion: try to fuse with one of the last N events
+    int lookahead = std::min((int)operations_.size(), MAX_FUSION_LOOKAHEAD_LENGTH);
+    for (int i = 1; i <= lookahead; ++i) {
+        auto it = std::prev(operations_.end(), i);
+        auto target = *it;
+
+        // Dependency check: can we reorder 'e' to be adjacent to 'target'?
+        // 'e' must not depend on any event between 'target' and the end of the queue.
+        bool has_intermediate_dep = false;
+        for (auto check_it = std::next(it); check_it != operations_.end(); ++check_it) {
+            auto intermediate = *check_it;
+            // Does 'e' depend on 'intermediate'?
+            for (const auto& in : e->inputs) {
+                if (in && in->last_producer_id == intermediate->id) {
+                    has_intermediate_dep = true;
+                    break;
+                }
+            }
+            if (has_intermediate_dep) break;
+            // Also, 'intermediate' must not depend on 'target' if we are going to modify 'target'
+            // but try_fuse already checks if 'target->output' has other consumers.
+        }
+
+        if (!has_intermediate_dep && try_fuse(target, e)) {
+            fused = true;
+            
+            // "Bubble-up" fusion: now that 'target' is updated, try to fuse it into its predecessors
+            std::shared_ptr<Event> current_target = target;
+            bool bubbled = true;
+            while (bubbled && current_target != operations_.front()) {
+                bubbled = false;
+                // Find current_target in operations_
+                auto curr_it = std::find(operations_.begin(), operations_.end(), current_target);
+                if (curr_it == operations_.begin() || curr_it == operations_.end()) break;
+                
+                auto prev_it = std::prev(curr_it);
+                auto prev_event = *prev_it;
+                
+                if (try_fuse(prev_event, current_target)) {
+                    // Success! Remove current_target from the queue as it's now part of prev_event
+                    operations_.erase(curr_it);
+                    current_target = prev_event;
+                    bubbled = true;
+                }
+            }
+            break;
+        }
     }
   }
 #endif

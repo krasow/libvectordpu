@@ -14,12 +14,14 @@ namespace detail {
 VectorDesc::~VectorDesc() {
   if (ptr_allocated) {
     auto& runtime = DpuRuntime::get();
+    if (runtime.is_initialized()) {
 #if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = runtime.get_logger();
-    log_deallocation(logger, type_name, num_elements,
-                     (debug_name ? debug_name : ""), debug_file, debug_line);
+      Logger& logger = runtime.get_logger();
+      log_deallocation(logger, type_name, num_elements,
+                       (debug_name ? debug_name : ""), debug_file, debug_line);
 #endif
-    runtime.get_allocator().deallocate_upmem_vector(this);
+      runtime.get_allocator().deallocate_upmem_vector(this);
+    }
   }
 }
 
@@ -80,7 +82,7 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
 }
 
 void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
-                                   uint32_t scalar, KernelID kernel_id) {
+                                   uint64_t scalar, KernelID kernel_id) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(res);
   runtime.get_allocator().realize_allocation(lhs);
@@ -94,8 +96,8 @@ void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
     args[i].num_elements = lhs->desc[i].size_bytes / lhs->element_size;
     args[i].size_type = lhs->element_size;
     args[i].binary_scalar.lhs_offset = (lhs->desc[i].ptr);
-    args[i].binary_scalar.rhs_scalar = scalar;
     args[i].binary_scalar.res_offset = (res->desc[i].ptr);
+    args[i].binary_scalar.rhs_scalar = scalar;
   }
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -247,12 +249,16 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
-    const std::vector<uint32_t>& scalars) {
+    const std::vector<uint32_t>& scalars,
+    const std::vector<VectorDescRef>& reduction_outputs) {
   auto& runtime = DpuRuntime::get();
-  runtime.get_allocator().realize_allocation(res);
+  if (res) runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
   for (auto& op : operands) {
     runtime.get_allocator().realize_allocation(op);
+  }
+  for (auto& red : reduction_outputs) {
+    runtime.get_allocator().realize_allocation(red);
   }
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
@@ -278,16 +284,24 @@ void internal_launch_universal_pipeline(
     }
 
     // Map operands by index (0..MAX_PIPELINE_OPERANDS-1)
-    for (size_t j = 0; j < MAX_PIPELINE_OPERANDS; ++j) {
-      if (j < operands.size()) {
-        args[i].pipeline.binary_operands[j] = operands[j]->desc[i].ptr;
-      } else {
-        args[i].pipeline.binary_operands[j] = 0;
-      }
+    size_t op_idx = 0;
+    for (; op_idx < operands.size() && op_idx < MAX_PIPELINE_OPERANDS; ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = operands[op_idx]->desc[i].ptr;
+    }
+
+    // Map reduction outputs immediately after used operands
+    // (JIT expects them at binary_operands[max_op_idx + 1])
+    for (size_t r_idx = 0; r_idx < reduction_outputs.size() && op_idx < MAX_PIPELINE_OPERANDS; ++r_idx, ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = reduction_outputs[r_idx]->desc[i].ptr;
+    }
+
+    // Zero out remaining operand slots
+    for (; op_idx < MAX_PIPELINE_OPERANDS; ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = 0;
     }
 
     // Map scalar arguments
-    for (size_t j = 0; j < 8; ++j) {
+    for (size_t j = 0; j < 32; ++j) {
       if (j < scalars.size()) {
         args[i].pipeline.scalars[j] = scalars[j];
       } else {
@@ -411,7 +425,7 @@ void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
 #endif
 }
 
-void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint64_t scalar,
                           KernelID kernel_id, uint8_t opcode,
                           KernelID pipeline_kid) {
   auto& runtime = DpuRuntime::get();
@@ -458,6 +472,12 @@ void launch_reduction(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
   // Mark result description as reduction synchronously
   res->is_reduction_result = true;
   res->reduction_rid = static_cast<KernelID>(opcode);
+
+#if ENABLE_PROMOTION_REDUCTIONS == 1
+  if (res->element_size == 8) {
+    res->type_name = "int64_t";
+  }
+#endif
 #else
   (void)pipeline_kid;
   auto bound_cb = std::bind(internal_launch_reduction, res, rhs, kernel_id);
