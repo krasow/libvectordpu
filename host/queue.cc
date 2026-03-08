@@ -142,10 +142,6 @@ bool EventQueue::process_next() {
                     << std::endl;
     }
 #endif
-#if ENABLE_DPU_LOGGING >= 1
-    size_t loop_count = 0;
-#endif
-    size_t retries = 0;
     while (this->get_last_finished_id() < max_dep) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -766,7 +762,6 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
 
   std::vector<uint8_t> e_rpn_mapped;
   bool possible = true;
-  size_t last_scalars_size = last->rpn_ops.empty() && last->is_scalar ? 1 : last->scalars.size();
   for (size_t k = 0; k < e_rpn.size(); ++k) {
     uint8_t op = e_rpn[k];
     if (IS_OP_SCALAR(op)) {
@@ -953,6 +948,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
     // Lookahead fusion: try to fuse with one of the last N events
+#if ENABLE_INTER_KERNEL_FUSION
     int lookahead = std::min((int)operations_.size(), MAX_FUSION_LOOKAHEAD_LENGTH);
     for (int i = 1; i <= lookahead; ++i) {
         auto it = std::prev(operations_.end(), i);
@@ -1000,6 +996,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
             break;
         }
     }
+#endif
   }
 #endif
 

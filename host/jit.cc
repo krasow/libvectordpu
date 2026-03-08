@@ -318,9 +318,6 @@ static void write_kernel_function(std::ofstream& out,
       }
       stack.push_back(res);
     } else if (IS_OP_REDUCTION(op)) {
-      // Reduction consumes the stack top
-      static int current_red_idx = 0;
-      if (i == 0) current_red_idx = 0; // Reset for start of sequence scan in loop
       // Actually we are emitting code inside the loop. 
       // We need to keep track of which reduction this is in the RPN sequence.
       // Let's count reductions encountered so far in this sequence.
@@ -484,7 +481,7 @@ std::string jit_compile(
   std::cout << std::flush;
 
 #if ENABLE_DPU_LOGGING >= 1
-  Logger& logger = DpuRuntime::get().get_logger();
+  // Logger& logger = DpuRuntime::get().get_logger();
 #endif
 
   {
