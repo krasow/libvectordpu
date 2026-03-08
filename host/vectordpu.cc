@@ -284,12 +284,20 @@ void internal_launch_universal_pipeline(
     }
 
     // Map operands by index (0..MAX_PIPELINE_OPERANDS-1)
-    for (size_t j = 0; j < MAX_PIPELINE_OPERANDS; ++j) {
-      if (j < operands.size()) {
-        args[i].pipeline.binary_operands[j] = operands[j]->desc[i].ptr;
-      } else {
-        args[i].pipeline.binary_operands[j] = 0;
-      }
+    size_t op_idx = 0;
+    for (; op_idx < operands.size() && op_idx < MAX_PIPELINE_OPERANDS; ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = operands[op_idx]->desc[i].ptr;
+    }
+
+    // Map reduction outputs immediately after used operands
+    // (JIT expects them at binary_operands[max_op_idx + 1])
+    for (size_t r_idx = 0; r_idx < reduction_outputs.size() && op_idx < MAX_PIPELINE_OPERANDS; ++r_idx, ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = reduction_outputs[r_idx]->desc[i].ptr;
+    }
+
+    // Zero out remaining operand slots
+    for (; op_idx < MAX_PIPELINE_OPERANDS; ++op_idx) {
+        args[i].pipeline.binary_operands[op_idx] = 0;
     }
 
     // Map scalar arguments

@@ -79,6 +79,10 @@ std::string opcode_to_string(uint8_t op) {
     case OP_PUSH_OPERAND_5:
     case OP_PUSH_OPERAND_6:
     case OP_PUSH_OPERAND_7:
+    case OP_PUSH_OPERAND_8:
+    case OP_PUSH_OPERAND_9:
+    case OP_PUSH_OPERAND_10:
+    case OP_PUSH_OPERAND_11:
       return "";
     default:
       return "UNK(" + std::to_string(op) + ")";
@@ -200,7 +204,7 @@ static std::string get_pipeline_breakdown(const Event& e) {
     uint8_t op = ops[i];
     if (op == OP_PUSH_INPUT) {
       stack.push_back("In[0]");
-    } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+    } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_11) {
       stack.push_back("In[" + std::to_string(op - OP_PUSH_OPERAND_0 + 1) + "]");
     } else if (IS_OP_UNARY(op)) {
       if (stack.size() < 1) {

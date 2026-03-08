@@ -206,7 +206,7 @@ static void write_kernel_function(std::ofstream& out,
     uint8_t op = rpn_ops[i];
     if (op == OP_PUSH_INPUT) {
       stack.push_back("((" + stack_type + ")input_blk[i])");
-    } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+    } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_11) {
       std::string idx = std::to_string(op - OP_PUSH_OPERAND_0);
       stack.push_back("((" + stack_type + ")op_blks[" + idx + "][i])");
     } else if (IS_OP_SCALAR(op)) {

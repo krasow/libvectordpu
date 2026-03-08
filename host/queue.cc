@@ -66,17 +66,6 @@ static uint8_t map_to_var_op(uint8_t op) {
       }
     }
 
-    static std::atomic<size_t> callback_count{0};
-    size_t count = ++callback_count;
-    if (count % 100 == 0) {
-#if ENABLE_DPU_LOGGING >= 1
-      // Safe to access singleton here because outstanding_callbacks_ > 0
-      // and we hold the lock, so shutdown() is blocked.
-      Logger& logger = DpuRuntime::get().get_logger();
-      logger.lock() << "[queue-heartbeat] callback fired (" << count
-                    << ") for id=" << me->id << std::endl;
-#endif
-    }
 
     queue.outstanding_callbacks_--;
   }
@@ -136,11 +125,6 @@ bool EventQueue::process_next() {
   Logger& logger = DpuRuntime::get().get_logger();
 #endif
 
-#if ENABLE_DPU_LOGGING >= 1
-  logger.lock() << "[event-logger] id=" << e->id
-                << " type=" << operationtype_to_string(e->op)
-                << " phase=started" << std::endl;
-#endif
 
   trace::inqueue_end(e);
 
@@ -164,18 +148,6 @@ bool EventQueue::process_next() {
     size_t retries = 0;
     while (this->get_last_finished_id() < max_dep) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      if (++retries > MAX_RETRIES) {
-          fprintf(stderr, "[debug] Timeout at line 166 (dependency wait)\n");
-          throw DpuTimeoutException();
-      }
-#if ENABLE_DPU_LOGGING >= 1
-      if (retries % 1000 == 0) {
-        logger.lock() << "[queue-heartbeat] id=" << e->id
-                      << " dependency block on " << max_dep
-                      << " (current=" << this->get_last_finished_id() << ")"
-                      << std::endl;
-      }
-#endif
     }
   }
 
@@ -661,6 +633,7 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     return;
   }
 
+
   // 4. Cumulative Expansion Threshold (Sticky Mega-Batching)
   // If we need to add a NEW unique kernel but the set is full, start a new
   // epoch.
@@ -706,11 +679,20 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       break;
     }
   }
-  
-  // horizontal fusion: if not dependent, we can still fuse if there is no other
-  // resource conflict (handled by lib_refs/internal_refs check which was just
-  // removed). Actually, if not dependent, we just need to ensure the JIT can
-  // handle multiple outputs.
+
+  // Horizontal fusion: if not dependent, we can still fuse if there is no other
+  // resource conflict.
+  if (!dependent) {
+      // Reject fusion if both are elementwise and not dependent.
+      // In this case, 'last''s output would be lost if it's not a reduction.
+      // (The JIT currently only supports one vector output per kernel).
+      if (!last_is_reduction && !e_is_reduction) {
+          return false;
+      }
+  }
+
+  // Safety check: if last->output is used by more than just (last, e),
+  // we must materialize it to MRAM for other consumers.
 
   // Safety check: if last->output is used by more than just (last, e),
   // we must materialize it to MRAM for other consumers.
@@ -775,7 +757,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     for (size_t i = 1; i < combined_inputs.size(); ++i) {
       if (combined_inputs[i] == vec) return OP_PUSH_OPERAND_0 + (i - 1);
     }
-    if (combined_inputs.size() < 9) { // 1 primary + 8 secondary (OP_PUSH_OPERAND_0..7)
+    if (combined_inputs.size() < MAX_WORKSPACE_OPERANDS) {
       combined_inputs.push_back(vec);
       return OP_PUSH_OPERAND_0 + (combined_inputs.size() - 2);
     }
@@ -797,16 +779,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       if (++k < e_rpn.size()) {
         uint64_t val = (e->is_scalar && e_rpn[k] == 0) ? e->scalar_value : e->scalars[e_rpn[k]];
         
-        // Deduplicate
+        // Disable scalar deduplication to ensure consistent RPN sequences.
+        // This ensures logically identical kernels across iterations have identical RPN bytes.
         int found_idx = -1;
-        for (size_t i = 0; i < last->scalars.size(); ++i) {
-          if (last->scalars[i] == val) {
-            found_idx = i;
-            break;
-          }
-        }
         
-        if (found_idx != -1) {
+        if (false && found_idx != -1) {
           e_rpn_mapped.push_back((uint8_t)found_idx);
         } else {
           e_rpn_mapped.push_back((uint8_t)last->scalars.size());
@@ -878,17 +855,23 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       last->output = e->output;
     }
     
-    last->max_id = std::max(last->max_id, e->id);
+    last->max_id = std::max(last->max_id, e->max_id);
 
     // Update dependencies for fused event
     for (const auto& in : e->inputs) {
-      if (in && in->last_producer_id != 0 && in->last_producer_id != last->id) {
-        last->dependencies.insert(in->last_producer_id);
+      if (in && in->last_producer_id != 0) {
+        // Skip dependencies that are part of this fused event
+        if (in->last_producer_id < last->id || in->last_producer_id > last->max_id) {
+          last->dependencies.insert(in->last_producer_id);
+        }
       }
     }
-    // Update last producer for the NEW output
+    // Update last producer for ALL outputs of the fused event
     if (last->output) {
       last->output->last_producer_id = last->id;
+    }
+    for (auto& red_out : last->reduction_outputs) {
+      if (red_out) red_out->last_producer_id = last->id;
     }
 
     // Build descriptive slice name for fused event
@@ -969,9 +952,53 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
   bool fused = false;
 #if PIPELINE
   if (e->op == Event::OperationType::COMPUTE && !operations_.empty()) {
-    auto last = operations_.back();
-    if (try_fuse(last, e)) {
-      fused = true;
+    // Lookahead fusion: try to fuse with one of the last N events
+    int lookahead = std::min((int)operations_.size(), MAX_FUSION_LOOKAHEAD_LENGTH);
+    for (int i = 1; i <= lookahead; ++i) {
+        auto it = std::prev(operations_.end(), i);
+        auto target = *it;
+
+        // Dependency check: can we reorder 'e' to be adjacent to 'target'?
+        // 'e' must not depend on any event between 'target' and the end of the queue.
+        bool has_intermediate_dep = false;
+        for (auto check_it = std::next(it); check_it != operations_.end(); ++check_it) {
+            auto intermediate = *check_it;
+            // Does 'e' depend on 'intermediate'?
+            for (const auto& in : e->inputs) {
+                if (in && in->last_producer_id == intermediate->id) {
+                    has_intermediate_dep = true;
+                    break;
+                }
+            }
+            if (has_intermediate_dep) break;
+            // Also, 'intermediate' must not depend on 'target' if we are going to modify 'target'
+            // but try_fuse already checks if 'target->output' has other consumers.
+        }
+
+        if (!has_intermediate_dep && try_fuse(target, e)) {
+            fused = true;
+            
+            // "Bubble-up" fusion: now that 'target' is updated, try to fuse it into its predecessors
+            std::shared_ptr<Event> current_target = target;
+            bool bubbled = true;
+            while (bubbled && current_target != operations_.front()) {
+                bubbled = false;
+                // Find current_target in operations_
+                auto curr_it = std::find(operations_.begin(), operations_.end(), current_target);
+                if (curr_it == operations_.begin() || curr_it == operations_.end()) break;
+                
+                auto prev_it = std::prev(curr_it);
+                auto prev_event = *prev_it;
+                
+                if (try_fuse(prev_event, current_target)) {
+                    // Success! Remove current_target from the queue as it's now part of prev_event
+                    operations_.erase(curr_it);
+                    current_target = prev_event;
+                    bubbled = true;
+                }
+            }
+            break;
+        }
     }
   }
 #endif
