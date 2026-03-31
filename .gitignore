@@ -1,3 +1,4 @@
+Manifest.toml
 bin
 bin/*
 *.dpu

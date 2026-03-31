@@ -3,7 +3,7 @@
 BUILDDIR ?= build
 NR_TASKLETS ?= 12
 
-BACKEND ?= simulator
+BACKEND ?= hw
 DEBUG ?= 0
 LOGGING ?= 0
 
@@ -15,6 +15,8 @@ JIT ?= 0
 MAX_JIT_QUEUE_DEPTH ?= 8
 # this option sets the maximum number of operations to look ahead for fusion
 MAX_FUSION_LOOKAHEAD_LENGTH ?= 32
+# this option enables aggressive inter-kernel fusion (lookahead and bubble-up)
+ENABLE_INTER_KERNEL_FUSION ?= 1
 
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
@@ -98,7 +100,7 @@ __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p $
 COMMON_FLAGS := -Wall -Wextra -I${COMMON_DIR} -I${HOST_DIR}
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu`
 # DPU-specific flags
-DPU_FLAGS := ${COMMON_FLAGS} -O3 -DNR_TASKLETS=${NR_TASKLETS}
+DPU_FLAGS := ${COMMON_FLAGS} -Os -DNR_TASKLETS=${NR_TASKLETS}
 
 all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"
@@ -135,6 +137,7 @@ reconfigure:
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
 	@echo "MAX_FUSION_LOOKAHEAD_LENGTH=$(MAX_FUSION_LOOKAHEAD_LENGTH)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_INTER_KERNEL_FUSION=$(ENABLE_INTER_KERNEL_FUSION)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

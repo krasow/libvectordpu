@@ -21,7 +21,12 @@ namespace fs = std::filesystem;
 #include "perfetto/trace.h"
 #include "runtime.h"
 
-// (Moved to trace.cc)
+DpuRuntime::DpuRuntime() : initialized_(false), dpu_set_(nullptr), num_dpus_(0) {}
+
+DpuRuntime& DpuRuntime::get() {
+  static DpuRuntime* instance = new DpuRuntime();
+  return *instance;
+}
 
 std::string get_runtime_dpu_binary();
 
@@ -121,6 +126,9 @@ void DpuRuntime::init(uint32_t num_dpus) {
 }
 
 void DpuRuntime::shutdown() {
+  static std::mutex shutdown_mtx;
+  std::lock_guard<std::mutex> shutdown_lock(shutdown_mtx);
+
   if (!initialized_) return;
 
   {
@@ -144,8 +152,10 @@ void DpuRuntime::shutdown() {
             event_queue_->outstanding_callbacks_.load() == 0)
           break;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    initialized_ = false; // Set to false before freeing resources
 
     logger_->lock() << "[runtime] Freeing DPU set..." << std::endl;
     DPU_ASSERT(dpu_free(*dpu_set_));
@@ -164,10 +174,13 @@ void DpuRuntime::shutdown() {
 
   logger_->lock() << "[runtime] Shutdown complete." << std::endl;
 
-  // Reset core systems explicitly so they don't hang in static destructor
-  event_queue_.reset();
-  allocator_.reset();
-  logger_.reset();
+  // We explicitly NOT reset the components here to avoid destroying their mutexes
+  // and other state, which might still be accessed by finalizers (e.g. VectorDesc destructor)
+  // or straggling threads after shutdown() returns.
+  // Since DpuRuntime is a singleton (leaked), these will stay valid until process exit.
+  // event_queue_.reset();
+  // allocator_.reset();
+  // logger_.reset();
 }
 
 void DpuRuntime::debug_read_dpu_log() {

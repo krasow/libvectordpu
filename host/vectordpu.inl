@@ -106,80 +106,88 @@ template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
                                       std::string_view name,
                                       std::source_location loc) {
-  dpu_vector<T> vec(cpu_vec.size(), 0, false, name, loc);
+  return from_cpu(cpu_vec.data(), static_cast<uint32_t>(cpu_vec.size()), name,
+                  loc);
+}
+
+template <typename T>
+dpu_vector<T> dpu_vector<T>::from_cpu(const T* cpu_ptr, uint32_t n,
+                                      std::string_view name,
+                                      std::source_location loc) {
+  dpu_vector<T> vec(n, 0, false, name, loc);
   auto desc = vec.data_desc_ref();
 
-  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
-  auto bound_cb = std::bind(detail::vec_xfer_to_dpu, cpu_buffer, desc);
+  const char* cpu_buffer = reinterpret_cast<const char*>(cpu_ptr);
+  // Remove const for the callback (internal detail, it doesn't mutate)
+  auto bound_cb =
+      std::bind(detail::vec_xfer_to_dpu, const_cast<char*>(cpu_buffer), desc);
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::DPU_TRANSFER, bound_cb);
   e->output = desc;
-  e->host_ptr = cpu_buffer;
-  e->transfer_size = cpu_vec.size() * sizeof(T);
+  e->host_ptr = const_cast<char*>(cpu_buffer);
+  e->transfer_size = n * sizeof(T);
 
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=DPU_TRANSFER size=" << cpu_vec.size()
-                << std::endl;
+  logger.lock() << "[queue-append] type=DPU_TRANSFER size=" << n << std::endl;
 #endif
   return vec;
 }
 
 template <typename T>
-vector<T> dpu_vector<T>::to_cpu() {
+void dpu_vector<T>::free() {
+  if (!data_) return;
+  data_.reset();
+}
+
+template <typename T>
+void dpu_vector<T>::to_cpu(T* cpu_ptr, uint32_t n) {
   auto desc = this->data_desc_ref();
-  // Allocate CPU buffer large enough to hold all data
-  size_t total_size = this->size();
-  auto& runtime = DpuRuntime::get();
-  size_t num_dpus = runtime.num_dpus();
-  size_t min_xfer = 8;  // 8 bytes
-
-  // Compute bytes per DPU
-  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
-
-  // Ensure at least 8 bytes per DPU
-  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
-    // Round up to the number of elements that makes 8 bytes per DPU
-    size_t elems_per_dpu =
-        (min_xfer + sizeof(T) - 1) / sizeof(T);  // ceil(min_xfer /sizeof(T))
-    total_size = num_dpus * elems_per_dpu;
-  }
-
-  vector<T> cpu_vec(total_size);
-
-  char* cpu_buffer = reinterpret_cast<char*>(cpu_vec.data());
+  char* cpu_buffer = reinterpret_cast<char*>(cpu_ptr);
   auto bound_cb = std::bind(detail::vec_xfer_from_dpu, cpu_buffer, desc);
+  auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
   e->inputs = {desc};
   e->host_ptr = cpu_buffer;
-  e->transfer_size = cpu_vec.size() * sizeof(T);
+  e->transfer_size = n * sizeof(T);
 
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << cpu_vec.size()
-                << std::endl;
+  Logger& logger = runtime.get_logger();
+  logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << n << std::endl;
 #endif
 
-// Auto-fence after DPU->HOST transfer if enabled
-#if ENABLE_AUTO_FENCING == 1
   event_queue.process_events(e->id);
-// need the event to be completed before reading printf output
-#if ENABLE_DPU_PRINTING == 1
-  // read and print DPU logs to host stdout
+
+#if ENABLE_AUTO_FENCING == 1 && ENABLE_DPU_PRINTING == 1
   runtime.debug_read_dpu_log();
 #endif
-#endif
+}
 
+template <typename T>
+vector<T> dpu_vector<T>::to_cpu() {
+  size_t total_size = this->size();
+  auto& runtime = DpuRuntime::get();
+  size_t num_dpus = runtime.num_dpus();
+  size_t min_xfer = 8;
+  size_t bytes_per_dpu = (total_size * sizeof(T)) / num_dpus;
+
+  if (total_size == num_dpus && bytes_per_dpu < min_xfer) {
+    size_t elems_per_dpu = (min_xfer + sizeof(T) - 1) / sizeof(T);
+    total_size = num_dpus * elems_per_dpu;
+  }
+
+  vector<T> cpu_vec(total_size);
+  to_cpu(cpu_vec.data(), static_cast<uint32_t>(cpu_vec.size()));
   return cpu_vec;
 }
 
@@ -229,6 +237,7 @@ typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da,
 template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::add, OpInfo<T>::add_op,
                         OpInfo<T>::universal_pipeline);
@@ -238,6 +247,7 @@ dpu_vector<T> operator+(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::sub, OpInfo<T>::sub_op,
                         OpInfo<T>::universal_pipeline);
@@ -247,6 +257,7 @@ dpu_vector<T> operator-(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator*(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::mul, OpInfo<T>::mul_op,
                         OpInfo<T>::universal_pipeline);
@@ -256,6 +267,7 @@ dpu_vector<T> operator*(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
 template <typename T>
 dpu_vector<T> operator/(const dpu_vector<T>& lhs, const dpu_vector<T>& rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
   detail::launch_binary(res.data_desc_ref(), lhs.data_desc_ref(),
                         rhs.data_desc_ref(), OpInfo<T>::div, OpInfo<T>::div_op,
                         OpInfo<T>::universal_pipeline);
@@ -552,8 +564,9 @@ pipeline_result<T> dpu_vector<T>::jit(
   } else {
     tname = typeid(T).name();
   }
-  std::vector<std::pair<std::vector<uint8_t>, std::string>> kernels = {
-      {rpn_ops, tname}};
+  std::string tname_norm = normalize_type_name(tname);
+  std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>
+      kernels = {{rpn_ops, tname_norm, tname_norm}};
   std::string binary_path = jit_compile(kernels);
   std::vector<detail::VectorDescRef> operand_refs;
   for (const auto& op : operands) {
@@ -660,26 +673,38 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
 }
 
 template <typename T>
-typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
+typename reduction_result<T>::type sum(const dpu_vector<T>& a) {
+  return (typename reduction_result<T>::type)lazy_sum(a);
+}
+
+#if PIPELINE
+template <typename T>
+pipeline_result<typename reduction_result<T>::type> lazy_sum(
+    const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> buf(runtime.num_dpus(),
-                    runtime.num_tasklets() * sizeof(size_t));
-  buf.data_desc_ref()->type_name = typeid(T).name();
+  using RED_TYPE = typename dpu_vector<T>::reduction_result_t;
+  dpu_vector<RED_TYPE> buf(runtime.num_dpus(), runtime.num_tasklets() * 8, true);
+  buf.data_desc_ref()->type_name = typeid(RED_TYPE).name();
   buf.data_desc_ref()->debug_name = "reduction_buffer";
   buf.data_desc_ref()->debug_file = __FILE__;
   buf.data_desc_ref()->debug_line = __LINE__;
+  buf.data_desc_ref()->is_reduction_result = true;
+  buf.data_desc_ref()->reduction_rid = OpInfo<T>::sum;
+
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::sum, OpInfo<T>::sum_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::sum);
+  return pipeline_result<RED_TYPE>(std::move(buf));
 }
+#endif
 
 template <typename T>
-T product(const dpu_vector<T>& a) {
+typename dpu_vector<T>::reduction_result_t product(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
-  dpu_vector<T> buf(runtime.num_dpus(),
-                    runtime.num_tasklets() * sizeof(size_t));
-  buf.data_desc_ref()->type_name = typeid(T).name();
+  using RED_TYPE = typename dpu_vector<T>::reduction_result_t;
+  dpu_vector<RED_TYPE> buf(runtime.num_dpus(),
+                    runtime.num_tasklets() * 8);
+  buf.data_desc_ref()->type_name = typeid(RED_TYPE).name();
   buf.data_desc_ref()->debug_name = "reduction_buffer";
   buf.data_desc_ref()->debug_file = __FILE__;
   buf.data_desc_ref()->debug_line = __LINE__;

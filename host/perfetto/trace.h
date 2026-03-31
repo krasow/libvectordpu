@@ -9,6 +9,7 @@
 std::string opcode_to_string(uint8_t op);
 #include "queue.h"
 std::string operationtype_to_string(Event::OperationType op);
+std::string compact_ops_list(const std::vector<uint8_t>& rpn_ops);
 
 namespace trace {
 
@@ -29,7 +30,7 @@ void event_end(const char* cat);
 void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
                        const char* type_name);
 void jit_compile_begin(
-    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels);
+    const std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>& kernels);
 void jit_compile_end();
 void jit_binary_switch(const std::string& previous, const std::string& current);
 #else
@@ -56,7 +57,7 @@ inline void jit_compile_begin(const std::vector<uint8_t>& rpn_ops,
   (void)type_name;
 }
 inline void jit_compile_begin(
-    const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
+    const std::vector<std::tuple<std::vector<uint8_t>, std::string, std::string>>& kernels) {
   (void)kernels;
 }
 inline void jit_compile_end() {}

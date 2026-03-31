@@ -15,7 +15,6 @@
 
 #if __cplusplus < 202002L
 // Fake source_location for pre-C++20
-// debian upmem machine has outdated compiler that doesn't support C++20 yet
 namespace std {
 struct source_location {
   static source_location current() { return {}; }
@@ -35,9 +34,10 @@ using std::vector;
   std::string_view name = "",     \
                    std::source_location loc = std::source_location::current()
 
-// ============================
-// DPU Vector
-// ============================
+// Forward declarations
+template <typename T>
+class dpu_vector;
+
 #if PIPELINE
 template <typename T>
 struct pipeline_result;
@@ -48,14 +48,27 @@ struct reduction_result {
   using type = T;
 };
 
+#if ENABLE_PROMOTION_REDUCTIONS == 1
 template <>
 struct reduction_result<int32_t> {
   using type = int64_t;
 };
+#endif
+
+template <typename T>
+typename reduction_result<T>::type sum(const dpu_vector<T>& a);
+
+#if PIPELINE
+template <typename T>
+pipeline_result<typename reduction_result<T>::type> lazy_sum(
+    const dpu_vector<T>& a);
+#endif
 
 template <typename T>
 class dpu_vector {
  public:
+  using reduction_result_t = typename reduction_result<T>::type;
+
   dpu_vector(uint32_t n, uint32_t reserved = 0, bool lazy = false,
              LOGGER_ARGS_WITH_DEFAULTS);
 
@@ -67,10 +80,20 @@ class dpu_vector {
   dpu_vector& operator=(dpu_vector&& other) noexcept;  // move assignment
 
   vector<T> to_cpu();
+  void to_cpu(T* cpu_ptr, uint32_t n);
 
   static dpu_vector<T> from_cpu(std::vector<T>& cpu_vec,
                                 LOGGER_ARGS_WITH_DEFAULTS);
+  static dpu_vector<T> from_cpu(const T* cpu_ptr, uint32_t n,
+                                LOGGER_ARGS_WITH_DEFAULTS);
   void add_fence();
+  // Reductions
+  friend typename dpu_vector<T>::reduction_result_t sum<T>(const dpu_vector<T>& a);
+#if PIPELINE
+  friend pipeline_result<typename dpu_vector<T>::reduction_result_t> lazy_sum<T>(
+      const dpu_vector<T>& a);
+#endif
+
   dpu_vector<T>& operator+=(const dpu_vector<T>& other);
   dpu_vector<T>& operator-=(const dpu_vector<T>& other);
   dpu_vector<T>& operator*=(const dpu_vector<T>& other);
@@ -93,6 +116,7 @@ class dpu_vector {
 
   uint32_t size() const { return size_; }
   uint32_t reserved() const { return reserved_; }
+  void free();
 
  private:
   detail::VectorDescRef data_;
@@ -107,8 +131,6 @@ class dpu_vector {
   static std::vector<uint8_t> prepare_rpn(const std::vector<uint8_t>& ops);
 
  public:
-  using reduction_result_t = typename reduction_result<T>::type;
-
 #if PIPELINE
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops);
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops,
@@ -130,16 +152,29 @@ struct pipeline_result {
   dpu_vector<T> vec;
   pipeline_result(dpu_vector<T> v) : vec(std::move(v)) {}
   operator T();
+#if ENABLE_PROMOTION_REDUCTIONS == 1
+  template <typename U = T,
+            typename = std::enable_if_t<!std::is_same_v<U, int64_t>>>
   operator int64_t();
+#endif
   operator dpu_vector<T>() { return std::move(vec); }
   dpu_vector<T>* operator->() { return &vec; }
 };
 #endif
 
+template <typename T>
+typename reduction_result<T>::type sum(const dpu_vector<T>& a);
+
+#if PIPELINE
+template <typename T>
+pipeline_result<typename reduction_result<T>::type> lazy_sum(
+    const dpu_vector<T>& a);
+#endif
+
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
                    KernelID kernel_id, uint8_t opcode, KernelID pipeline_kid);
-void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
+void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint64_t scalar,
                           KernelID kernel_id, uint8_t opcode,
                           KernelID pipeline_kid);
 void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
@@ -149,6 +184,8 @@ void launch_reduction(VectorDescRef buf, VectorDescRef rhs, KernelID kernel_id,
 
 void internal_launch_binary(VectorDescRef res, VectorDescRef lhs,
                             VectorDescRef rhs, KernelID kernel_id);
+void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
+                                   uint64_t scalar, KernelID kernel_id);
 void internal_launch_unary(VectorDescRef res, VectorDescRef lhs,
                            KernelID kernel_id);
 void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
@@ -163,7 +200,8 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
-    const std::vector<uint32_t>& scalars);
+    const std::vector<uint32_t>& scalars,
+    const std::vector<VectorDescRef>& reduction_outputs = {});
 #endif
 }  // namespace detail
 

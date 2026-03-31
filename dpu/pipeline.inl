@@ -117,9 +117,7 @@
           uint8_t b2 = args.pipeline.ops[oi + 3];                             \
           uint8_t b3 = args.pipeline.ops[oi + 4];                             \
           val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));          \
-          TYPE scalar;                                                        \
-          static_assert(sizeof(TYPE) == 4, "Only 32-bit types supported");    \
-          memcpy(&scalar, &val, 4);                                           \
+          TYPE scalar = (TYPE)val;                                            \
                                                                               \
           if (!st_is_temp[sp - 1]) {                                          \
             TYPE *dest = scratch_blks[sp - 1];                                \
@@ -164,6 +162,55 @@
             }                                                                 \
           }                                                                   \
           oi += 5;                                                            \
+          continue;                                                           \
+        }                                                                     \
+        if (IS_OP_SCALAR_VAR(op)) {                                           \
+          TYPE *s1 = st_ptr[sp - 1];                                          \
+          uint8_t idx = args.pipeline.ops[oi + 1];                            \
+          TYPE scalar = (TYPE)args.pipeline.scalars[idx];                     \
+          if (!st_is_temp[sp - 1]) {                                          \
+            TYPE *dest = scratch_blks[sp - 1];                                \
+            switch (op) {                                                     \
+              case OP_ADD_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] + scalar;           \
+                break;                                                        \
+              case OP_SUB_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] - scalar;           \
+                break;                                                        \
+              case OP_MUL_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] * scalar;           \
+                break;                                                        \
+              case OP_DIV_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++)                                     \
+                  dest[i] = (scalar != (TYPE)0) ? s1[i] / scalar : (TYPE)0;   \
+                break;                                                        \
+              case OP_ASR_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;          \
+                break;                                                        \
+            }                                                                 \
+            st_ptr[sp - 1] = dest;                                            \
+            st_is_temp[sp - 1] = true;                                        \
+          } else {                                                            \
+            switch (op) {                                                     \
+              case OP_ADD_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) s1[i] += scalar;                    \
+                break;                                                        \
+              case OP_SUB_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) s1[i] -= scalar;                    \
+                break;                                                        \
+              case OP_MUL_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) s1[i] *= scalar;                    \
+                break;                                                        \
+              case OP_DIV_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++)                                     \
+                  if (scalar != (TYPE)0) s1[i] /= scalar;                     \
+                break;                                                        \
+              case OP_ASR_SCALAR_VAR:                                         \
+                for (i = 0; i < b_e; i++) s1[i] >>= scalar;                   \
+                break;                                                        \
+            }                                                                 \
+          }                                                                   \
+          oi += 2;                                                            \
           continue;                                                           \
         }                                                                     \
         if (IS_OP_STACK(op)) {                                                \
@@ -262,10 +309,9 @@
                                                                               \
     if (has_r) {                                                              \
       bool is_sum = (r_op == OP_SUM);                                         \
-      bool is_sum32 = (is_sum && sizeof(TYPE) == 4);                          \
       enum { sd = (MINIMUM_WRITE_SIZE / sizeof(TYPE)) };                      \
       uint64_t bf = 0;                                                        \
-      if (is_sum32) {                                                         \
+      if (is_sum) {                                                           \
         bf = (uint64_t)acc_64;                                                \
       } else {                                                                \
         memcpy(&bf, &acc, sizeof(TYPE));                                      \
@@ -274,7 +320,7 @@
       reduction_scratchpad[id] = bf;                                          \
       barrier_wait(&my_barrier);                                              \
       if (id == 0) {                                                          \
-        if (is_sum32) {                                                       \
+        if (is_sum) {                                                         \
           int64_t tot_64 = 0;                                                 \
           uint32_t i;                                                         \
           for (i = 0; i < NR_TASKLETS; i++) {                                 \
