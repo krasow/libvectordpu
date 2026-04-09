@@ -139,7 +139,7 @@ void DpuRuntime::shutdown() {
                     << std::endl;
     while (true) {
       {
-        std::lock_guard<std::mutex> lock(event_queue_->get_mutex());
+        std::lock_guard<std::recursive_mutex> lock(event_queue_->get_mutex());
         if (event_queue_->get_active_events().empty() &&
             event_queue_->outstanding_callbacks_.load() == 0)
           break;

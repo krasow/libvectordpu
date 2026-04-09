@@ -40,10 +40,10 @@ static uint8_t map_to_var_op(uint8_t op) {
   auto& runtime = DpuRuntime::get();
   auto& queue = runtime.get_event_queue();
   auto& events = queue.get_active_events();
-  std::mutex& mtx = queue.get_mutex();
+  std::recursive_mutex& mtx = queue.get_mutex();
 
   {
-    std::lock_guard<std::mutex> lock(mtx);
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     me->mark_finished();
 
     while (!events.empty() && events.front()->finished) {
@@ -120,7 +120,7 @@ constexpr bool YES_PROGRESS = true;
 bool EventQueue::process_next() {
   std::shared_ptr<Event> e;
   {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (operations_.empty()) {
       return NO_PROGRESS;
     }
@@ -177,7 +177,7 @@ bool EventQueue::process_next() {
 
   // 2. Fusion and JIT Locking
   {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
 
     // Look-ahead fusion
 #if PIPELINE
@@ -277,7 +277,7 @@ bool EventQueue::process_next() {
 
   // 5. Register with running events and start trace
   {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (running_events_.empty()) {
       trace::execution_begin(e);
     }
@@ -319,7 +319,7 @@ bool EventQueue::process_next() {
     // Spin wait for previous events to finish
     while (true) {
       {
-        std::lock_guard<std::mutex> lock(mtx_);
+        std::lock_guard<std::recursive_mutex> lock(mtx_);
         if (running_events_.size() <= 1) {  // Only 'e' is in running_events_
           // Sanity check: e must be the only one
           if (running_events_.front() == e) break;
@@ -393,7 +393,7 @@ bool EventQueue::process_next() {
 
     // remove from running_events_ and push back to front of operations_
     {
-      std::lock_guard<std::mutex> lock(mtx_);
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
       running_events_.remove(e);
       operations_.push_front(e);
       // reset current event since we are backing off
@@ -418,7 +418,7 @@ void EventQueue::process_events(size_t wait_for_id) {
 
     // exit if no more events to process and everything is finished
     {
-      std::lock_guard<std::mutex> lock(mtx_);
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
       if (operations_.empty() && running_events_.empty()) break;
     }
     if (!progress) {
@@ -429,7 +429,7 @@ void EventQueue::process_events(size_t wait_for_id) {
     if (++loop_count % 1000 == 0) {
 #if ENABLE_DPU_LOGGING >= 1
       Logger& logger = DpuRuntime::get().get_logger();
-      std::lock_guard<std::mutex> lock(mtx_);
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
       logger.lock() << "[queue-heartbeat] process_events waiting for "
                     << wait_for_id
                     << " (last_finished=" << this->get_last_finished_id()
@@ -470,9 +470,9 @@ void EventQueue::debug_active_events() {
   Logger& logger = DpuRuntime::get().get_logger();
 
   auto& events = get_active_events();
-  std::mutex& events_mutex = get_mutex();
+  std::recursive_mutex& events_mutex = get_mutex();
   {
-    std::lock_guard<std::mutex> lock(events_mutex);
+    std::lock_guard<std::recursive_mutex> lock(events_mutex);
     if (!events.empty()) {
       logger.lock() << "[EventQueue] Current active events:" << std::endl;
 
@@ -834,7 +834,7 @@ size_t EventQueue::count_internal_references(detail::VectorDescRef vec) {
 }
 
 void EventQueue::submit(std::shared_ptr<Event> e) {
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   // Backpressure: block if total in-flight events (pending + running) exceed
   // limit. Running events hold shared_ptr<VectorDesc> references that prevent
   // DPU MRAM deallocation, so we must count them too—not just the pending

@@ -22,3 +22,6 @@ config.h
 .envrc
 opcodes.h
 *.perfetto-trace
+
+# Julia
+julia/Manifest.toml

@@ -106,13 +106,13 @@ class EventQueue {
     return running_events_;
   }
 
-  std::mutex& get_mutex() { return mtx_; }
+  std::recursive_mutex& get_mutex() { return mtx_; }
 
   std::atomic<size_t> last_finished_id_{0};
   std::atomic<int> outstanding_callbacks_{0};
 
  private:
-  std::mutex mtx_;
+  std::recursive_mutex mtx_;
   size_t counter_ = 1;
   size_t max_queue_depth_ = DEFAULT_MAX_QUEUE_DEPTH;
   std::shared_ptr<Event> current_event_ = nullptr;

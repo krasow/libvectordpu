@@ -12,7 +12,7 @@
 #include "vectordesc.h"
 
 class Logger {
-  std::mutex mtx_;
+  std::recursive_mutex mtx_;
   std::ostream& stream_;
 
  public:
@@ -21,7 +21,7 @@ class Logger {
   // Proxy object that locks the mutex for the duration of the object
   struct Lock {
     std::ostream& stream;
-    std::unique_lock<std::mutex> lock;
+    std::unique_lock<std::recursive_mutex> lock;
 
     Lock(Logger& logger) : stream(logger.stream_), lock(logger.mtx_) {}
 

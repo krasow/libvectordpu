@@ -3,7 +3,7 @@
 BUILDDIR ?= build
 NR_TASKLETS ?= 12
 
-BACKEND ?= simulator
+BACKEND ?= hw
 DEBUG ?= 0
 LOGGING ?= 0
 
@@ -12,9 +12,13 @@ PIPELINE ?= 0
 # this option enables JIT compilation of pipeline kernels
 JIT ?= 0
 # this option sets the maximum number of unique kernels to fuse into a single JIT binary
-MAX_JIT_QUEUE_DEPTH ?= 8
+MAX_JIT_QUEUE_DEPTH ?= 16
 # this option sets the maximum number of operations to look ahead for fusion
 MAX_FUSION_LOOKAHEAD_LENGTH ?= 32
+# this option enables aggressive inter-kernel fusion (lookahead and bubble-up)
+ENABLE_INTER_KERNEL_FUSION ?= 1
+
+ENABLE_OOM_RECOVERY ?= 1
 
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
@@ -71,7 +75,7 @@ DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
 COMMON_HEADERS := ${COMMON_DIR}/common.h ${COMMON_DIR}/config.h
 
 ifeq ($(DEBUG),1)
-  CXXFLAGS += -g -pg -O0 -DDEBUG -fsanitize=address -fno-omit-frame-pointer
+  CXXFLAGS += -g -pg -O0 -DDEBUG -fno-omit-frame-pointer
   LDFLAGS  +=
   BUILD_TYPE := debug
 else
@@ -95,10 +99,10 @@ GENERATED_TARGETS := dpu/kernels.h host/opinfo.h host/kernelids.h common/opcodes
 
 __dirs := $(shell mkdir -p ${BUILDDIR} && mkdir -p ${BUILDDIR}/bin && mkdir -p ${BUILDDIR}/lib)
 
-COMMON_FLAGS := -Wall -Wextra -I${COMMON_DIR} -I${HOST_DIR}
+COMMON_FLAGS := -Wall -Wextra -I${COMMON_DIR} -I${HOST_DIR} $(EXTRA_FLAGS)
 HOST_FLAGS := ${COMMON_FLAGS} ${CXXFLAGS} `dpu-pkg-config --cflags --libs dpu`
 # DPU-specific flags
-DPU_FLAGS := ${COMMON_FLAGS} -O3 -DNR_TASKLETS=${NR_TASKLETS}
+DPU_FLAGS := ${COMMON_FLAGS} -Os -DNR_TASKLETS=${NR_TASKLETS}
 
 all: $(GENERATED_TARGETS) config_check print_config ${HOST_TARGET} ${DPU_TARGET}
 	@echo "Build complete: $(BUILD_TYPE) \n"
@@ -135,6 +139,8 @@ reconfigure:
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
 	@echo "MAX_FUSION_LOOKAHEAD_LENGTH=$(MAX_FUSION_LOOKAHEAD_LENGTH)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_INTER_KERNEL_FUSION=$(ENABLE_INTER_KERNEL_FUSION)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_OOM_RECOVERY=$(ENABLE_OOM_RECOVERY)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \
@@ -201,6 +207,8 @@ install: all
 	install -m 644 $(HOST_TARGET) $(libdir)
 	# Install base host headers
 	install -m 644 $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h) $(includedir)
+	# Install DPU-side .inl files
+	install -m 644 $(wildcard ${DPU_DIR}/*.inl) $(includedir)
 	# Install perfetto headers
 	install -d $(includedir)/perfetto
 	install -m 644 $(wildcard ${HOST_DIR}/perfetto/*.h) $(includedir)/perfetto

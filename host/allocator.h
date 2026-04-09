@@ -66,6 +66,6 @@ class allocator {
   uint32_t raw_allocate(int dpu_id, std::size_t n);
   void raw_deallocate(int dpu_id, uint32_t addr, size_t size);
 
-  std::mutex lock;
+  std::recursive_mutex lock;
   size_t total_allocated_bytes_ = 0;
 };

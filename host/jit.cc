@@ -28,7 +28,7 @@ using Signature = std::pair<std::vector<uint8_t>, std::string>;
 using CacheKey = std::vector<Signature>;
 std::map<CacheKey, std::string> g_jit_cache;
 std::map<Signature, std::string> g_kernel_obj_cache;
-std::mutex g_jit_cache_mutex;
+std::recursive_mutex g_jit_cache_mutex;
 
 std::string hash_signature(const Signature& sig) {
   size_t h = std::hash<std::string>{}(sig.second);
@@ -454,7 +454,7 @@ std::string jit_compile(
 #endif
 
   {
-    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
     if (g_jit_cache.find(kernels) != g_jit_cache.end()) {
 #if ENABLE_DPU_LOGGING >= 1
       logger.lock() << "[JIT] Cache hit for batched binary with "
@@ -476,7 +476,7 @@ std::string jit_compile(
     std::string obj_path;
 
     {
-      std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+      std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
       if (g_kernel_obj_cache.count(sig)) {
         obj_path = g_kernel_obj_cache[sig];
       }
@@ -498,7 +498,7 @@ std::string jit_compile(
       }
 
       {
-        std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+        std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
         g_kernel_obj_cache[sig] = obj_path;
       }
     }
@@ -517,7 +517,7 @@ std::string jit_compile(
   for (size_t k_idx = 0; k_idx < kernels.size(); ++k_idx) {
     std::string hash;
     {
-      std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+      std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
       hash = hash_signature(kernels[k_idx]);
     }
     out << "extern int k_" << hash << "(void);\n";
@@ -526,7 +526,7 @@ std::string jit_compile(
   out << "\nint main() {\n";
   out << "  switch (args.kernel) {\n";
   for (size_t k_idx = 0; k_idx < kernels.size(); ++k_idx) {
-    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
     out << "    case " << k_idx << ": return k_"
         << hash_signature(kernels[k_idx]) << "();\n";
   }
@@ -541,7 +541,7 @@ std::string jit_compile(
   }
 
   {
-    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
     g_jit_cache[kernels] = binpath;
   }
   trace::jit_compile_end();
@@ -549,7 +549,7 @@ std::string jit_compile(
 }
 
 void jit_cleanup() {
-  std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
 #if DEBUG_KEEP_JIT_DIR
   return;
 #endif

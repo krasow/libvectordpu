@@ -21,13 +21,7 @@ if(NOT EXISTS "${VECTORDPU_DIR}/include/vectordpu/vectordpu.h")
 endif()
 
 # ---- UPMEM SDK (for transitive DPU library dependency) ----
-set(UPMEM_HOME "$ENV{UPMEM_HOME}" CACHE PATH "Path to UPMEM SDK")
-
-if(UPMEM_HOME STREQUAL "")
-    message(FATAL_ERROR
-        "UPMEM_HOME is not set. Source the UPMEM environment first:\n"
-        "  source /usr/upmem_env.sh")
-endif()
+# Note: libvectordpu already links against DPU libraries, so we don't need to link explicitly here.
 
 # ---- Build the wrapper shared library ----
 add_library(upmemvector_wrapper SHARED wrapper.cpp)
@@ -44,7 +38,6 @@ target_link_directories(upmemvector_wrapper PRIVATE
 target_link_libraries(upmemvector_wrapper
     JlCxx::cxxwrap_julia
     vectordpu
-    dpu
 )
 
 # Install the built library next to the source for easy discovery
