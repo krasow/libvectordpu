@@ -111,7 +111,7 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
 }
 
 void allocator::deallocate_upmem_vector(detail::VectorDesc* data) {
-  if (!data->ptr_allocated) return;
+  if (!data->ptr_allocated || data->desc.empty()) return;
   data->ptr_allocated = false;
   std::lock_guard<std::recursive_mutex> lock(this->lock);
   if (is_synchronized_ && !data->desc.empty()) {

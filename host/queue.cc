@@ -396,7 +396,7 @@ bool EventQueue::process_next() {
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       running_events_.remove(e);
       operations_.push_front(e);
-      // reset current event since we are backing off
+    // reset current event since we are backing off
       if (current_event_ == e) current_event_ = nullptr;
     }
     // no progress as we caught an exception
@@ -424,10 +424,9 @@ void EventQueue::process_events(size_t wait_for_id) {
     if (!progress) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
+#if ENABLE_DPU_LOGGING >= 1
     static size_t loop_count = 0;
     if (++loop_count % 1000 == 0) {
-#if ENABLE_DPU_LOGGING >= 1
       Logger& logger = DpuRuntime::get().get_logger();
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       logger.lock() << "[queue-heartbeat] process_events waiting for "
@@ -436,8 +435,8 @@ void EventQueue::process_events(size_t wait_for_id) {
                     << " ops=" << operations_.size()
                     << " running=" << running_events_.size() << ")"
                     << std::endl;
-#endif
     }
+#endif
   }
 }
 

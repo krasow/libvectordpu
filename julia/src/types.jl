@@ -27,7 +27,7 @@ end
 
 # Construct from a Julia vector -- transfer to DPU memory
 function DpuVector(data::AbstractVector{Int32})
-    handle = UpmemVector.from_cpu_int32(collect(Int32, data))
+    handle = retry_on_oom(() -> UpmemVector.from_cpu_int32(collect(Int32, data)))
     return DpuVector(handle)
 end
 
@@ -38,7 +38,7 @@ end
 
 # Allocate an uninitialised DPU vector of length n
 function DpuVector(n::Integer)
-    handle = UpmemVector.DpuVectorInt32(UInt32(n))
+    handle = retry_on_oom(() -> UpmemVector.cpp_alloc_DpuVectorInt32(Int32(n)))
     return DpuVector(handle)
 end
 
@@ -51,7 +51,7 @@ Transfer DPU vector contents back to the host as a Julia `Vector{Int32}`.
 """
 function Base.Array(v::DpuVector)
     out = Vector{Int32}(undef, v.len)
-    UpmemVector.to_cpu!(v.handle, out)
+    retry_on_oom(() -> UpmemVector.to_cpu!(v.handle, out))
     return out
 end
 
@@ -76,7 +76,7 @@ end
 Explicitly synchronize: block until all pending DPU operations on `v` complete.
 """
 function fence(v::DpuVector)
-    UpmemVector.dpu_fence(v.handle)
+    retry_on_oom(() -> UpmemVector.dpu_fence(v.handle))
 end
 
 export fence

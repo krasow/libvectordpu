@@ -3,8 +3,6 @@
 #include <jlcxx/stl.hpp>
 
 #include <vectordpu.h>
-
-#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -140,5 +138,9 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
 
     mod.method("dpu_fence", [](dpu_vector<int32_t>& v) {
         v.add_fence();
+    });
+    
+    mod.method("cleanup", []() {
+        DpuRuntime::get().shutdown();
     });
 }

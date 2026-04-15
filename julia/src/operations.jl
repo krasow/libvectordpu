@@ -45,22 +45,22 @@ export Ops
 # ---- generic dispatch functions ----
 
 function binary_op(a::DpuVector, b::DpuVector, op::Ops.BinaryOp)
-    handle = UpmemVector.launch_binary(a.handle, b.handle, Int32(op))
+    handle = retry_on_oom(() -> UpmemVector.launch_binary(a.handle, b.handle, Int32(op)))
     return DpuVector(handle)
 end
 
 function scalar_op(a::DpuVector, s::Integer, op::Ops.ScalarOp)
-    handle = UpmemVector.launch_binary_scalar(a.handle, Int32(s), Int32(op))
+    handle = retry_on_oom(() -> UpmemVector.launch_binary_scalar(a.handle, Int32(s), Int32(op)))
     return DpuVector(handle)
 end
 
 function unary_op(a::DpuVector, op::Ops.UnaryOp)
-    handle = UpmemVector.launch_unary(a.handle, Int32(op))
+    handle = retry_on_oom(() -> UpmemVector.launch_unary(a.handle, Int32(op)))
     return DpuVector(handle)
 end
 
 function reduce_op(a::DpuVector, op::Ops.ReductionOp)
-    return UpmemVector.launch_reduction(a.handle, Int32(op))
+    return retry_on_oom(() -> UpmemVector.launch_reduction(a.handle, Int32(op)))
 end
 
 # ---- Base overloads: binary vector ⊕ vector ----

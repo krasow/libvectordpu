@@ -26,8 +26,7 @@ struct VectorDesc {
   bool is_reduction_result = false;
   KernelID reduction_rid;
 
-  bool ptr_allocated =
-      true;  // Default to true for backwards/eager compatibility
+  bool ptr_allocated = false;
   size_t last_producer_id = 0;
   const char* type_name = nullptr;
   const char* debug_name = nullptr;
