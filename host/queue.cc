@@ -701,6 +701,21 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
 
   if (!horizontal) {
     if (!check_vec_safety(last->output, e)) return false;
+
+    // For vertical fusion the "on stack" value is the result of the LAST chain.
+    // When last has been horizontally fused, that is extra_outputs.back(), not
+    // last->output (which is the FIRST chain's result).  Any e->input that is a
+    // different in-flight output of last has not been written to MRAM yet, so it
+    // cannot be loaded as an operand → reject the fusion.
+    detail::VectorDescRef on_stack_val =
+        last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
+    for (const auto& in : e->inputs) {
+      if (!in || in == on_stack_val) continue;
+      if (in == last->output) return false;  // in-flight, not on stack
+      for (const auto& out : last->extra_outputs) {
+        if (in == out) return false;         // in-flight extra output
+      }
+    }
   }
 
   std::vector<uint8_t> last_rpn = last->rpn_ops;

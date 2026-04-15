@@ -110,7 +110,12 @@ static void write_kernel_function(std::ofstream& out,
   out << "    " << type_name << " *res_blks[4];\n";
   out << "    for (int k = 0; k < 4; k++)\n";
   out << "      res_blks[k] = (" << type_name
-      << " *)&dpu_workspace[id][(1 + MAX_PIPELINE_OPERANDS + MAX_PIPELINE_STACK_DEPTH + k) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n";
+      // JIT kernels never use the interpreter stack (scratch_blks), so we
+      // reuse those slots for result buffers.  This keeps WRAM usage flat:
+      //   slots 0:                input_blk
+      //   slots 1..MAX_PIPELINE_OPERANDS: op_blks
+      //   slots MAX_PIPELINE_OPERANDS+1..+4: res_blks[0..3]  (overlaps scratch_blks)
+      << " *)&dpu_workspace[id][(1 + MAX_PIPELINE_OPERANDS + k) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n";
 
   // Determine needed inputs and identify chains
   bool uses_input = false;

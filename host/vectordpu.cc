@@ -440,7 +440,7 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
 #endif
   e->is_scalar = true;
   e->scalar_value = scalar;
-  e->inputs = {};
+  e->inputs = {lhs};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
