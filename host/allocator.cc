@@ -10,9 +10,12 @@
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
                      std::size_t num_dpus)
     : start_addr_(start_addr), dpu_mem_(dpu_mem), num_dpus_(num_dpus) {
-  ptrs_.resize(num_dpus_, start_addr_);
-  sizes_.resize(num_dpus_, dpu_mem_);
+  // Ensure we don't start at address 0 to avoid NULL pointer confusion in JIT kernels
+  uint32_t effective_start = (start_addr_ == 0) ? 1024 : start_addr_;
+  ptrs_.resize(num_dpus_, effective_start);
+  sizes_.resize(num_dpus_, dpu_mem_ - (effective_start - start_addr_));
   offsets_.resize(num_dpus_, 0);
+  broadcast_offset_ = 0;
   free_list_.resize(num_dpus_);
 }
 
@@ -28,7 +31,7 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
     is_synchronized_ = false;
   }
   std::lock_guard<std::recursive_mutex> lock(this->lock);
-  size_t eff = n / num_dpus_, rem = (eff / size_type) % num_dpus_;
+  size_t eff = n / num_dpus_, rem = n % num_dpus_;
   if (eff * size_type == 4) eff = 2;
 
   auto vec = std::make_shared<detail::VectorDesc>();
@@ -62,6 +65,8 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
 void allocator::realize_allocation(detail::VectorDescRef data) {
   if (data->ptr_allocated) return;
   std::lock_guard<std::recursive_mutex> lock(this->lock);
+  if (data->ptr_allocated) return; // double check after lock
+
   if (is_synchronized_) {
     uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].allocated_bytes);
     for (auto& s : data->desc) s.ptr = addr;
@@ -100,7 +105,7 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
   if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id]))
     throw DpuOOMException();
 
-  uint32_t addr = ptrs_[0] + off;
+  uint32_t addr = (id == DPU_BROADCAST ? ptrs_[0] : ptrs_[id]) + off;
   off += n;
   if (id == DPU_BROADCAST) {
     std::fill(offsets_.begin(), offsets_.end(), off);

@@ -139,6 +139,10 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod)
     mod.method("dpu_fence", [](dpu_vector<int32_t>& v) {
         v.add_fence();
     });
+
+    mod.method("dpu_sync", []() {
+        DpuRuntime::get().get_event_queue().sync();
+    });
     
     mod.method("cleanup", []() {
         DpuRuntime::get().shutdown();

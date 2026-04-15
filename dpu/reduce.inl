@@ -79,7 +79,7 @@ void print_args(DPU_LAUNCH_ARGS args) {
     } else {                                                                   \
       memcpy(buff_ptr, &local_red, sizeof(TYPE));                              \
     }                                                                          \
-    extern uint64_t reduction_scratchpad[NR_TASKLETS];                         \
+    extern uint64_t reduction_scratchpad[];                                    \
     /* partial results go into the dedicated WRAM scratchpad */                \
     reduction_scratchpad[tasklet_id] = *buff_ptr;                              \
                                                                                \

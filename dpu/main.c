@@ -11,7 +11,7 @@
 __host DPU_LAUNCH_ARGS args;
 
 BARRIER_INIT(my_barrier, NR_TASKLETS);
-__dma_aligned uint64_t reduction_scratchpad[NR_TASKLETS];
+__dma_aligned uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
 __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];
 

@@ -178,6 +178,7 @@ pipeline_ops = [
     ('mul_scalar_var', 'MUL_SCALAR_VAR'),
     ('div_scalar_var', 'DIV_SCALAR_VAR'),
     ('asr_scalar_var', 'ASR_SCALAR_VAR'),
+    ('next_chain', 'NEXT_CHAIN'),
 ]
 
 with open("common/opcodes.h", "w") as out:

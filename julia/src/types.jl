@@ -17,10 +17,10 @@ w = DpuVector(1024)                 # uninitialised, length 1024
 """
 mutable struct DpuVector
     handle::UpmemVector.DpuVectorInt32   # CxxWrap-managed C++ object
-    len::Int
+    len::Int64
 
     function DpuVector(handle::UpmemVector.DpuVectorInt32)
-        v = new(handle, Int(UpmemVector.cpp_length(handle)))
+        v = new(handle, Int64(UpmemVector.cpp_length(handle)))
         return v
     end
 end

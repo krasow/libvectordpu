@@ -86,7 +86,7 @@ void internal_launch_binary_scalar(VectorDescRef res, VectorDescRef lhs,
   runtime.get_allocator().realize_allocation(lhs);
 
   uint32_t nr_of_dpus = runtime.num_dpus();
-  DPU_LAUNCH_ARGS args[nr_of_dpus];
+  DPU_LAUNCH_ARGS args[nr_of_dpus] = {};
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
@@ -247,29 +247,38 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
-    const std::vector<uint32_t>& scalars) {
+    const std::vector<uint32_t>& scalars,
+    const std::vector<VectorDescRef>& extra_outputs) {
   auto& runtime = DpuRuntime::get();
   runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
   for (auto& op : operands) {
-    runtime.get_allocator().realize_allocation(op);
+    if (op) runtime.get_allocator().realize_allocation(op);
+  }
+  for (auto& out : extra_outputs) {
+    if (out) runtime.get_allocator().realize_allocation(out);
   }
   uint32_t nr_of_dpus = runtime.num_dpus();
   DPU_LAUNCH_ARGS args[nr_of_dpus];
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].ktype =
-        static_cast<uint8_t>(KERNEL_UNARY);  // Universal considered unary-ish?
-                                             // Or create KERNEL_PIPELINE?
-    // Using KERNEL_UNARY for now as it's just a category
+    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
 
-    args[i].num_elements = init->desc[i].size_bytes /
-                           init->element_size;  // Assume init defines size
-    args[i].size_type = init->element_size;
+    args[i].num_elements = init ? (init->desc[i].size_bytes / init->element_size) : 0;
+    args[i].size_type = init ? init->element_size : (res ? res->element_size : 4);
 
-    args[i].pipeline.init_offset = init->desc[i].ptr;
+    args[i].pipeline.init_offset = init ? init->desc[i].ptr : 0;
     args[i].pipeline.res_offset = res->desc[i].ptr;
+    
+    for (size_t j = 0; j < 7; ++j) {
+        if (j < extra_outputs.size()) {
+            args[i].pipeline.extra_res_offsets[j] = extra_outputs[j]->desc[i].ptr;
+        } else {
+            args[i].pipeline.extra_res_offsets[j] = 0;
+        }
+    }
+
     args[i].pipeline.num_ops =
         std::min((size_t)ops.size(), (size_t)MAX_PIPELINE_OPS);
 
@@ -429,12 +438,12 @@ void launch_binary_scalar(VectorDescRef res, VectorDescRef lhs, uint32_t scalar,
   std::shared_ptr<Event> e =
       std::make_shared<Event>(Event::OperationType::COMPUTE, bound_cb);
 #endif
-  e->inputs = {lhs};
+  e->is_scalar = true;
+  e->scalar_value = scalar;
+  e->inputs = {};
   e->output = res;
   e->kid = kernel_id;
   e->opcode = opcode;
-  e->is_scalar = true;
-  e->scalar_value = scalar;
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2

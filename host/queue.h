@@ -24,6 +24,7 @@ class Event : public std::enable_shared_from_this<Event> {
   // Metadata for fusion
   std::vector<detail::VectorDescRef> inputs;
   detail::VectorDescRef output;
+  std::vector<detail::VectorDescRef> extra_outputs;
   std::vector<uint8_t> rpn_ops;
   std::vector<uint32_t> scalars;
   KernelID kid = 0;
@@ -39,11 +40,17 @@ class Event : public std::enable_shared_from_this<Event> {
   bool is_locked_for_jit = false;
   int jit_sub_kernel_idx = -1;
   std::shared_future<std::string> jit_future;
+  std::shared_future<void> dpu_future;
 
   Event(OperationType t) : op(t) {}
 
   template <typename Callable>
   Event(OperationType t, Callable&& c) : op(t), cb(std::forward<Callable>(c)) {}
+
+  void wait() {
+    if (jit_future.valid()) jit_future.wait();
+    if (dpu_future.valid()) dpu_future.wait();
+  }
 
   size_t id = 0;
   std::string slice_name;
@@ -74,6 +81,7 @@ class EventQueue {
 
   void add_fence(std::shared_ptr<Event> e);
 
+  void sync();
   bool process_next();
   void process_events(size_t wait_for_id);
   void debug_print_queue();

@@ -63,12 +63,14 @@ CONFIG_STAMP := build.config
 HOST_TARGET := ${BUILDDIR}/lib/libvectordpu.so
 DPU_TARGET := ${BUILDDIR}/bin/runtime.dpu
 TEST_TARGET := ${TEST_DIR}/vectordpu_test
+TEST_FUSION_TARGET := ${TEST_DIR}/fusion_test
 
 COMMON_DIR := common
 HOST_INCLUDES := host
 HOST_SOURCES := $(wildcard ${HOST_DIR}/*.cc) $(wildcard ${HOST_DIR}/perfetto/*.cc)
 DPU_SOURCES := $(wildcard ${DPU_DIR}/*.c)
-TEST_SOURCES := $(wildcard ${TEST_DIR}/*.cc)
+TEST_SOURCES := $(filter-out ${TEST_DIR}/horizontal_fusion.cc, $(wildcard ${TEST_DIR}/*.cc))
+FUSION_TEST_SOURCES := ${TEST_DIR}/horizontal_fusion.cc
 
 HOST_HEADERS := $(wildcard ${HOST_DIR}/*.inl) $(wildcard ${HOST_DIR}/*.h) $(wildcard ${HOST_DIR}/perfetto/*.h)
 DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
@@ -169,8 +171,13 @@ $(TEST_TARGET): ${TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
 	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(TEST_SOURCES) -I$(HOST_INCLUDES)  \
 		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
 
+$(TEST_FUSION_TARGET): ${FUSION_TEST_SOURCES} ${HOST_TARGET} ${DPU_TARGET}
+	@echo "Building fusion test target: $@"
+	$(CXX) -std=${CXX_STANDARD} $(CXXFLAGS) $(COMMON_FLAGS) -o $@ $(FUSION_TEST_SOURCES) -I$(HOST_INCLUDES)  \
+		-L$(BUILDDIR)/lib -Wl,-rpath,$(BUILDDIR)/lib -lvectordpu
+
 clean-internal:
-	$(RM) -r $(BUILDDIR) $(TEST_TARGET)
+	$(RM) -r $(BUILDDIR) $(TEST_TARGET) $(TEST_FUSION_TARGET)
 
 clean: clean-internal
 	$(RM) -r $(CONFIG_STAMP) $(GENERATED_TARGETS) common/config.h
@@ -192,10 +199,11 @@ print_config: reconfigure
 	done
 	@echo "\n"
 
-test: all $(TEST_TARGET) 
-	@printf "\n$(CYAN)Running tests...$(NC)\n\n"
+test: all $(TEST_TARGET) $(TEST_FUSION_TARGET)
+	@printf "\n$(CYAN)Running standard tests...$(NC)\n\n"
 	./$(TEST_TARGET)
-
+	@printf "\n$(CYAN)Running horizontal fusion tests...$(NC)\n\n"
+	./$(TEST_FUSION_TARGET)
 bindir := $(DESTDIR)/bin
 libdir := $(DESTDIR)/lib
 includedir := $(DESTDIR)/include/vectordpu

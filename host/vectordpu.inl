@@ -189,8 +189,6 @@ typename dpu_vector<T>::reduction_result_t reduction_cpu(dpu_vector<T>& da,
   // block and send to cpu
   auto a = da.to_cpu();
 
-  // to_cpu doesn't need to be explicitly traced as its traced internally
-  // it confuses the trace imo
   uint64_t flow_id =
       (da.data_desc_ref() ? da.data_desc_ref()->last_producer_id : 0);
   trace::reduction_cpu _trace(flow_id);
@@ -583,41 +581,47 @@ pipeline_result<T> dpu_vector<T>::jit(
 }
 #endif
 
+template <typename T>
+typename dpu_vector<T>::reduction_result_t lazy_reduction_result<T>::get() {
+  return reduction_cpu(const_cast<dpu_vector<T>&>(vec), rid);
+}
+
 #if PIPELINE
 template <typename T>
-typename dpu_vector<T>::reduction_result_t dpu_vector<T>::pipeline_reduce(
+lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
     const std::vector<uint8_t>& ops,
     const std::vector<dpu_vector<T>>& operands) {
-  // A reduction pipeline must return a scalar.
-  // We reuse pipeline() but return the aggregated result.
-  dpu_vector<T> res = pipeline(ops, operands);
-
-  // The last op defines the reduction type
+  auto& runtime = DpuRuntime::get();
+  
+  // Identify rid from last op
   assert(!ops.empty());
   uint8_t last_op = ops.back();
-
-  // Map opcode back to a standard KernelID for reduction_cpu
-  // Standard reduction OPs are MIN, MAX, SUM, PRODUCT
   KernelID rid = OpInfo<T>::sum;  // default
   switch (last_op) {
-    case OP_MIN:
-      rid = OpInfo<T>::min;
-      break;
-    case OP_MAX:
-      rid = OpInfo<T>::max;
-      break;
-    case OP_SUM:
-      rid = OpInfo<T>::sum;
-      break;
-    case OP_PRODUCT:
-      rid = OpInfo<T>::product;
-      break;
-    default:
-      // rid remains OpInfo<T>::sum (the default)
-      break;
+    case OP_MIN: rid = OpInfo<T>::min; break;
+    case OP_MAX: rid = OpInfo<T>::max; break;
+    case OP_SUM: rid = OpInfo<T>::sum; break;
+    case OP_PRODUCT: rid = OpInfo<T>::product; break;
   }
 
-  return reduction_cpu(res, rid);
+  // We always allocate 8 bytes per DPU for reduction results to satisfy
+  // mram_write minimum alignment and size requirements.
+  size_t elems_per_dpu = (8 + sizeof(T) - 1) / sizeof(T); 
+
+  dpu_vector<T> res(runtime.num_dpus() * elems_per_dpu,
+                    runtime.num_tasklets() * 8, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->is_reduction_result = true;
+  res.data_desc_ref()->reduction_rid = rid;
+
+  std::vector<detail::VectorDescRef> operand_descs;
+  for (const auto& op : operands) operand_descs.push_back(op.data_desc_ref());
+
+  detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
+                                    ops, operand_descs,
+                                    OpInfo<T>::universal_pipeline);
+
+  return lazy_reduction_result<T>(std::move(res), rid);
 }
 #endif
 
@@ -625,8 +629,7 @@ typename dpu_vector<T>::reduction_result_t dpu_vector<T>::pipeline_reduce(
 template <typename T>
 pipeline_result<T>::operator T() {
   if (vec.data_desc().is_reduction_result) {
-    return reduction_cpu(const_cast<dpu_vector<T>&>(vec),
-                         vec.data_desc().reduction_rid);
+    return (T)lazy_reduction_result<T>(std::move(vec), vec.data_desc().reduction_rid);
   }
   // If not a reduction, return first element as a best effort scalar conversion
   return vec.to_cpu()[0];
@@ -660,7 +663,7 @@ dpu_vector<T> abs(const dpu_vector<T>& a) {
 }
 
 template <typename T>
-typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
+lazy_reduction_result<T> sum(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
@@ -671,11 +674,11 @@ typename dpu_vector<T>::reduction_result_t sum(const dpu_vector<T>& a) {
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::sum, OpInfo<T>::sum_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::sum);
+  return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::sum);
 }
 
 template <typename T>
-T product(const dpu_vector<T>& a) {
+lazy_reduction_result<T> product(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
@@ -686,11 +689,11 @@ T product(const dpu_vector<T>& a) {
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::product, OpInfo<T>::product_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::product);
+  return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::product);
 }
 
 template <typename T>
-T min(const dpu_vector<T>& a) {
+lazy_reduction_result<T> min(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(), runtime.num_tasklets() * sizeof(size_t),
                     true);
@@ -701,11 +704,11 @@ T min(const dpu_vector<T>& a) {
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::min, OpInfo<T>::min_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::min);
+  return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::min);
 }
 
 template <typename T>
-T max(const dpu_vector<T>& a) {
+lazy_reduction_result<T> max(const dpu_vector<T>& a) {
   auto& runtime = DpuRuntime::get();
   dpu_vector<T> buf(runtime.num_dpus(),
                     runtime.num_tasklets() * sizeof(size_t));
@@ -716,5 +719,5 @@ T max(const dpu_vector<T>& a) {
   detail::launch_reduction(buf.data_desc_ref(), a.data_desc_ref(),
                            OpInfo<T>::max, OpInfo<T>::max_op,
                            OpInfo<T>::universal_pipeline);
-  return reduction_cpu(buf, OpInfo<T>::max);
+  return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::max);
 }

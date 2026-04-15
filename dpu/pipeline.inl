@@ -270,7 +270,7 @@
       } else {                                                                \
         memcpy(&bf, &acc, sizeof(TYPE));                                      \
       }                                                                       \
-      extern uint64_t reduction_scratchpad[NR_TASKLETS];                      \
+      extern uint64_t reduction_scratchpad[];                                 \
       reduction_scratchpad[id] = bf;                                          \
       barrier_wait(&my_barrier);                                              \
       if (id == 0) {                                                          \

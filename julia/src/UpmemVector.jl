@@ -19,6 +19,16 @@ function __init__()
 end
 
 """
+    sync()
+
+Synchronize all DPUs: blocks until all pending operations on all vectors 
+complete.
+"""
+function sync()
+    UpmemVector.dpu_sync()
+end
+
+"""
     retry_on_oom(f)
 
 Executes function `f`. If a DPU OOM exception is caught, triggers Julia GC 
@@ -28,11 +38,11 @@ function retry_on_oom(f)
     try
         return f()
     catch e
-        @info "HELLOOOWOOFGWHJ"
         # CxxWrap throws exceptions as CxxException. 
         # We check the message for "DPU OOM".
         if occursin("DPU OOM", sprint(showerror, e))
             @warn "DPU OOM detected. Syncing and triggering GC..."
+            sync()     # Flush event queue and wait for DPUs
             GC.gc(true) # Major GC
             yield()
             return f()
@@ -46,6 +56,6 @@ include("types.jl")
 include("operations.jl")
 include("display.jl")
 
-export DpuVector
+export DpuVector, fence, sync
 
 end # module UpmemVector

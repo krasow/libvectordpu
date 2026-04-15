@@ -69,6 +69,8 @@ std::string opcode_to_string(uint8_t op) {
       return "SUM";
     case OP_PRODUCT:
       return "PRODUCT";
+    case OP_NEXT_CHAIN:
+      return "NEXT_CHAIN";
     case OP_PUSH_INPUT:
     case OP_PUSH_OPERAND_0:
     case OP_PUSH_OPERAND_1:

@@ -35,13 +35,21 @@ using std::vector;
   std::string_view name = "",     \
                    std::source_location loc = std::source_location::current()
 
-// ============================
-// DPU Vector
-// ============================
+// Forward declarations
+template <typename T>
+class dpu_vector;
+
+template <typename T>
+struct lazy_reduction_result;
+
 #if PIPELINE
 template <typename T>
 struct pipeline_result;
 #endif
+
+// ============================
+// DPU Vector
+// ============================
 
 template <typename T>
 struct reduction_result {
@@ -113,7 +121,7 @@ class dpu_vector {
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops);
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops,
                               const std::vector<dpu_vector<T>>& operands);
-  reduction_result_t pipeline_reduce(
+  lazy_reduction_result<T> pipeline_reduce(
       const std::vector<uint8_t>& ops,
       const std::vector<dpu_vector<T>>& operands = {});
 #endif
@@ -122,6 +130,16 @@ class dpu_vector {
   pipeline_result<T> jit(const std::vector<uint8_t>& ops,
                          const std::vector<dpu_vector<T>>& operands);
 #endif
+};
+
+template <typename T>
+struct lazy_reduction_result {
+  dpu_vector<T> vec;
+  KernelID rid;
+  lazy_reduction_result(dpu_vector<T> v, KernelID r) : vec(std::move(v)), rid(r) {}
+  typename dpu_vector<T>::reduction_result_t get();
+  operator typename dpu_vector<T>::reduction_result_t() { return get(); }
+  operator T() { return (T)get(); }
 };
 
 #if PIPELINE
@@ -133,8 +151,20 @@ struct pipeline_result {
   operator int64_t();
   operator dpu_vector<T>() { return std::move(vec); }
   dpu_vector<T>* operator->() { return &vec; }
+  operator lazy_reduction_result<T>() {
+      return lazy_reduction_result<T>(std::move(vec), vec.data_desc().reduction_rid);
+  }
 };
 #endif
+
+template <typename T>
+lazy_reduction_result<T> sum(const dpu_vector<T>& a);
+template <typename T>
+lazy_reduction_result<T> product(const dpu_vector<T>& a);
+template <typename T>
+lazy_reduction_result<T> min(const dpu_vector<T>& a);
+template <typename T>
+lazy_reduction_result<T> max(const dpu_vector<T>& a);
 
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
@@ -163,7 +193,8 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
-    const std::vector<uint32_t>& scalars);
+    const std::vector<uint32_t>& scalars,
+    const std::vector<VectorDescRef>& extra_outputs = {});
 #endif
 }  // namespace detail
 

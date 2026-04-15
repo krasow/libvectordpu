@@ -126,43 +126,49 @@ void DpuRuntime::shutdown() {
   {
     trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
 
-#if ENABLE_DPU_LOGGING == 1
-    logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
+#if ENABLE_DPU_LOGGING >= 1
+    if (logger_) logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
-    if (event_queue_->has_pending()) {
-      logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
+    if (event_queue_ && event_queue_->has_pending()) {
+      if (logger_) logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
       event_queue_->process_events(UINT64_MAX);
     }
 
-    logger_->lock() << "[runtime] Waiting for active events and callbacks..."
+    if (logger_) logger_->lock() << "[runtime] Waiting for active events and callbacks..."
                     << std::endl;
-    while (true) {
+    while (event_queue_) {
+      std::list<std::shared_ptr<Event>> active;
       {
         std::lock_guard<std::recursive_mutex> lock(event_queue_->get_mutex());
-        if (event_queue_->get_active_events().empty() &&
-            event_queue_->outstanding_callbacks_.load() == 0)
+        active = event_queue_->get_active_events();
+        if (active.empty() && event_queue_->outstanding_callbacks_.load() == 0)
           break;
+      }
+      for (auto& e : active) {
+        if (e) e->wait();
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    logger_->lock() << "[runtime] Freeing DPU set..." << std::endl;
-    DPU_ASSERT(dpu_free(*dpu_set_));
-    delete dpu_set_;
-    dpu_set_ = nullptr;
+    if (logger_) logger_->lock() << "[runtime] Freeing DPU set..." << std::endl;
+    if (dpu_set_) {
+      DPU_ASSERT(dpu_free(*dpu_set_));
+      delete dpu_set_;
+      dpu_set_ = nullptr;
+    }
     initialized_ = false;
   }  // trace_scoped ends here, before TRACE_SHUTDOWN
 
-  logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
+  if (logger_) logger_->lock() << "[runtime] Tracing shutdown..." << std::endl;
   TRACE_SHUTDOWN();
 
 #if JIT
-  logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
+  if (logger_) logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
   jit_cleanup();
 #endif
 
-  logger_->lock() << "[runtime] Shutdown complete." << std::endl;
+  if (logger_) logger_->lock() << "[runtime] Shutdown complete." << std::endl;
 
   // Reset core systems explicitly so they don't hang in static destructor
   event_queue_.reset();
