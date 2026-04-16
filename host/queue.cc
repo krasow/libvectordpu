@@ -700,8 +700,6 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   };
 
   if (!horizontal) {
-    if (!check_vec_safety(last->output, e)) return false;
-
     // For vertical fusion the "on stack" value is the result of the LAST chain.
     // When last has been horizontally fused, that is extra_outputs.back(), not
     // last->output (which is the FIRST chain's result).  Any e->input that is a
@@ -709,6 +707,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     // cannot be loaded as an operand → reject the fusion.
     detail::VectorDescRef on_stack_val =
         last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
+    if (!check_vec_safety(on_stack_val, e)) return false;
     for (const auto& in : e->inputs) {
       if (!in || in == on_stack_val) continue;
       if (in == last->output) return false;  // in-flight, not on stack
@@ -747,8 +746,15 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   }
 
   std::vector<detail::VectorDescRef> combined_inputs = last->inputs;
+  // For vertical fusion onto a horizontally-fused kernel, the value "on the
+  // WRAM stack" is the last chain's intermediate result (extra_outputs.back()),
+  // not the first chain's output (last->output).  Using last->output would
+  // cause the on-stack value to be treated as a new MRAM operand, producing
+  // wrong kernel operand bindings.
+  detail::VectorDescRef actual_on_stack =
+      last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
   auto get_operand_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
-    if (!horizontal && vec == last->output) return 0xFF; // Already on stack
+    if (!horizontal && vec == actual_on_stack) return 0xFF; // Already on stack
     if (!vec) return 0xFF;
     
     // Check if it's the init input (if any)
@@ -805,8 +811,15 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     last->scalars = last_scalars;
     last->scalars.insert(last->scalars.end(), e_scalars.begin(), e_scalars.end());
     last->inputs = combined_inputs;
-    if (horizontal) last->extra_outputs.push_back(e->output);
-    else last->output = e->output;
+    if (horizontal) {
+      last->extra_outputs.push_back(e->output);
+    } else if (last->extra_outputs.empty()) {
+      last->output = e->output;
+    } else {
+      // Vertical fusion onto a horizontally-fused kernel: the consumed chain
+      // is extra_outputs.back() (the last chain), not output (the first chain).
+      last->extra_outputs.back() = e->output;
+    }
     last->max_id = std::max(last->max_id, e->id);
     last->kid = last->pipeline_kid;
 
