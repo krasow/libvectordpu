@@ -375,6 +375,22 @@ dpu_vector<T> operator>>(const dpu_vector<T>& lhs, T rhs) {
 }
 
 template <typename T>
+dpu_vector<T> dpu_vector<T>::operator==(T scalar) const {
+  dpu_vector<T> res(this->size(), 0, true);
+  res.data_desc_ref()->type_name = typeid(T).name();
+  res.data_desc_ref()->debug_name = "intermediate";
+  res.data_desc_ref()->debug_file = __FILE__;
+  res.data_desc_ref()->debug_line = __LINE__;
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
+  detail::launch_binary_scalar(res.data_desc_ref(), this->data_desc_ref(),
+                               scalar_bits,
+                               OpInfo<T>::eq_scalar, OpInfo<T>::eq_scalar_op,
+                               OpInfo<T>::universal_pipeline);
+  return res;
+}
+
+template <typename T>
 dpu_vector<T> operator+(const dpu_vector<T>& lhs, T rhs) {
   dpu_vector<T> res(lhs.size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
@@ -720,4 +736,128 @@ lazy_reduction_result<T> max(const dpu_vector<T>& a) {
                            OpInfo<T>::max, OpInfo<T>::max_op,
                            OpInfo<T>::universal_pipeline);
   return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::max);
+}
+
+// neg_weighted_sum: computes -init + sum_j(cols[j] * weights[j])
+//
+// Directly builds JIT COMPUTE events with OP_MUL_SCALAR_VAR opcodes so the
+// entire weighted fold executes in ceil(active_dims / MAX_CHUNK) kernel
+// launches rather than the O(D) launches produced by the naive loop
+//   error += col[j] * w[j]
+//
+// Each chunk RPN (first chunk):
+//   PUSH_INPUT, NEG, [PUSH_OP_k, MUL_SCALAR_VAR, k, ADD] × chunk_size
+// Subsequent chunks:
+//   PUSH_INPUT, [PUSH_OP_k, MUL_SCALAR_VAR, k, ADD] × chunk_size
+//
+// For MAX_PIPELINE_OPS=32: max 7 active dims per chunk (2 + 7*4 = 30 ≤ 32).
+// Zero-weight dimensions are skipped entirely.
+template <typename T>
+dpu_vector<T> optimal_fusion_for_linear_regression_benchmark(const dpu_vector<T>& init,
+                               const std::vector<dpu_vector<T>>& cols,
+                               const std::vector<T>& weights) {
+  assert(cols.size() == weights.size());
+
+  // Collect non-zero weight dimension indices.
+  std::vector<size_t> active;
+  for (size_t j = 0; j < weights.size(); ++j) {
+    if (weights[j] != T(0)) active.push_back(j);
+  }
+
+  // All weights zero: just negate the init vector (1 kernel, allows vertical
+  // fusion with the subsequent error_shifted = error >> shift event).
+  if (active.empty()) return -init;
+
+  // Maximum dims per chunk so the RPN fits in MAX_PIPELINE_OPS bytes.
+  // First chunk: 2 (PUSH_INPUT + NEG) + chunk_size * 4 ≤ MAX_PIPELINE_OPS
+  // Later chunks: 1 (PUSH_INPUT)        + chunk_size * 4 ≤ MAX_PIPELINE_OPS
+  // Both give the same bound: (MAX_PIPELINE_OPS - 2) / 4.
+  // Also bounded by MAX_PIPELINE_OPERANDS (operand slot count).
+  const size_t MAX_CHUNK =
+      (size_t)((MAX_PIPELINE_OPS - 2) / 4) < (size_t)MAX_PIPELINE_OPERANDS
+          ? (size_t)((MAX_PIPELINE_OPS - 2) / 4)
+          : (size_t)MAX_PIPELINE_OPERANDS;
+
+  auto& event_queue = DpuRuntime::get().get_event_queue();
+
+  dpu_vector<T> result(init.size(), 0, true);
+  result.data_desc_ref()->type_name = typeid(T).name();
+  result.data_desc_ref()->debug_name = "neg_weighted_sum_result";
+
+  // Keep intermediate dpu_vectors alive so their VectorDesc shared_ptrs
+  // outlive neg_weighted_sum's stack frame (the submitted events still hold
+  // references, so the VectorDescs won't be freed prematurely).
+  std::vector<dpu_vector<T>> intermediates;
+
+  detail::VectorDescRef cur_init_ref = init.data_desc_ref();
+  bool first_chunk = true;
+  size_t chunk_start = 0;
+
+  while (chunk_start < active.size()) {
+    size_t chunk_end = chunk_start + MAX_CHUNK < active.size()
+                           ? chunk_start + MAX_CHUNK
+                           : active.size();
+    size_t chunk_size = chunk_end - chunk_start;
+    bool is_last = (chunk_end == active.size());
+
+    // Output: last chunk writes into 'result'; intermediate chunks get their
+    // own lazy vector (kept alive in 'intermediates').
+    detail::VectorDescRef out_ref;
+    if (is_last) {
+      out_ref = result.data_desc_ref();
+    } else {
+      intermediates.emplace_back(init.size(), 0, true);
+      intermediates.back().data_desc_ref()->type_name = typeid(T).name();
+      intermediates.back().data_desc_ref()->debug_name = "neg_wsum_partial";
+      out_ref = intermediates.back().data_desc_ref();
+    }
+
+    // Build RPN: for the first chunk negate the init, then fold each active
+    // column in via weighted scalar multiply + add.
+    std::vector<uint8_t> rpn;
+    rpn.push_back(OP_PUSH_INPUT);
+    if (first_chunk) rpn.push_back(OP_NEGATE);
+    for (size_t k = 0; k < chunk_size; ++k) {
+      rpn.push_back((uint8_t)(OP_PUSH_OPERAND_0 + k));
+      rpn.push_back(OP_MUL_SCALAR_VAR);
+      rpn.push_back((uint8_t)k);  // index into args.pipeline.scalars[]
+      rpn.push_back(OP_ADD);
+    }
+
+    // Scalar values (bitwise-cast T → uint32_t, matching how launch_binary_scalar
+    // encodes scalars).
+    std::vector<uint32_t> scalars;
+    for (size_t k = chunk_start; k < chunk_end; ++k) {
+      uint32_t bits = 0;
+      T w = weights[active[k]];
+      std::memcpy(&bits, &w, sizeof(T) <= sizeof(uint32_t) ? sizeof(T) : sizeof(uint32_t));
+      scalars.push_back(bits);
+    }
+
+    // Inputs: [init_or_previous_result, col[active[chunk_start]], ..., col[active[chunk_end-1]]]
+    std::vector<detail::VectorDescRef> inputs = {cur_init_ref};
+    for (size_t k = chunk_start; k < chunk_end; ++k) {
+      inputs.push_back(cols[active[k]].data_desc_ref());
+    }
+
+    // Build the event directly.  Setting rpn_ops tells the submission path to
+    // treat this as a JIT pipeline event (lock_for_jit will use these ops as
+    // the kernel signature; scalar values are passed at dispatch time via
+    // args.pipeline.scalars[]).
+    auto e = std::make_shared<Event>(Event::OperationType::COMPUTE);
+    e->output = out_ref;
+    e->inputs = inputs;
+    e->rpn_ops = rpn;
+    e->scalars = scalars;
+    e->kid = 0;
+    e->pipeline_kid = OpInfo<T>::universal_pipeline;
+
+    event_queue.submit(e);
+
+    cur_init_ref = out_ref;
+    first_chunk = false;
+    chunk_start = chunk_end;
+  }
+
+  return result;
 }

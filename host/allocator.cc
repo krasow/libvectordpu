@@ -23,6 +23,16 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
                                                        std::size_t reserved,
                                                        std::size_t size_type,
                                                        bool lazy) {
+  if (n == 0) {
+    std::lock_guard<std::recursive_mutex> lock(this->lock);
+    auto vec = std::make_shared<detail::VectorDesc>();
+    vec->desc.resize(num_dpus_, {0, 0, 0});
+    vec->ptr_allocated = true;
+    vec->reserved_bytes = reserved;
+    vec->element_size = size_type;
+    vec->num_elements = 0;
+    return vec;
+  }
   bool uniform = (n % num_dpus_ == 0) && (n / num_dpus_ * size_type >= 8);
   {
     std::lock_guard<std::recursive_mutex> lock(this->lock);
@@ -102,8 +112,9 @@ uint32_t allocator::raw_allocate(int id, std::size_t n) {
   uint32_t& off = (id == DPU_BROADCAST) ? broadcast_offset_ : offsets_[id];
   if (id == DPU_BROADCAST)
     off = *std::max_element(offsets_.begin(), offsets_.end());
-  if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id]))
+  if (off + n > (id == DPU_BROADCAST ? sizes_[0] : sizes_[id])) {
     throw DpuOOMException();
+  }
 
   uint32_t addr = (id == DPU_BROADCAST ? ptrs_[0] : ptrs_[id]) + off;
   off += n;
@@ -153,12 +164,13 @@ void allocator::raw_deallocate(int id, uint32_t addr, size_t sz) {
   }
 
   uint32_t& off = (id == DPU_BROADCAST) ? broadcast_offset_ : offsets_[id];
-  if (id == DPU_BROADCAST && !fl.empty() &&
-      fl.back().addr + fl.back().size == start_addr_ + off) {
+  uint32_t base = (id == DPU_BROADCAST) ? ptrs_[0] : ptrs_[id];
+  while (!fl.empty() && fl.back().addr + fl.back().size == base + off) {
     off -= fl.back().size;
     fl.pop_back();
-    std::fill(offsets_.begin(), offsets_.end(), off);
   }
+  if (id == DPU_BROADCAST)
+    std::fill(offsets_.begin(), offsets_.end(), off);
   total_allocated_bytes_ -= sz * (id == DPU_BROADCAST ? num_dpus_ : 1);
   trace::counter("runtime", "total_bytes", total_allocated_bytes_);
 }

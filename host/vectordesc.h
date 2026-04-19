@@ -28,6 +28,16 @@ struct VectorDesc {
 
   bool ptr_allocated = false;
   size_t last_producer_id = 0;
+
+  // When this vector is absorbed by vertical fusion (i.e., it is an
+  // intermediate result that is consumed inline and never written to MRAM),
+  // these fields record the RPN prefix and scalar values that produce it,
+  // along with the primary source vector.  Later events that need this vector
+  // can inline the prefix rather than reading from (unwritten) MRAM.
+  std::vector<uint8_t> absorbed_rpn;
+  std::vector<uint32_t> absorbed_scalars;
+  std::vector<std::shared_ptr<VectorDesc>> absorbed_inputs; // full input list of absorbed event
+
   const char* type_name = nullptr;
   const char* debug_name = nullptr;
   const char* debug_file = nullptr;

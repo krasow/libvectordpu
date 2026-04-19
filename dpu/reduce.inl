@@ -41,10 +41,12 @@ void print_args(DPU_LAUNCH_ARGS args) {
                                                                                \
     const char op_name[] = XSTR(OP);                                           \
     bool is_sum = (op_name[0] == 's' || op_name[0] == 'S');                    \
-    bool is_sum32 = (sizeof(TYPE) == 4 && is_sum);                             \
+    bool is_product = (op_name[0] == 'p' || op_name[0] == 'P');                \
+    bool is_promotable = (is_sum || is_product);                               \
+    bool is_sum32 = (sizeof(TYPE) == 4 && is_promotable && ENABLE_PROMOTION_REDUCTIONS); \
                                                                                \
-    int64_t local_red_64 = 0;                                                  \
-    TYPE local_red = (TYPE)0;                                                  \
+    int64_t local_red_64 = is_sum ? 0 : 1;                                     \
+    TYPE local_red = is_sum ? (TYPE)0 : (TYPE)1;                               \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                   \
          block_loc < num_elems;                                                \
          block_loc += (NR_TASKLETS << BLOCK_SIZE_LOG2)) {                      \
@@ -61,13 +63,17 @@ void print_args(DPU_LAUNCH_ARGS args) {
       /* Compute in WRAM */                                                    \
       if (is_sum32) {                                                          \
         for (uint32_t i = 0; i < block_elems; i++) {                           \
-          local_red_64 += rhs_block[i];                                        \
+          if (is_sum) local_red_64 += rhs_block[i];                            \
+          else local_red_64 *= rhs_block[i];                                   \
         }                                                                      \
       } else {                                                                 \
         for (uint32_t i = 0; i < block_elems; i++) {                           \
           local_red = FUNC(local_red, rhs_block[i]);                           \
         }                                                                      \
       }                                                                        \
+    }                                                                          \
+    if (is_sum32 && tasklet_id == 0) {                                         \
+       printf("DPU local_red_64: %llx\n", (unsigned long long)local_red_64);   \
     }                                                                          \
     /* write local result into preceding reserved area (one 8-byte slot per    \
      * tasklet) */                                                             \
@@ -88,12 +94,14 @@ void print_args(DPU_LAUNCH_ARGS args) {
     /* Tasklet 0 performs final reduction from partial slots */                \
     if (tasklet_id == 0) {                                                     \
       if (is_sum32) {                                                          \
-        int64_t total_64 = 0;                                                  \
+        int64_t total_64 = is_sum ? 0 : 1;                                     \
         uint32_t i;                                                            \
         for (i = 0; i < NR_TASKLETS; i++) {                                    \
-          total_64 += (int64_t)reduction_scratchpad[i];                        \
+          if (is_sum) total_64 += (int64_t)reduction_scratchpad[i];            \
+          else total_64 *= (int64_t)reduction_scratchpad[i];                   \
         }                                                                      \
         *buff_ptr = (uint64_t)total_64;                                        \
+        printf("DPU final total_64: %llx\n", (unsigned long long)total_64);   \
       } else {                                                                 \
         uint32_t total_slots = NR_TASKLETS * stride;                           \
         TYPE res_block_tot[NR_TASKLETS * stride] __attribute__((aligned(8)));  \

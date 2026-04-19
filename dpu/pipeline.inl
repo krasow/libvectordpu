@@ -140,6 +140,12 @@
               case OP_ASR_SCALAR:                                             \
                 for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;          \
                 break;                                                        \
+              case OP_EQ_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] == scalar);        \
+                break;                                                        \
+              case OP_LT_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] < scalar);         \
+                break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
             st_is_temp[sp - 1] = true;                                        \
@@ -160,6 +166,12 @@
                 break;                                                        \
               case OP_ASR_SCALAR:                                             \
                 for (i = 0; i < b_e; i++) s1[i] >>= scalar;                   \
+                break;                                                        \
+              case OP_EQ_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] == scalar);          \
+                break;                                                        \
+              case OP_LT_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] < scalar);           \
                 break;                                                        \
             }                                                                 \
           }                                                                   \
@@ -212,6 +224,12 @@
               case OP_ASR:                                                    \
                 for (i = 0; i < b_e; i++) dest[i] = s2[i] >> s1[i];           \
                 break;                                                        \
+              case OP_EQ:                                                     \
+                for (i = 0; i < b_e; i++) dest[i] = (s2[i] == s1[i]);         \
+                break;                                                        \
+              case OP_LT:                                                     \
+                for (i = 0; i < b_e; i++) dest[i] = (s2[i] < s1[i]);          \
+                break;                                                        \
             }                                                                 \
             st_ptr[sp - 1] = dest;                                            \
             st_is_temp[sp - 1] = true;                                        \
@@ -233,16 +251,48 @@
               case OP_ASR:                                                    \
                 for (i = 0; i < b_e; i++) s2[i] >>= s1[i];                    \
                 break;                                                        \
+              case OP_EQ:                                                     \
+                for (i = 0; i < b_e; i++) s2[i] = (s2[i] == s1[i]);           \
+                break;                                                        \
+              case OP_LT:                                                     \
+                for (i = 0; i < b_e; i++) s2[i] = (s2[i] < s1[i]);            \
+                break;                                                        \
+            }                                                                 \
+          }                                                                   \
+        } else if (IS_OP_TERNARY(op)) {                                       \
+          TYPE *s1 = st_ptr[--sp];                                            \
+          TYPE *s2 = st_ptr[--sp];                                            \
+          TYPE *s3 = st_ptr[sp - 1];                                          \
+          if (!st_is_temp[sp - 1]) {                                          \
+            TYPE *dest = scratch_blks[sp - 1];                                \
+            if (op == OP_SELECT) {                                            \
+              for (i = 0; i < b_e; i++)                                       \
+                dest[i] = (s3[i] != (TYPE)0) ? s2[i] : s1[i];                 \
+            }                                                                 \
+            st_ptr[sp - 1] = dest;                                            \
+            st_is_temp[sp - 1] = true;                                        \
+          } else {                                                            \
+            if (op == OP_SELECT) {                                            \
+              for (i = 0; i < b_e; i++)                                       \
+                s3[i] = (s3[i] != (TYPE)0) ? s2[i] : s1[i];                   \
             }                                                                 \
           }                                                                   \
         } else { /* REDUCTION */                                              \
           TYPE *s = st_ptr[--sp];                                             \
           switch (op) {                                                       \
             case OP_SUM:                                                      \
-              for (i = 0; i < b_e; i++) acc_64 += s[i];                       \
+              if (ENABLE_PROMOTION_REDUCTIONS && sizeof(TYPE) == 4) {         \
+                for (i = 0; i < b_e; i++) acc_64 += s[i];                    \
+              } else {                                                        \
+                for (i = 0; i < b_e; i++) acc += s[i];                        \
+              }                                                               \
               break;                                                          \
             case OP_PRODUCT:                                                  \
-              for (i = 0; i < b_e; i++) acc_64 *= s[i];                       \
+              if (ENABLE_PROMOTION_REDUCTIONS && sizeof(TYPE) == 4) {         \
+                for (i = 0; i < b_e; i++) acc_64 *= s[i];                    \
+              } else {                                                        \
+                for (i = 0; i < b_e; i++) acc *= s[i];                        \
+              }                                                               \
               break;                                                          \
             case OP_MIN:                                                      \
               for (i = 0; i < b_e; i++)                                       \
@@ -261,8 +311,9 @@
     }                                                                         \
                                                                               \
     if (has_r) {                                                              \
-      bool is_sum = (r_op == OP_SUM);                                         \
-      bool is_sum32 = (is_sum && sizeof(TYPE) == 4);                          \
+      bool is_promotable = (r_op == OP_SUM || r_op == OP_PRODUCT);            \
+      bool is_sum32 = (is_promotable && sizeof(TYPE) == 4 &&                  \
+                       ENABLE_PROMOTION_REDUCTIONS);                          \
       enum { sd = (MINIMUM_WRITE_SIZE / sizeof(TYPE)) };                      \
       uint64_t bf = 0;                                                        \
       if (is_sum32) {                                                         \
@@ -275,10 +326,13 @@
       barrier_wait(&my_barrier);                                              \
       if (id == 0) {                                                          \
         if (is_sum32) {                                                       \
-          int64_t tot_64 = 0;                                                 \
+          int64_t tot_64 = (r_op == OP_SUM) ? 0 : 1;                          \
           uint32_t i;                                                         \
           for (i = 0; i < NR_TASKLETS; i++) {                                 \
-            tot_64 += (int64_t)reduction_scratchpad[i];                       \
+            if (r_op == OP_SUM)                                               \
+              tot_64 += (int64_t)reduction_scratchpad[i];                     \
+            else                                                              \
+              tot_64 *= (int64_t)reduction_scratchpad[i];                     \
           }                                                                   \
           bf = (uint64_t)tot_64;                                              \
         } else {                                                              \

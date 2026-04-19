@@ -83,16 +83,60 @@ test_error test_linear_regression_like_fusion() {
 #endif
 }
 
+test_error test_hist_like_fusion() {
+#if PIPELINE && JIT
+  // Exercises vertical fusion (absorbed intermediate) + 3-way horizontal fusion,
+  // requiring 9 scalars (3 per chain × 3 chains) — previously clipped at 8.
+  const uint32_t N = 4096;
+  const int32_t BINS = 8;
+  const int32_t DEPTH = 3; // 2^3 = 8 = BINS
+  std::cout << "Testing hist-like fusion (9 scalars, vertical+horizontal)..." << std::endl;
+
+  std::vector<int32_t> a(N);
+  for (uint32_t i = 0; i < N; i++) a[i] = i % 4096;
+
+  std::vector<int32_t> cpu_counts(BINS, 0);
+  for (uint32_t i = 0; i < N; i++) {
+    int32_t bucket = ((int32_t)a[i] * BINS) >> DEPTH;
+    if (bucket >= 0 && bucket < BINS) cpu_counts[bucket]++;
+  }
+
+  dpu_vector<int32_t> da = dpu_vector<int32_t>::from_cpu(a);
+  da.add_fence();
+
+  dpu_vector<int32_t> buckets = (da * (int32_t)BINS) >> (int32_t)DEPTH;
+
+  std::vector<lazy_reduction_result<int32_t>> lazy_counts;
+  for (int i = 0; i < BINS; i++)
+    lazy_counts.push_back(sum(buckets == (int32_t)i));
+
+  bool ok = true;
+  for (int i = 0; i < BINS; i++) {
+    int64_t dpu_count = (int64_t)lazy_counts[i].get();
+    std::cout << "  bin " << i << ": CPU=" << cpu_counts[i] << " DPU=" << dpu_count << std::endl;
+    if (dpu_count != cpu_counts[i]) ok = false;
+  }
+  return ok ? TEST_SUCCESS : TEST_ERROR;
+#else
+  return TEST_SUCCESS;
+#endif
+}
+
 int main() {
   DpuRuntime::get().init(64);
-  
+
   if (test_horizontal_fusion_sums() != TEST_SUCCESS) {
       std::cerr << "test_horizontal_fusion_sums FAILED" << std::endl;
       return 1;
   }
-  
+
   if (test_linear_regression_like_fusion() != TEST_SUCCESS) {
       std::cerr << "test_linear_regression_like_fusion FAILED" << std::endl;
+      return 1;
+  }
+
+  if (test_hist_like_fusion() != TEST_SUCCESS) {
+      std::cerr << "test_hist_like_fusion FAILED" << std::endl;
       return 1;
   }
 

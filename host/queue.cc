@@ -20,6 +20,8 @@ static uint8_t map_to_var_op(uint8_t op) {
     case OP_MUL_SCALAR: return OP_MUL_SCALAR_VAR;
     case OP_DIV_SCALAR: return OP_DIV_SCALAR_VAR;
     case OP_ASR_SCALAR: return OP_ASR_SCALAR_VAR;
+    case OP_EQ_SCALAR: return OP_EQ_SCALAR_VAR;
+    case OP_LT_SCALAR: return OP_LT_SCALAR_VAR;
     default: return op;
   }
 }
@@ -411,13 +413,25 @@ bool EventQueue::process_next() {
         assert(false && "Unknown event type");
     }
   } catch (const DpuOOMException& ex) {
-#if ENABLE_DPU_LOGGING >= 1
-    Logger& logger = DpuRuntime::get().get_logger();
-    logger.lock() << "[queue-oom] OOM detected for event id=" << e->id
-                  << ". Throttling..." << std::endl;
-#endif
+    if (++e->oom_retries > 2) {
+      throw DpuOOMException("DPU OOM: event id=" + std::to_string(e->id) +
+                            " failed after 2 retries");
+    }
     // reset event state
     e->started = false;
+
+    // Free any partially-realized lazy output allocations. Without this, a
+    // partially-realized event can never be retried successfully — the already-
+    // allocated outputs consume memory, making every subsequent attempt OOM in
+    // exactly the same way (infinite hang). Freeing them here resets the state
+    // so that when the event is retried the allocator starts fresh.
+    {
+      auto& alloc = DpuRuntime::get().get_allocator();
+      if (e->output) alloc.deallocate_upmem_vector(e->output.get());
+      for (auto& out : e->extra_outputs) {
+        if (out) alloc.deallocate_upmem_vector(out.get());
+      }
+    }
 
     // remove from running_events_ and push back to front of operations_
     {
@@ -544,15 +558,13 @@ void EventQueue::flush_jit_batch() {
   // Assign future to all pending events
   for (auto ev : pending_jit_events_) {
     ev->jit_future = future;
-    
-    // Crucially: realize allocations NOW so that they don't get 0 pointers in the async JIT kernel arguments
-    if (ev->output) DpuRuntime::get().get_allocator().realize_allocation(ev->output);
-    for (auto& in : ev->inputs) {
-        if (in) DpuRuntime::get().get_allocator().realize_allocation(in);
-    }
-    for (auto& out : ev->extra_outputs) {
-        if (out) DpuRuntime::get().get_allocator().realize_allocation(out);
-    }
+    // NOTE: Do NOT call realize_allocation here. MRAM addresses are passed via
+    // the args struct at execution time (internal_launch_universal_pipeline),
+    // not embedded in the compiled kernel binary. Realizing all pending events'
+    // outputs at once would exhaust DPU memory when many lazy outputs have
+    // accumulated (e.g. 25 horizontally-fused iterations). Let each event
+    // allocate its own outputs just-in-time inside the try/catch in
+    // process_next() so OOM recovery can work properly.
   }
 
   // Clear pending events and unique kernels
@@ -708,6 +720,17 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
     detail::VectorDescRef on_stack_val =
         last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
     if (!check_vec_safety(on_stack_val, e)) return false;
+
+    // Require that e actually consumes the on-stack value. Without this check,
+    // an event that doesn't use on_stack_val would accidentally absorb it,
+    // preventing it from being written to MRAM. Later events that need it would
+    // then try to read from an unrealized (null) MRAM address → DPU crash.
+    bool e_uses_on_stack = false;
+    for (const auto& in : e->inputs) {
+      if (in == on_stack_val) { e_uses_on_stack = true; break; }
+    }
+    if (!e_uses_on_stack) return false;
+
     for (const auto& in : e->inputs) {
       if (!in || in == on_stack_val) continue;
       if (in == last->output) return false;  // in-flight, not on stack
@@ -780,17 +803,34 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   std::vector<uint8_t> e_rpn_mapped;
   if (horizontal) e_rpn_mapped.push_back(OP_NEXT_CHAIN);
 
+  // Commutative binary ops: order of operands doesn't matter.
+  auto is_commutative = [](uint8_t op) {
+    return op == OP_ADD || op == OP_MUL || op == OP_EQ;
+  };
+
   bool possible = true;
+  bool primary_on_stack = false;
+  bool secondary_on_stack_no_primary = false;
   for (size_t k = 0; k < e_rpn.size(); ++k) {
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push_op = get_operand_push_op(e->inputs[0]);
       if (push_op != 0xFF) e_rpn_mapped.push_back(push_op);
+      else primary_on_stack = true;
     } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
       size_t operand_idx = op - OP_PUSH_OPERAND_0 + 1;
       if (operand_idx >= e->inputs.size()) { possible = false; break; }
       uint8_t push_op = get_operand_push_op(e->inputs[operand_idx]);
-      if (push_op == 0xFF) { /* Already on stack or not found */ }
+      if (push_op == 0xFF) {
+        // Both primary and this secondary input are the "on-stack" value.
+        // Fusing would leave the binary op with only one operand (needs DUP).
+        if (primary_on_stack) return false;
+        // Secondary is on-stack, primary is not: the binary op will see
+        // [on_stack, primary] on the stack, computing on_stack OP primary
+        // instead of primary OP on_stack. Safe for commutative ops only;
+        // checked when we hit the actual compute op below.
+        secondary_on_stack_no_primary = true;
+      }
       else e_rpn_mapped.push_back(push_op);
     } else if (IS_OP_SCALAR(op)) {
       e_rpn_mapped.push_back(op);
@@ -799,6 +839,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       e_rpn_mapped.push_back(op);
       if (k + 1 < e_rpn.size()) e_rpn_mapped.push_back(last_scalars.size() + e_rpn[++k]);
     } else {
+      // Actual compute op. If a secondary→on_stack swap happened, reject
+      // fusion for any non-commutative binary op.
+      if (secondary_on_stack_no_primary && IS_OP_BINARY(op) && !is_commutative(op))
+        return false;
+      secondary_on_stack_no_primary = false;
       e_rpn_mapped.push_back(op);
     }
   }
@@ -806,6 +851,16 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (possible && (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) possible = false;
 
   if (possible) {
+    // Before absorbing last->output in a single-chain vertical fusion, record
+    // the RPN prefix and scalars that produce it. Later events whose primary
+    // input is this absorbed vector can inline the prefix rather than reading
+    // from (unwritten) MRAM.
+    if (!horizontal && last->extra_outputs.empty() && last->output &&
+        !last->inputs.empty()) {
+      last->output->absorbed_rpn = last_rpn;
+      last->output->absorbed_scalars = last_scalars;
+      last->output->absorbed_inputs = last->inputs;
+    }
     last->rpn_ops = last_rpn;
     last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(), e_rpn_mapped.end());
     last->scalars = last_scalars;
@@ -890,6 +945,93 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 
   e->id = counter_++;
   e->max_id = e->id;
+
+#if PIPELINE
+  // Expand absorbed-intermediate inputs.  When an event chain A→intermediate→B
+  // is vertically fused, the intermediate is never written to MRAM — it is
+  // consumed inline by the combined kernel.  If a later event C needs that
+  // intermediate as its primary input, we inline the RPN prefix that computes
+  // it from the original source (stored in absorbed_rpn / absorbed_source when
+  // the intermediate was absorbed).  This replaces the (unwriteable) absorbed
+  // input with the original source and adds the prefix ops to the event's RPN,
+  // so C gets correctly computed data from the start without reading stale or
+  // uninitialized MRAM.
+  if (e->op == Event::OperationType::COMPUTE && !e->inputs.empty()) {
+    auto& in_vec = e->inputs[0];
+    if (in_vec && !in_vec->absorbed_rpn.empty() && !in_vec->absorbed_inputs.empty()) {
+      // Build e's default RPN if it hasn't been set yet
+      if (e->rpn_ops.empty()) {
+        for (size_t k = 0; k < e->inputs.size(); ++k) {
+          if (k == 0)
+            e->rpn_ops.push_back(OP_PUSH_INPUT);
+          else
+            e->rpn_ops.push_back(OP_PUSH_OPERAND_0 + (k - 1));
+        }
+        if (e->is_scalar) {
+          e->rpn_ops.push_back(map_to_var_op(e->opcode));
+          e->rpn_ops.push_back(0);
+          e->scalars.push_back(e->scalar_value);
+        } else {
+          e->rpn_ops.push_back(e->opcode);
+        }
+      }
+
+      // absorbed_inputs[0] = primary of the absorbed event (PUSH_INPUT in absorbed_rpn)
+      // absorbed_inputs[1..] = secondary operands (PUSH_OPERAND_0.. in absorbed_rpn)
+      // e->inputs[0] = absorbed vec (to be replaced)
+      // e->inputs[1..] = e's own secondaries
+      //
+      // New inputs layout:
+      //   [absorbed_inputs[0..N-1], e_orig_secondaries[0..M-1]]
+      // PUSH_INPUT in absorbed_rpn → new_inputs[0] ✓
+      // PUSH_OPERAND_X in absorbed_rpn → new_inputs[X+1] ✓ (unchanged)
+      // PUSH_OPERAND_X in e's rpn → new_inputs[N + X] → PUSH_OPERAND_(N-1+X)
+
+      const auto& ai = in_vec->absorbed_inputs;
+      size_t N = ai.size();   // number of absorbed inputs (≥1)
+      size_t prefix_scalar_count = in_vec->absorbed_scalars.size();
+
+      // Build new combined input list
+      std::vector<detail::VectorDescRef> new_inputs;
+      new_inputs.reserve(N + e->inputs.size() - 1);
+      for (auto& v : ai) new_inputs.push_back(v);
+      for (size_t k = 1; k < e->inputs.size(); ++k) new_inputs.push_back(e->inputs[k]);
+
+      // Guard: if too many operands, skip expansion (will require separate kernel)
+      if (new_inputs.size() <= MAX_PIPELINE_OPERANDS + 1) {
+        std::vector<uint8_t> new_rpn;
+        std::vector<uint32_t> new_scalars = in_vec->absorbed_scalars;
+
+        for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
+          uint8_t op = e->rpn_ops[k];
+          if (op == OP_PUSH_INPUT) {
+            // Inline absorbed_rpn (operand indices unchanged — they map into new_inputs correctly)
+            new_rpn.insert(new_rpn.end(), in_vec->absorbed_rpn.begin(),
+                           in_vec->absorbed_rpn.end());
+          } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+            // e's PUSH_OPERAND_X referred to e->inputs[X+1], now at new_inputs[N + X]
+            // New PUSH_OPERAND index Y: new_inputs[Y+1] = new_inputs[N+X] → Y = N+X-1
+            uint8_t X = op - OP_PUSH_OPERAND_0;
+            uint8_t Y = (uint8_t)(N - 1 + X);
+            new_rpn.push_back(OP_PUSH_OPERAND_0 + Y);
+          } else if (IS_OP_SCALAR_VAR(op)) {
+            new_rpn.push_back(op);
+            if (k + 1 < e->rpn_ops.size())
+              new_rpn.push_back(e->rpn_ops[++k] + (uint8_t)prefix_scalar_count);
+          } else {
+            new_rpn.push_back(op);
+          }
+        }
+        new_scalars.insert(new_scalars.end(), e->scalars.begin(), e->scalars.end());
+
+        e->inputs = std::move(new_inputs);
+        e->rpn_ops = std::move(new_rpn);
+        e->scalars = std::move(new_scalars);
+        e->is_scalar = false;
+      }
+    }
+  }
+#endif
 
   trace::event_enqueued(e, operations_, running_events_);
   trace::active_ops_counter(operations_.size());

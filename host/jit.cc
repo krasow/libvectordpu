@@ -1,5 +1,6 @@
 #include "jit.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -246,6 +247,11 @@ static void write_kernel_function(std::ofstream& out,
             case OP_MUL_SCALAR: out << s1 << " * (" << stack_type << ")" << scalar_literal << ";\n"; break;
             case OP_DIV_SCALAR: out << s1 << " / (" << stack_type << ")" << scalar_literal << ";\n"; break;
             case OP_ASR_SCALAR: out << s1 << " >> " << scalar_literal << ";\n"; break;
+            case OP_EQ_SCALAR: out << s1 << " == (" << stack_type << ")" << scalar_literal << ";\n"; break;
+            case OP_LT_SCALAR: out << s1 << " < (" << stack_type << ")" << scalar_literal << ";\n"; break;
+            case OP_GT_SCALAR: out << s1 << " > (" << stack_type << ")" << scalar_literal << ";\n"; break;
+            case OP_GE_SCALAR: out << s1 << " >= (" << stack_type << ")" << scalar_literal << ";\n"; break;
+            case OP_LE_SCALAR: out << s1 << " <= (" << stack_type << ")" << scalar_literal << ";\n"; break;
           }
           stack.push_back(res);
         } else if (IS_OP_SCALAR_VAR(op)) {
@@ -260,6 +266,11 @@ static void write_kernel_function(std::ofstream& out,
             case OP_MUL_SCALAR_VAR: out << s1 << " * (" << stack_type << ")" << scalar_val << ";\n"; break;
             case OP_DIV_SCALAR_VAR: out << s1 << " / (" << stack_type << ")" << scalar_val << ";\n"; break;
             case OP_ASR_SCALAR_VAR: out << s1 << " >> " << scalar_val << ";\n"; break;
+            case OP_EQ_SCALAR_VAR: out << s1 << " == (" << stack_type << ")" << scalar_val << ";\n"; break;
+            case OP_LT_SCALAR_VAR: out << s1 << " < (" << stack_type << ")" << scalar_val << ";\n"; break;
+            case OP_GT_SCALAR_VAR: out << s1 << " > (" << stack_type << ")" << scalar_val << ";\n"; break;
+            case OP_GE_SCALAR_VAR: out << s1 << " >= (" << stack_type << ")" << scalar_val << ";\n"; break;
+            case OP_LE_SCALAR_VAR: out << s1 << " <= (" << stack_type << ")" << scalar_val << ";\n"; break;
           }
           stack.push_back(res);
         } else if (IS_OP_UNARY(op)) {
@@ -271,6 +282,7 @@ static void write_kernel_function(std::ofstream& out,
           }
           stack.push_back(res);
         } else if (IS_OP_BINARY(op)) {
+          if (stack.size() < 2) { fprintf(stderr, "[JIT-DBG] STACK UNDERFLOW at binary op %u, stack size=%zu\n", (unsigned)op, stack.size()); abort(); }
           std::string s2 = stack.back(); stack.pop_back();
           std::string s1 = stack.back(); stack.pop_back();
           std::string res = get_tmp();
@@ -281,6 +293,20 @@ static void write_kernel_function(std::ofstream& out,
             case OP_MUL: out << s1 << " * " << s2 << ";\n"; break;
             case OP_DIV: out << s1 << " / " << s2 << ";\n"; break;
             case OP_ASR: out << s1 << " >> " << s2 << ";\n"; break;
+            case OP_EQ: out << s1 << " == " << s2 << ";\n"; break;
+            case OP_LT: out << s1 << " < " << s2 << ";\n"; break;
+            case OP_GT: out << s1 << " > " << s2 << ";\n"; break;
+            case OP_GE: out << s1 << " >= " << s2 << ";\n"; break;
+            case OP_LE: out << s1 << " <= " << s2 << ";\n"; break;
+          }
+          stack.push_back(res);
+        } else if (IS_OP_TERNARY(op)) {
+          std::string s1 = stack.back(); stack.pop_back();
+          std::string s2 = stack.back(); stack.pop_back();
+          std::string s3 = stack.back(); stack.pop_back();
+          std::string res = get_tmp();
+          if (op == OP_SELECT) {
+              out << "            " << stack_type << " " << res << " = (" << s3 << " != 0) ? " << s2 << " : " << s1 << ";\n";
           }
           stack.push_back(res);
         } else if (IS_OP_REDUCTION(op)) {

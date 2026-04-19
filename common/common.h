@@ -16,7 +16,8 @@ enum KernelCategory {
     KERNEL_UNARY = 0,
     KERNEL_BINARY = 1,
     KERNEL_REDUCTION = 2,
-    KERNEL_BINARY_SCALAR = 3
+    KERNEL_BINARY_SCALAR = 3,
+    KERNEL_PIPELINE = 4
 };
 
 #include "opcodes.h"
@@ -63,7 +64,7 @@ typedef struct {
             uint32_t num_ops;
             uint8_t ops[MAX_PIPELINE_OPS];          // Fixed size buffer for opcodes
             uint32_t binary_operands[MAX_PIPELINE_OPERANDS]; // Offsets for binary operands
-            uint32_t scalars[8]; // Scalar values for scalar operators
+            uint32_t scalars[16]; // Scalar values for scalar operators
             uint32_t extra_res_offsets[7]; // Extra result offsets for horizontal fusion
         } pipeline;
     };

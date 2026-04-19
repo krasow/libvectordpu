@@ -56,10 +56,12 @@ struct reduction_result {
   using type = T;
 };
 
+#if ENABLE_PROMOTION_REDUCTIONS
 template <>
 struct reduction_result<int32_t> {
   using type = int64_t;
 };
+#endif
 
 template <typename T>
 class dpu_vector {
@@ -91,6 +93,7 @@ class dpu_vector {
   dpu_vector<T>& operator>>=(T scalar);
 
   dpu_vector<T> operator-() const;
+  dpu_vector<T> operator==(T scalar) const;
 
 #if PIPELINE
   dpu_vector<T>& operator=(const pipeline_result<T>& other);
@@ -139,7 +142,12 @@ struct lazy_reduction_result {
   lazy_reduction_result(dpu_vector<T> v, KernelID r) : vec(std::move(v)), rid(r) {}
   typename dpu_vector<T>::reduction_result_t get();
   operator typename dpu_vector<T>::reduction_result_t() { return get(); }
+#if ENABLE_PROMOTION_REDUCTIONS
+  // Only needed when reduction_result_t != T (e.g. int32_t → int64_t).
+  // When ENABLE_PROMOTION_REDUCTIONS=0, reduction_result_t == T and this
+  // would create a duplicate overload.
   operator T() { return (T)get(); }
+#endif
 };
 
 #if PIPELINE
@@ -165,6 +173,10 @@ template <typename T>
 lazy_reduction_result<T> min(const dpu_vector<T>& a);
 template <typename T>
 lazy_reduction_result<T> max(const dpu_vector<T>& a);
+template <typename T>
+dpu_vector<T> optimal_fusion_for_linear_regression_benchmark(const dpu_vector<T>& init,
+                               const std::vector<dpu_vector<T>>& cols,
+                               const std::vector<T>& weights);
 
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,

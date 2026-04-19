@@ -64,6 +64,11 @@ ops = [
     DPUBinaryOp.make('mul', '*'),
     DPUBinaryOp.make('div', '/'),
     DPUBinaryOp.make('asr', '>>'),
+    DPUBinaryOp.make('eq', '=='),
+    DPUBinaryOp.make('lt', '<'),
+    DPUBinaryOp.make('gt', '>'),
+    DPUBinaryOp.make('ge', '>='),
+    DPUBinaryOp.make('le', '<='),
 
 
     DPUUnaryOp.make('negate', 'NEGATE'),
@@ -152,17 +157,29 @@ pipeline_ops = [
     ('mul', 'MUL'),
     ('div', 'DIV'),
     ('asr', 'ASR'),
+    ('eq', 'EQ'),
+    ('lt', 'LT'),
+    ('gt', 'GT'),
+    ('ge', 'GE'),
+    ('le', 'LE'),
     # Binary Scalar
     ('add_scalar', 'ADD_SCALAR'),
     ('sub_scalar', 'SUB_SCALAR'),
     ('mul_scalar', 'MUL_SCALAR'),
     ('div_scalar', 'DIV_SCALAR'),
     ('asr_scalar', 'ASR_SCALAR'),
+    ('eq_scalar', 'EQ_SCALAR'),
+    ('lt_scalar', 'LT_SCALAR'),
+    ('gt_scalar', 'GT_SCALAR'),
+    ('ge_scalar', 'GE_SCALAR'),
+    ('le_scalar', 'LE_SCALAR'),
     # Reduction 
     ('min', 'MIN'),
     ('max', 'MAX'),
     ('sum', 'SUM'),
     ('product', 'PRODUCT'),
+    # Ternary
+    ('select', 'SELECT'),
     # Stack Machine
     ('push_input', 'PUSH_INPUT'),
     ('push_operand_0', 'PUSH_OPERAND_0'),
@@ -178,6 +195,11 @@ pipeline_ops = [
     ('mul_scalar_var', 'MUL_SCALAR_VAR'),
     ('div_scalar_var', 'DIV_SCALAR_VAR'),
     ('asr_scalar_var', 'ASR_SCALAR_VAR'),
+    ('eq_scalar_var', 'EQ_SCALAR_VAR'),
+    ('lt_scalar_var', 'LT_SCALAR_VAR'),
+    ('gt_scalar_var', 'GT_SCALAR_VAR'),
+    ('ge_scalar_var', 'GE_SCALAR_VAR'),
+    ('le_scalar_var', 'LE_SCALAR_VAR'),
     ('next_chain', 'NEXT_CHAIN'),
 ]
 
@@ -193,10 +215,11 @@ with open("common/opcodes.h", "w") as out:
     # Generate classification macros
     out.write('#define IS_OP_STACK(op) ((op) >= OP_PUSH_INPUT && (op) <= OP_PUSH_OPERAND_7)\n')
     out.write('#define IS_OP_UNARY(op) ((op) >= OP_NEGATE && (op) <= OP_ABS)\n')
-    out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_ASR)\n')
-    out.write('#define IS_OP_SCALAR(op) ((op) >= OP_ADD_SCALAR && (op) <= OP_ASR_SCALAR)\n')
-    out.write('#define IS_OP_SCALAR_VAR(op) ((op) >= OP_ADD_SCALAR_VAR && (op) <= OP_ASR_SCALAR_VAR)\n')
-    out.write('#define IS_OP_REDUCTION(op) ((op) >= OP_MIN && (op) <= OP_PRODUCT)\n\n')
+    out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_LE)\n')
+    out.write('#define IS_OP_SCALAR(op) ((op) >= OP_ADD_SCALAR && (op) <= OP_LE_SCALAR)\n')
+    out.write('#define IS_OP_SCALAR_VAR(op) ((op) >= OP_ADD_SCALAR_VAR && (op) <= OP_LE_SCALAR_VAR)\n')
+    out.write('#define IS_OP_REDUCTION(op) ((op) >= OP_MIN && (op) <= OP_PRODUCT)\n')
+    out.write('#define IS_OP_TERNARY(op) ((op) == OP_SELECT)\n\n')
 
     out.write('#endif // OPCODES_H\n')
 

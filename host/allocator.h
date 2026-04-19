@@ -19,6 +19,7 @@ using std::vector;
 class DpuOOMException : public std::runtime_error {
  public:
   DpuOOMException() : std::runtime_error("DPU OOM") {}
+  explicit DpuOOMException(const std::string& msg) : std::runtime_error(msg) {}
 };
 
 struct FreeBlock {
