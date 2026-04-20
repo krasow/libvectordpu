@@ -7,6 +7,10 @@
 
 #include "config.h"
 
+// Number of statically compiled kernels in the default DPU binary.
+// JIT-compiled kernels are assigned IDs starting at this offset.
+static constexpr uint32_t JIT_STATIC_KERNEL_COUNT = 17;
+
 #if JIT
 
 // Compiles a batch of unique RPN sequences into a single DPU binary

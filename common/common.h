@@ -27,6 +27,25 @@ enum KernelCategory {
 #define MAX_PIPELINE_STACK_DEPTH 4
 #define MINIMUM_WRITE_SIZE 8
 
+// combined_inputs layout: [primary, operand_0, ..., operand_N].
+// The primary occupies slot 0; the remaining MAX_PIPELINE_OPERANDS slots hold
+// binary/extra operands, giving a total capacity of MAX_PIPELINE_OPERANDS + 1.
+#define MAX_COMBINED_INPUTS (MAX_PIPELINE_OPERANDS + 1)
+
+// Maximum number of independent chains that can be horizontally fused into one
+// kernel.  Constrained by the extra_res_offsets array in DPU_LAUNCH_ARGS.
+#define MAX_HORIZONTAL_CHAINS 3
+
+// Bytes consumed by an inline scalar literal in the RPN byte stream (uint32_t).
+#define SCALAR_INLINE_BYTES 4
+
+// Bytes consumed by a scalar-variable index in the RPN byte stream.
+#define SCALAR_VAR_INDEX_BYTES 1
+
+// Sentinel returned by operand-push helpers to signal "value is already on the
+// WRAM stack — do not emit a push instruction".
+#define PUSH_OP_ALREADY_ON_STACK 0xFF
+
 // Shared WRAM workspace for tasklets.
 // Max size: input (1) + operands (MAX_PIPELINE_OPERANDS) + stack (MAX_PIPELINE_STACK_DEPTH) + extra_results (3)
 #define TASKLET_WORKSPACE_SIZE ((1 + MAX_PIPELINE_OPERANDS + MAX_PIPELINE_STACK_DEPTH + 3) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)

@@ -120,6 +120,10 @@ class EventQueue {
   std::atomic<size_t> last_finished_id_{0};
   std::atomic<int> outstanding_callbacks_{0};
 
+  bool try_vfuse(std::shared_ptr<Event> last, std::shared_ptr<Event> e);
+  bool try_hfuse(std::shared_ptr<Event> last, std::shared_ptr<Event> e);
+  void expand_absorbed_inputs(std::shared_ptr<Event> e);
+
  private:
   std::recursive_mutex mtx_;
   size_t counter_ = 1;
