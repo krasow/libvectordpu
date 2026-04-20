@@ -178,7 +178,11 @@
           oi += 5;                                                            \
           continue;                                                           \
         }                                                                     \
-        if (IS_OP_STACK(op)) {                                                \
+        if (op == OP_DUP) {                                                   \
+          st_ptr[sp] = st_ptr[sp - 1];                                        \
+          st_is_temp[sp] = false;                                             \
+          sp++;                                                               \
+        } else if (IS_OP_STACK(op)) {                                         \
           st_ptr[sp] = (op == OP_PUSH_INPUT)                                  \
                            ? input_blk                                        \
                            : op_blks[op - OP_PUSH_OPERAND_0];                 \

@@ -7,7 +7,7 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 5              // 32 elements per block
+#define BLOCK_SIZE_LOG2 4              // 16 elements per block (reduced for 10-operand WRAM budget)
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
 typedef uint32_t KernelID;
@@ -22,8 +22,8 @@ enum KernelCategory {
 
 #include "opcodes.h"
 
-#define MAX_PIPELINE_OPS 32
-#define MAX_PIPELINE_OPERANDS 8
+#define MAX_PIPELINE_OPS 64
+#define MAX_PIPELINE_OPERANDS 10
 #define MAX_PIPELINE_STACK_DEPTH 4
 #define MINIMUM_WRITE_SIZE 8
 

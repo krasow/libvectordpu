@@ -229,7 +229,7 @@ static void write_kernel_function(std::ofstream& out,
         uint8_t op = rpn_ops[op_idx];
         if (op == OP_PUSH_INPUT) {
           stack.push_back("((" + stack_type + ")input_blk[i])");
-        } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+        } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
           std::string idx = std::to_string(op - OP_PUSH_OPERAND_0);
           stack.push_back("((" + stack_type + ")op_blks[" + idx + "][i])");
         } else if (IS_OP_SCALAR(op)) {
@@ -273,6 +273,8 @@ static void write_kernel_function(std::ofstream& out,
             case OP_LE_SCALAR_VAR: out << s1 << " <= (" << stack_type << ")" << scalar_val << ";\n"; break;
           }
           stack.push_back(res);
+        } else if (op == OP_DUP) {
+          stack.push_back(stack.back());
         } else if (IS_OP_UNARY(op)) {
           std::string s1 = stack.back(); stack.pop_back();
           std::string res = get_tmp();

@@ -817,14 +817,13 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
       uint8_t push_op = get_operand_push_op(e->inputs[0]);
       if (push_op != 0xFF) e_rpn_mapped.push_back(push_op);
       else primary_on_stack = true;
-    } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+    } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
       size_t operand_idx = op - OP_PUSH_OPERAND_0 + 1;
       if (operand_idx >= e->inputs.size()) { possible = false; break; }
       uint8_t push_op = get_operand_push_op(e->inputs[operand_idx]);
       if (push_op == 0xFF) {
-        // Both primary and this secondary input are the "on-stack" value.
-        // Fusing would leave the binary op with only one operand (needs DUP).
-        if (primary_on_stack) return false;
+        // Both primary and this secondary are the on-stack value: emit DUP.
+        if (primary_on_stack) { e_rpn_mapped.push_back(OP_DUP); }
         // Secondary is on-stack, primary is not: the binary op will see
         // [on_stack, primary] on the stack, computing on_stack OP primary
         // instead of primary OP on_stack. Safe for commutative ops only;
@@ -1008,7 +1007,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
             // Inline absorbed_rpn (operand indices unchanged — they map into new_inputs correctly)
             new_rpn.insert(new_rpn.end(), in_vec->absorbed_rpn.begin(),
                            in_vec->absorbed_rpn.end());
-          } else if (op >= OP_PUSH_OPERAND_0 && op <= OP_PUSH_OPERAND_7) {
+          } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
             // e's PUSH_OPERAND_X referred to e->inputs[X+1], now at new_inputs[N + X]
             // New PUSH_OPERAND index Y: new_inputs[Y+1] = new_inputs[N+X] → Y = N+X-1
             uint8_t X = op - OP_PUSH_OPERAND_0;
@@ -1042,6 +1041,17 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
     auto last = operations_.back();
     if (try_fuse(last, e)) {
       fused = true;
+      // Retroactive chain fusion: after absorbing e into the tail, try to
+      // further absorb the tail into its predecessor.  This lets a sequence
+      // like K1→K2→K3 collapse into one kernel when K2 uses K1's on-stack
+      // result as an operand and K3 uses K2's on-stack result as an operand
+      // (e.g., DIM=10 dist_j = sum of squared differences across all dims).
+      while (operations_.size() >= 2) {
+        auto& prev = operations_[operations_.size() - 2];
+        auto& tail = operations_.back();
+        if (!try_fuse(prev, tail)) break;
+        operations_.pop_back();
+      }
     }
   }
 #endif
