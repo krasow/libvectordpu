@@ -850,21 +850,19 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   if (possible && (last_rpn.size() + e_rpn_mapped.size() > MAX_PIPELINE_OPS)) possible = false;
 
   if (possible) {
-    // Before absorbing last->output in a single-chain vertical fusion, record
-    // the RPN prefix and scalars that produce it. Later events whose primary
-    // input is this absorbed vector can inline the prefix rather than reading
-    // from (unwritten) MRAM.
-    if (!horizontal && last->extra_outputs.empty() && last->output &&
-        !last->inputs.empty()) {
-      last->output->absorbed_rpn = last_rpn;
-      last->output->absorbed_scalars = last_scalars;
-      last->output->absorbed_inputs = last->inputs;
-    }
     last->rpn_ops = last_rpn;
     last->rpn_ops.insert(last->rpn_ops.end(), e_rpn_mapped.begin(), e_rpn_mapped.end());
     last->scalars = last_scalars;
     last->scalars.insert(last->scalars.end(), e_scalars.begin(), e_scalars.end());
     last->inputs = combined_inputs;
+    // Record the complete merged RPN (including e's ops) for last->output so
+    // future events can inline it instead of reading from unwritten MRAM.
+    if (!horizontal && last->extra_outputs.empty() && last->output &&
+        !last->inputs.empty()) {
+      last->output->absorbed_rpn = last->rpn_ops;
+      last->output->absorbed_scalars = last->scalars;
+      last->output->absorbed_inputs = last->inputs;
+    }
     if (horizontal) {
       last->extra_outputs.push_back(e->output);
     } else if (last->extra_outputs.empty()) {
@@ -1023,10 +1021,22 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
         }
         new_scalars.insert(new_scalars.end(), e->scalars.begin(), e->scalars.end());
 
+        // Consumed: after inlining, this vector will be written to MRAM by the
+        // kernel we're building. Clear absorbed_rpn now so future ops that use
+        // this vector read from MRAM rather than re-inlining the stale prefix.
+        // Without this, a chain like sq += a; sq += b; sq += c; would inline
+        // only the original sq computation on every step, ignoring all prior
+        // accumulations and producing incorrect results.
+        auto absorbed_vec = in_vec;
+
         e->inputs = std::move(new_inputs);
         e->rpn_ops = std::move(new_rpn);
         e->scalars = std::move(new_scalars);
         e->is_scalar = false;
+
+        absorbed_vec->absorbed_rpn.clear();
+        absorbed_vec->absorbed_scalars.clear();
+        absorbed_vec->absorbed_inputs.clear();
       }
     }
   }
