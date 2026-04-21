@@ -8,7 +8,7 @@
 // vectors.  Both run in the same kernel pass as separate WRAM chains.
 bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
                             std::shared_ptr<Event> e) {
-  if (last->extra_outputs.size() >= MAX_HORIZONTAL_CHAINS) return false;
+  if (last->extra_outputs.size() >= MAX_HFUSE_CHAINS) return false;
 
   std::vector<uint8_t>  last_rpn;
   std::vector<uint32_t> last_scalars;
@@ -41,7 +41,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
       if (push == PUSH_OP_ALREADY_ON_STACK) { possible = false; break; }
       e_mapped.push_back(push);
     } else if (op >= OP_PUSH_OPERAND_0 &&
-               op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       size_t idx = op - OP_PUSH_OPERAND_0 + 1;
       if (idx >= e->inputs.size()) { possible = false; break; }
       uint8_t push = get_push_op(e->inputs[idx]);
@@ -60,7 +60,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     }
   }
 
-  if (!possible || last_rpn.size() + e_mapped.size() > MAX_PIPELINE_OPS)
+  if (!possible || last_rpn.size() + e_mapped.size() > MAX_VFUSE_OPS)
     return false;
 
   last->rpn_ops = last_rpn;

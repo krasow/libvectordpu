@@ -66,6 +66,7 @@ struct reduction_result<int32_t> {
 template <typename T>
 class dpu_vector {
  public:
+  dpu_vector() noexcept;
   dpu_vector(uint32_t n, uint32_t reserved = 0, bool lazy = false,
              LOGGER_ARGS_WITH_DEFAULTS);
 
@@ -138,7 +139,8 @@ class dpu_vector {
 template <typename T>
 struct lazy_reduction_result {
   dpu_vector<T> vec;
-  KernelID rid;
+  KernelID rid = 0;
+  lazy_reduction_result() noexcept = default;
   lazy_reduction_result(dpu_vector<T> v, KernelID r) : vec(std::move(v)), rid(r) {}
   typename dpu_vector<T>::reduction_result_t get();
   operator typename dpu_vector<T>::reduction_result_t() { return get(); }
@@ -149,6 +151,9 @@ struct lazy_reduction_result {
   operator T() { return (T)get(); }
 #endif
 };
+
+template <typename T>
+using dpu_future = lazy_reduction_result<T>;
 
 #if PIPELINE
 template <typename T>
@@ -173,10 +178,6 @@ template <typename T>
 lazy_reduction_result<T> min(const dpu_vector<T>& a);
 template <typename T>
 lazy_reduction_result<T> max(const dpu_vector<T>& a);
-template <typename T>
-dpu_vector<T> optimal_fusion_for_linear_regression_benchmark(const dpu_vector<T>& init,
-                               const std::vector<dpu_vector<T>>& cols,
-                               const std::vector<T>& weights);
 
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,

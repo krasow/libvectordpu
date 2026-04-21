@@ -86,6 +86,7 @@ class EventQueue {
   bool process_next();
   void process_events(size_t wait_for_id);
   void debug_print_queue();
+  void remove_dead_events();
   void debug_active_events();
   size_t count_internal_references(detail::VectorDescRef vec);
 

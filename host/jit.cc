@@ -1,37 +1,32 @@
 #include "jit.h"
 
-#include <chrono>
+#if JIT
+#include <dlfcn.h>
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <sstream>
+#include <map>
+#include <mutex>
 #include <vector>
 
 #include "common.h"
 #include "fusion.h"
 #include "logger.h"
 #include "opcodes.h"
+#include "perfetto/trace.h"
 #include "queue.h"
 #include "runtime.h"
 #include "vectordpu.h"
-
-#if JIT
-#include <dlfcn.h>
-
-#include <map>
-#include <mutex>
-
-#include "perfetto/trace.h"
 
 namespace fs = std::filesystem;
 
 namespace {
 using Signature = std::pair<std::vector<uint8_t>, std::string>;
 using CacheKey  = std::vector<Signature>;
-static constexpr uint32_t KERNEL_COUNT_VAL = JIT_STATIC_KERNEL_COUNT;
-// Number of result slots: one primary + one per extra horizontal chain.
-static constexpr int MAX_RESULT_SLOTS = MAX_HORIZONTAL_CHAINS + 1;
+// One primary result slot + one per extra horizontal chain.
+static constexpr int MAX_RESULT_SLOTS = MAX_HFUSE_CHAINS + 1;
 std::map<CacheKey, std::string> g_jit_cache;
 std::map<Signature, std::string> g_kernel_obj_cache;
 std::recursive_mutex g_jit_cache_mutex;
@@ -102,31 +97,31 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       << type_name << " *)(args.pipeline.init_offset);\n\n";
   
   // Horizontal fusion result support
-  // Result pointers: [0] = primary output, [1..MAX_HORIZONTAL_CHAINS] = extra chains.
+  // Result pointers: [0] = primary output, [1..MAX_HFUSE_CHAINS] = extra chains.
   out << "    __mram_ptr " << type_name << " *res_ptrs[" << MAX_RESULT_SLOTS << "];\n"
       << "    res_ptrs[0] = (__mram_ptr " << type_name << " *)(args.pipeline.res_offset);\n";
-  for (int i = 0; i < MAX_HORIZONTAL_CHAINS; ++i) {
+  for (int i = 0; i < MAX_HFUSE_CHAINS; ++i) {
     out << "    res_ptrs[" << (i + 1) << "] = (__mram_ptr " << type_name
         << " *)(args.pipeline.extra_res_offsets[" << i << "]);\n";
   }
 
   // WRAM workspace layout:
   //   slot 0:                        input_blk
-  //   slots 1..MAX_PIPELINE_OPERANDS: op_blks[0..MAX_PIPELINE_OPERANDS-1]
-  //   slots MAX_PIPELINE_OPERANDS+1..+MAX_RESULT_SLOTS: res_blks (reuse scratch slots)
+  //   slots 1..MAX_VFUSE_INPUTS: op_blks[0..MAX_VFUSE_INPUTS-1]
+  //   slots MAX_VFUSE_INPUTS+1..+MAX_RESULT_SLOTS: res_blks (reuse scratch slots)
   out << "\n    " << type_name << " *input_blk = (" << type_name << " *)dpu_workspace[id];\n"
-      << "    " << type_name << " *op_blks[MAX_PIPELINE_OPERANDS];\n"
-      << "    for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++)\n"
+      << "    " << type_name << " *op_blks[MAX_VFUSE_INPUTS];\n"
+      << "    for (int k = 0; k < MAX_VFUSE_INPUTS; k++)\n"
       << "        op_blks[k] = (" << type_name
       << " *)&dpu_workspace[id][(k + 1) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n"
       << "    " << type_name << " *res_blks[" << MAX_RESULT_SLOTS << "];\n"
       << "    for (int k = 0; k < " << MAX_RESULT_SLOTS << "; k++)\n"
       << "        res_blks[k] = (" << type_name
-      << " *)&dpu_workspace[id][(1 + MAX_PIPELINE_OPERANDS + k) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n\n";
+      << " *)&dpu_workspace[id][(1 + MAX_VFUSE_INPUTS + k) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n\n";
 
   // Scan RPN to find which operand slots are needed and where chain boundaries are.
   bool uses_input = false;
-  bool uses_op[MAX_PIPELINE_OPERANDS] = {false};
+  bool uses_op[MAX_VFUSE_INPUTS] = {false};
   struct Chain {
     size_t start_op, end_op;
     bool    is_reduction;
@@ -140,7 +135,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     for (size_t i = start; i < end; ++i) {
       uint8_t op = rpn_ops[i];
       if      (op == OP_PUSH_INPUT) uses_input = true;
-      else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS)
+      else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS)
         uses_op[op - OP_PUSH_OPERAND_0] = true;
       else if (IS_OP_SCALAR(op))    i += SCALAR_INLINE_BYTES;
       else if (IS_OP_SCALAR_VAR(op)) i += SCALAR_VAR_INDEX_BYTES;
@@ -184,7 +179,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
   if (uses_input)
     out << "        mram_read((__mram_ptr void const *)(in_ptr + blk), input_blk, b_b_aligned);\n";
-  for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {
+  for (int k = 0; k < MAX_VFUSE_INPUTS; k++) {
     if (!uses_op[k]) continue;
     out << "        {\n"
         << "            __mram_ptr " << type_name << " *p = (__mram_ptr "
@@ -212,7 +207,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       if (op == OP_PUSH_INPUT) {
         stack.push_back("((" + stack_type + ")input_blk[i])");
 
-      } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
+      } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
         stack.push_back("((" + stack_type + ")op_blks["
                         + std::to_string(op - OP_PUSH_OPERAND_0) + "][i])");
 
@@ -253,13 +248,14 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         stack.push_back(stack.back());
 
       } else if (IS_OP_UNARY(op)) {
-        std::string s1 = stack.back(); stack.pop_back();
+        std::string s1  = stack.back(); stack.pop_back();
         std::string res = get_tmp();
-        if (op == OP_NEGATE)
-          out << "            " << stack_type << " " << res << " = -" << s1 << ";\n";
-        else if (op == OP_ABS)
-          out << "            " << stack_type << " " << res
-              << " = (" << s1 << " < 0) ? -" << s1 << " : " << s1 << ";\n";
+        std::string expr;
+        switch (op) {
+          case OP_NEGATE: expr = "-" + s1; break;
+          case OP_ABS:    expr = "(" + s1 + " < 0) ? -" + s1 + " : " + s1; break;
+        }
+        out << "            " << stack_type << " " << res << " = " << expr << ";\n";
         stack.push_back(res);
 
       } else if (IS_OP_BINARY(op)) {
@@ -322,41 +318,43 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   }
   out << "    }\n";  // end block loop
 
-  // Cross-tasklet reduction: each tasklet writes its partial result to the
-  // scratchpad, then tasklet 0 reduces across all tasklets and writes to MRAM.
+  // Cross-tasklet reduction: each tasklet writes its partial to the scratchpad,
+  // then tasklet 0 merges all partials and writes the scalar result to MRAM.
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
     if (!chains[c_idx].is_reduction) continue;
-    const size_t scratchpad_row = c_idx;
-    const bool is_first_chain   = (c_idx == 0);
+
+    const char* merge_op;
+    switch (chains[c_idx].reduction_op) {
+      case OP_SUM:     merge_op = "tot += v;";            break;
+      case OP_PRODUCT: merge_op = "tot *= v;";            break;
+      case OP_MIN:     merge_op = "if (v < tot) tot = v;"; break;
+      case OP_MAX:     merge_op = "if (v > tot) tot = v;"; break;
+      default:         merge_op = "";                     break;
+    }
+    std::string res_ptr = (c_idx == 0)
+        ? "args.pipeline.res_offset"
+        : "args.pipeline.extra_res_offsets[" + std::to_string(c_idx - 1) + "]";
+
     out << "    {\n"
-        << "        uint64_t bf_scratch = 0;\n"
-        << "        memcpy(&bf_scratch, &acc_" << c_idx << ", sizeof(" << stack_type << "));\n"
-        << "        reduction_scratchpad[" << scratchpad_row << " * NR_TASKLETS + id] = bf_scratch;\n"
+        << "        uint64_t bf = 0;\n"
+        << "        memcpy(&bf, &acc_" << c_idx << ", sizeof(" << stack_type << "));\n"
+        << "        reduction_scratchpad[" << c_idx << " * NR_TASKLETS + id] = bf;\n"
         << "        barrier_wait(&my_barrier);\n"
         << "        if (id == 0) {\n"
-        << "            uint64_t tot_raw = reduction_scratchpad[" << scratchpad_row << " * NR_TASKLETS + 0];\n"
+        << "            uint64_t tot_raw = reduction_scratchpad[" << c_idx << " * NR_TASKLETS];\n"
         << "            " << stack_type << " tot;\n"
         << "            memcpy(&tot, &tot_raw, sizeof(" << stack_type << "));\n"
         << "            for (int k = 1; k < NR_TASKLETS; k++) {\n"
-        << "                uint64_t v_raw = reduction_scratchpad[" << scratchpad_row << " * NR_TASKLETS + k];\n"
+        << "                uint64_t v_raw = reduction_scratchpad[" << c_idx << " * NR_TASKLETS + k];\n"
         << "                " << stack_type << " v;\n"
-        << "                memcpy(&v, &v_raw, sizeof(" << stack_type << "));\n";
-    switch (chains[c_idx].reduction_op) {
-      case OP_SUM:     out << "                tot += v;\n"; break;
-      case OP_PRODUCT: out << "                tot *= v;\n"; break;
-      case OP_MIN:     out << "                if (v < tot) tot = v;\n"; break;
-      case OP_MAX:     out << "                if (v > tot) tot = v;\n"; break;
-    }
-    out << "            }\n"
+        << "                memcpy(&v, &v_raw, sizeof(" << stack_type << "));\n"
+        << "                " << merge_op << "\n"
+        << "            }\n"
         << "            uint64_t bf_final = 0;\n"
-        << "            memcpy(&bf_final, &tot, sizeof(" << stack_type << "));\n";
-    if (is_first_chain)
-      out << "            mram_write(&bf_final, (__mram_ptr void *)args.pipeline.res_offset, "
-          << MINIMUM_WRITE_SIZE << ");\n";
-    else
-      out << "            mram_write(&bf_final, (__mram_ptr void *)args.pipeline.extra_res_offsets["
-          << (c_idx - 1) << "], " << MINIMUM_WRITE_SIZE << ");\n";
-    out << "        }\n"
+        << "            memcpy(&bf_final, &tot, sizeof(" << stack_type << "));\n"
+        << "            mram_write(&bf_final, (__mram_ptr void *)" << res_ptr
+        << ", " << MINIMUM_WRITE_SIZE << ");\n"
+        << "        }\n"
         << "        barrier_wait(&my_barrier);\n"
         << "    }\n";
   }
@@ -434,8 +432,6 @@ static bool link_dpu_objects(const std::string& main_path,
 
 std::string jit_compile(
     const std::vector<std::pair<std::vector<uint8_t>, std::string>>& kernels) {
-  std::cout << std::flush;
-
   {
     std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
     auto it = g_jit_cache.find(kernels);
@@ -501,7 +497,7 @@ std::string jit_compile(
     out << "\nint main() {\n  switch (args.kernel) {\n";
     for (size_t k = 0; k < kernels.size(); ++k) {
       std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
-      out << "    case " << (KERNEL_COUNT_VAL + k) << ": return k_"
+      out << "    case " << (JIT_STATIC_KERNEL_COUNT + k) << ": return k_"
           << hash_signature(kernels[k]) << "();\n";
     }
     out << "    default: return -1;\n  }\n}\n";
@@ -529,7 +525,7 @@ void EventQueue::flush_jit_batch() {
 #if ENABLE_DPU_LOGGING >= 1
   DpuRuntime::get().get_logger().lock()
       << "[queue-jit] Flushing " << batch.size()
-      << " kernels to async JIT compiler." << std::endl;
+      << " kernels to JIT compiler." << std::endl;
 #endif
 
   std::shared_future<std::string> future =
@@ -573,21 +569,18 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     if (pending_unique_kernels_[i] == sig) {
       e->jit_sub_kernel_idx = i;
       pending_jit_events_.push_back(e);
-      if (pending_jit_events_.size() >= MAX_JIT_QUEUE_DEPTH) flush_jit_batch();
+      if (pending_jit_events_.size() >= JIT_BATCH_SIZE) flush_jit_batch();
       return;
     }
   }
 
-  // New unique kernel — start a fresh epoch if the batch is full.
-  if (pending_unique_kernels_.size() >= MAX_JIT_QUEUE_DEPTH) {
+  if (pending_unique_kernels_.size() >= JIT_BATCH_SIZE)
     flush_jit_batch();
-    pending_unique_kernels_.clear();
-  }
 
   e->jit_sub_kernel_idx = pending_unique_kernels_.size();
   pending_unique_kernels_.push_back(sig);
   pending_jit_events_.push_back(e);
-  if (pending_jit_events_.size() >= MAX_JIT_QUEUE_DEPTH) flush_jit_batch();
+  if (pending_jit_events_.size() >= JIT_BATCH_SIZE) flush_jit_batch();
 }
 
 void jit_cleanup() {

@@ -46,7 +46,7 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
       new_rpn.insert(new_rpn.end(),
                      in_vec->absorbed_rpn.begin(), in_vec->absorbed_rpn.end());
     } else if (op >= OP_PUSH_OPERAND_0 &&
-               op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       uint8_t X = op - OP_PUSH_OPERAND_0;
       new_rpn.push_back(OP_PUSH_OPERAND_0 + (uint8_t)(N - 1 + X));
     } else if (IS_OP_SCALAR_VAR(op)) {
@@ -68,6 +68,25 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   absorbed_vec->absorbed_rpn.clear();
   absorbed_vec->absorbed_scalars.clear();
   absorbed_vec->absorbed_inputs.clear();
+  absorbed_vec->is_shared_intermediate = false;
+
+  // The event that produced absorbed_vec is now orphaned: its computation has
+  // been inlined into e and no pending event reads its MRAM output.  Remove it
+  // from the queue so it cannot be spuriously hfused with the growing chain
+  // (which would break the absorbed_rpn tracking on the chain's output).
+  bool other_consumers = false;
+  for (const auto& op : operations_)
+    for (const auto& inp : op->inputs)
+      if (inp == absorbed_vec) { other_consumers = true; break; }
+
+  if (!other_consumers) {
+    operations_.erase(
+      std::remove_if(operations_.begin(), operations_.end(),
+        [&](const auto& op) {
+          return op->output == absorbed_vec && op->extra_outputs.empty();
+        }),
+      operations_.end());
+  }
 }
 
 // Vertical fusion: e depends on last's output (on-stack value).
@@ -80,6 +99,11 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   // Safety: the on-stack value is the last chain's output.
   detail::VectorDescRef on_stack =
       last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
+
+  // If on_stack is a shared intermediate (e.g. error_shifted consumed by DIM
+  // gradient chains), absorbing it on-stack would skip the MRAM write and
+  // corrupt subsequent readers.
+  if (on_stack && on_stack->is_shared_intermediate) return false;
 
   auto check_safety = [&](detail::VectorDescRef vec) {
     if (!vec) return true;
@@ -140,7 +164,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       if (push != PUSH_OP_ALREADY_ON_STACK) e_mapped.push_back(push);
       else primary_on_stack = true;
     } else if (op >= OP_PUSH_OPERAND_0 &&
-               op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS) {
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       size_t idx = op - OP_PUSH_OPERAND_0 + 1;
       if (idx >= e->inputs.size()) { possible = false; break; }
       uint8_t push = get_push_op(e->inputs[idx]);
@@ -166,7 +190,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     }
   }
 
-  if (!possible || last_rpn.size() + e_mapped.size() > MAX_PIPELINE_OPS)
+  if (!possible || last_rpn.size() + e_mapped.size() > MAX_VFUSE_OPS)
     return false;
 
   last->rpn_ops = last_rpn;

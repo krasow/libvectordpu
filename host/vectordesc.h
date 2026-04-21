@@ -38,6 +38,11 @@ struct VectorDesc {
   std::vector<uint32_t> absorbed_scalars;
   std::vector<std::shared_ptr<VectorDesc>> absorbed_inputs; // full input list of absorbed event
 
+  // True when this vector is a shared intermediate written by a standalone
+  // kernel (e.g. error_shifted consumed by DIM gradient chains).  Prevents
+  // try_vfuse from absorbing it on-stack, which would skip the MRAM write.
+  bool is_shared_intermediate = false;
+
   const char* type_name = nullptr;
   const char* debug_name = nullptr;
   const char* debug_file = nullptr;

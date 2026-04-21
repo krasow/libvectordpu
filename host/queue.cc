@@ -1,4 +1,5 @@
 #include "queue.h"
+#include "fusion.h"
 
 #include <cassert>
 #include <mutex>
@@ -168,7 +169,7 @@ bool EventQueue::process_next() {
 #if PIPELINE
     if (e->op == Event::OperationType::COMPUTE) {
       size_t lookahead = 0;
-      while (lookahead < MAX_FUSION_LOOKAHEAD_LENGTH && !operations_.empty()) {
+      while (lookahead < FUSION_LOOKAHEAD && !operations_.empty()) {
         auto next = operations_.front();
         if (next->op != Event::OperationType::COMPUTE) break;
         if (!try_fuse(e, next)) break;
@@ -185,7 +186,7 @@ bool EventQueue::process_next() {
 #endif
 
 #if JIT
-    if (e->op == Event::OperationType::COMPUTE && MAX_JIT_QUEUE_DEPTH > 0) {
+    if (e->op == Event::OperationType::COMPUTE && JIT_BATCH_SIZE > 0) {
       if (!e->is_locked_for_jit)
         lock_for_jit(e);
 
@@ -194,7 +195,7 @@ bool EventQueue::process_next() {
           std::this_thread::sleep_for(std::chrono::microseconds(200));
 
         auto it = operations_.begin();
-        while (pending_unique_kernels_.size() < MAX_JIT_QUEUE_DEPTH &&
+        while (pending_unique_kernels_.size() < JIT_BATCH_SIZE &&
                it != operations_.end()) {
           auto next = *it;
           if (next->op != Event::OperationType::COMPUTE) break;
@@ -499,6 +500,23 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   }
   if (unique.size() > MAX_COMBINED_INPUTS) return false;
 
+  // Don't hfuse a freshly-submitted scalar-op intermediate — it will almost
+  // certainly be consumed by an imminent vfuse candidate (e.g. vec*s followed
+  // by acc+product).  Hfusing it now would lock it into an extra_output slot,
+  // making the subsequent add unable to vfuse.  Exception: when `last` ends
+  // with a reduction, its stack is empty after the reduce, so no vfuse
+  // candidate can consume `e` on-stack — hfusing is safe and lets repeated
+  // per-dim reduction chains collapse into one kernel.
+  bool last_ends_with_reduction =
+      !last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back());
+  if (e->is_scalar && e->rpn_ops.empty() && !last_ends_with_reduction)
+    return false;
+
+  // Don't hfuse an event whose output is marked for inline absorption.
+  // The next consumer will expand it via absorbed_rpn; hfusing it now just
+  // wastes an extra_output chain slot and duplicates computation.
+  if (e->output && !e->output->absorbed_rpn.empty()) return false;
+
   return try_hfuse(last, e);
 #else
   return false;
@@ -556,7 +574,7 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
       if (any_locked) flush_jit_batch();
     }
     if (e->op == Event::OperationType::COMPUTE && e->rpn_ops.empty() &&
-        MAX_JIT_QUEUE_DEPTH > 0)
+        JIT_BATCH_SIZE > 0)
       e->kid = e->pipeline_kid;
 #endif
     for (const auto& in : e->inputs)
@@ -565,5 +583,22 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
     if (e->output) e->output->last_producer_id = e->id;
 
     operations_.push_back(e);
+
+#if PIPELINE
+    // Set absorbed_rpn so expand_absorbed_inputs can inline standalone events
+    // (e.g. unary negate) into the first consumer's event, enabling chain growth.
+    if (e->op == Event::OperationType::COMPUTE
+        && (!e->is_scalar || !e->rpn_ops.empty())
+        && !IS_OP_REDUCTION(e->opcode)
+        && e->output && !e->inputs.empty() && e->extra_outputs.empty()) {
+      std::vector<uint8_t> rpn;
+      std::vector<uint32_t> scalars;
+      build_default_rpn(e, rpn, scalars);
+      e->output->absorbed_rpn           = rpn;
+      e->output->absorbed_scalars       = scalars;
+      e->output->absorbed_inputs        = e->inputs;
+      e->output->is_shared_intermediate = true;
+    }
+#endif
   }
 }

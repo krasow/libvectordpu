@@ -21,34 +21,38 @@ enum KernelCategory {
 };
 
 #include "opcodes.h"
+#include <config.h>
 
-#define MAX_PIPELINE_OPS 64
-#define MAX_PIPELINE_OPERANDS 10
+#ifndef MAX_VFUSE_OPS
+#define MAX_VFUSE_OPS 64
+#endif
+#ifndef MAX_VFUSE_INPUTS
+#define MAX_VFUSE_INPUTS 10
+#endif
+#ifndef MAX_PIPELINE_STACK_DEPTH
 #define MAX_PIPELINE_STACK_DEPTH 4
+#endif
+#ifndef MAX_HFUSE_CHAINS
+#define MAX_HFUSE_CHAINS 3
+#endif
+
 #define MINIMUM_WRITE_SIZE 8
 
 // combined_inputs layout: [primary, operand_0, ..., operand_N].
-// The primary occupies slot 0; the remaining MAX_PIPELINE_OPERANDS slots hold
-// binary/extra operands, giving a total capacity of MAX_PIPELINE_OPERANDS + 1.
-#define MAX_COMBINED_INPUTS (MAX_PIPELINE_OPERANDS + 1)
+// The primary occupies slot 0; the remaining MAX_VFUSE_INPUTS slots hold
+// binary/extra operands, giving a total capacity of MAX_VFUSE_INPUTS + 1.
+#define MAX_COMBINED_INPUTS (MAX_VFUSE_INPUTS + 1)
 
-// Maximum number of independent chains that can be horizontally fused into one
-// kernel.  Constrained by the extra_res_offsets array in DPU_LAUNCH_ARGS.
-#define MAX_HORIZONTAL_CHAINS 3
-
-// Bytes consumed by an inline scalar literal in the RPN byte stream (uint32_t).
 #define SCALAR_INLINE_BYTES 4
-
-// Bytes consumed by a scalar-variable index in the RPN byte stream.
 #define SCALAR_VAR_INDEX_BYTES 1
 
-// Sentinel returned by operand-push helpers to signal "value is already on the
-// WRAM stack — do not emit a push instruction".
+// Sentinel: value is already on the WRAM stack — do not emit a push.
 #define PUSH_OP_ALREADY_ON_STACK 0xFF
 
-// Shared WRAM workspace for tasklets.
-// Max size: input (1) + operands (MAX_PIPELINE_OPERANDS) + stack (MAX_PIPELINE_STACK_DEPTH) + extra_results (3)
-#define TASKLET_WORKSPACE_SIZE ((1 + MAX_PIPELINE_OPERANDS + MAX_PIPELINE_STACK_DEPTH + 3) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)
+// Shared WRAM workspace per tasklet:
+//   input(1) + operands(MAX_VFUSE_INPUTS) + stack_buf(MAX_PIPELINE_STACK_DEPTH) + results(MAX_HFUSE_CHAINS)
+#define TASKLET_WORKSPACE_SIZE \
+    ((1 + MAX_VFUSE_INPUTS + MAX_PIPELINE_STACK_DEPTH + MAX_HFUSE_CHAINS) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)
 
 typedef struct {
     uint32_t kernel;       // 4
@@ -81,15 +85,13 @@ typedef struct {
             uint32_t init_offset;    // Initial input offset (LHS)
             uint32_t res_offset;     // Result offset (for vector output)
             uint32_t num_ops;
-            uint8_t ops[MAX_PIPELINE_OPS];          // Fixed size buffer for opcodes
-            uint32_t binary_operands[MAX_PIPELINE_OPERANDS]; // Offsets for binary operands
+            uint8_t ops[MAX_VFUSE_OPS];          // Fixed size buffer for opcodes
+            uint32_t binary_operands[MAX_VFUSE_INPUTS]; // Offsets for binary operands
             uint32_t scalars[16]; // Scalar values for scalar operators
-            uint32_t extra_res_offsets[7]; // Extra result offsets for horizontal fusion
+            uint32_t extra_res_offsets[MAX_HFUSE_CHAINS];
         } pipeline;
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;
-
-#include <config.h>
 
 #if defined(__dpu__) || defined(__dpu_v1A__)
 extern __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];

@@ -11,12 +11,16 @@ LOGGING ?= 0
 PIPELINE ?= 0
 # this option enables JIT compilation of pipeline kernels
 JIT ?= 0
-# this option sets the maximum number of unique kernels to fuse into a single JIT binary
-MAX_JIT_QUEUE_DEPTH ?= 16
-# this option sets the maximum number of operations to look ahead for fusion
-MAX_FUSION_LOOKAHEAD_LENGTH ?= 32
-# this option enables aggressive inter-kernel fusion (lookahead and bubble-up)
-ENABLE_INTER_KERNEL_FUSION ?= 1
+# how many unique kernels to batch before triggering a JIT compile
+JIT_BATCH_SIZE ?= 16
+# how many pending queue events to scan ahead when looking for fusion candidates
+FUSION_LOOKAHEAD ?= 32
+# horizontal fusion: max independent parallel chains per kernel pass
+MAX_HFUSE_CHAINS ?= 10
+# vertical fusion: max RPN opcodes per chain (caps how deep chains can be fused)
+MAX_VFUSE_OPS ?= 128
+# vertical fusion: max distinct input vectors referenced per kernel
+MAX_VFUSE_INPUTS ?= 10
 
 ENABLE_OOM_RECOVERY ?= 1
 
@@ -135,14 +139,16 @@ reconfigure:
 	@echo "CXX_STANDARD=$(CXX_STANDARD)" >> $(CONFIG_STAMP)
 	@echo "PIPELINE=$(PIPELINE)" >> $(CONFIG_STAMP)
 	@echo "JIT=$(JIT)" >> $(CONFIG_STAMP)
-	@echo "MAX_JIT_QUEUE_DEPTH=$(MAX_JIT_QUEUE_DEPTH)" >> $(CONFIG_STAMP)
+	@echo "JIT_BATCH_SIZE=$(JIT_BATCH_SIZE)" >> $(CONFIG_STAMP)
 	@echo "TRACE=$(TRACE)" >> $(CONFIG_STAMP)
 	@echo "PERFETTO_HOME=$(PERFETTO_HOME)" >> $(CONFIG_STAMP)
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
-	@echo "MAX_FUSION_LOOKAHEAD_LENGTH=$(MAX_FUSION_LOOKAHEAD_LENGTH)" >> $(CONFIG_STAMP)
-	@echo "ENABLE_INTER_KERNEL_FUSION=$(ENABLE_INTER_KERNEL_FUSION)" >> $(CONFIG_STAMP)
+	@echo "FUSION_LOOKAHEAD=$(FUSION_LOOKAHEAD)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_OOM_RECOVERY=$(ENABLE_OOM_RECOVERY)" >> $(CONFIG_STAMP)
+	@echo "MAX_HFUSE_CHAINS=$(MAX_HFUSE_CHAINS)" >> $(CONFIG_STAMP)
+	@echo "MAX_VFUSE_OPS=$(MAX_VFUSE_OPS)" >> $(CONFIG_STAMP)
+	@echo "MAX_VFUSE_INPUTS=$(MAX_VFUSE_INPUTS)" >> $(CONFIG_STAMP)
 
 cache_old:
 	@if [ -f "$(CONFIG_STAMP)" ]; then \

@@ -312,7 +312,7 @@ void internal_launch_universal_pipeline(
     args[i].pipeline.init_offset = init ? init->desc[i].ptr : 0;
     args[i].pipeline.res_offset = res->desc[i].ptr;
     
-    for (size_t j = 0; j < 7; ++j) {
+    for (size_t j = 0; j < MAX_HFUSE_CHAINS; ++j) {
         if (j < extra_outputs.size()) {
             args[i].pipeline.extra_res_offsets[j] = extra_outputs[j]->desc[i].ptr;
         } else {
@@ -321,14 +321,14 @@ void internal_launch_universal_pipeline(
     }
 
     args[i].pipeline.num_ops =
-        std::min((size_t)ops.size(), (size_t)MAX_PIPELINE_OPS);
+        std::min((size_t)ops.size(), (size_t)MAX_VFUSE_OPS);
 
     for (size_t j = 0; j < args[i].pipeline.num_ops; ++j) {
       args[i].pipeline.ops[j] = ops[j];
     }
 
-    // Map operands by index (0..MAX_PIPELINE_OPERANDS-1)
-    for (size_t j = 0; j < MAX_PIPELINE_OPERANDS; ++j) {
+    // Map operands by index (0..MAX_VFUSE_INPUTS-1)
+    for (size_t j = 0; j < MAX_VFUSE_INPUTS; ++j) {
       if (j < operands.size()) {
         args[i].pipeline.binary_operands[j] = operands[j]->desc[i].ptr;
       } else {

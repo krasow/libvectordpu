@@ -14,13 +14,13 @@
                                                                               \
     /* Workspace Layout: input(0), operands(1-3), scratch(4) */               \
     TYPE *input_blk = (TYPE *)dpu_workspace[id];                              \
-    TYPE *op_blks[MAX_PIPELINE_OPERANDS];                                     \
-    for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++)                           \
+    TYPE *op_blks[MAX_VFUSE_INPUTS];                                     \
+    for (int k = 0; k < MAX_VFUSE_INPUTS; k++)                           \
       op_blks[k] = (TYPE *)&dpu_workspace[id][(k + 1) * BLOCK_SIZE *          \
                                               MINIMUM_WRITE_SIZE];            \
     TYPE(*scratch_blks)                                                       \
     [BLOCK_SIZE] = (TYPE(*)[BLOCK_SIZE]) &                                    \
-                   dpu_workspace[id][(MAX_PIPELINE_OPERANDS + 1) *            \
+                   dpu_workspace[id][(MAX_VFUSE_INPUTS + 1) *            \
                                      BLOCK_SIZE * MINIMUM_WRITE_SIZE];        \
                                                                               \
     int64_t acc_64 = 0;                                                       \
@@ -31,7 +31,7 @@
                                                                               \
     /* Pre-scan for operands and reductions */                                \
     bool uses_input = false;                                                  \
-    bool uses_op[MAX_PIPELINE_OPERANDS] = {false};                            \
+    bool uses_op[MAX_VFUSE_INPUTS] = {false};                            \
     oi = 0;                                                                   \
     while (oi < n_ops) {                                                      \
       uint8_t op = args.pipeline.ops[oi];                                     \
@@ -42,7 +42,7 @@
       if (op == OP_PUSH_INPUT)                                                \
         uses_input = true;                                                    \
       else if (op >= OP_PUSH_OPERAND_0 &&                                     \
-               op < OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS)                \
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS)                \
         uses_op[op - OP_PUSH_OPERAND_0] = true;                               \
       else if (IS_OP_REDUCTION(op)) {                                         \
         r_op = op;                                                            \
@@ -78,7 +78,7 @@
       /* 1. Fetch operands (with deduplication) */                            \
       if (uses_input)                                                         \
         mram_read((__mram_ptr void const *)(in_ptr + blk), input_blk, b_b);   \
-      for (int k = 0; k < MAX_PIPELINE_OPERANDS; k++) {                       \
+      for (int k = 0; k < MAX_VFUSE_INPUTS; k++) {                       \
         if (uses_op[k]) {                                                     \
           __mram_ptr TYPE *p =                                                \
               (__mram_ptr TYPE *)(args.pipeline.binary_operands[k]);          \

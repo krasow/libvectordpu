@@ -216,7 +216,7 @@ with open("common/opcodes.h", "w") as out:
     out.write('};\n\n')
     
     # Generate classification macros
-    out.write('#define IS_OP_STACK(op) ((op) >= OP_PUSH_INPUT && (op) <= OP_PUSH_OPERAND_0 + MAX_PIPELINE_OPERANDS - 1)\n')
+    out.write('#define IS_OP_STACK(op) ((op) >= OP_PUSH_INPUT && (op) <= OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS - 1)\n')
     out.write('#define IS_OP_UNARY(op) ((op) >= OP_NEGATE && (op) <= OP_ABS)\n')
     out.write('#define IS_OP_BINARY(op) ((op) >= OP_ADD && (op) <= OP_LE)\n')
     out.write('#define IS_OP_SCALAR(op) ((op) >= OP_ADD_SCALAR && (op) <= OP_LE_SCALAR)\n')
