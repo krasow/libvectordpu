@@ -1,11 +1,11 @@
 #include "queue.h"
-#include "fusion.h"
 
 #include <cassert>
 #include <mutex>
 #include <ostream>
 #include <thread>
 
+#include "fusion.h"
 #include "jit.h"
 #include "opinfo.h"
 #include "perfetto/trace.h"
@@ -159,8 +159,7 @@ bool EventQueue::process_next() {
   }
 
   // 1. Initial naming
-  if (e->slice_name.empty())
-    e->slice_name = operationtype_to_string(e->op);
+  if (e->slice_name.empty()) e->slice_name = operationtype_to_string(e->op);
 
   // 2. Look-ahead fusion and JIT locking
   {
@@ -187,8 +186,7 @@ bool EventQueue::process_next() {
 
 #if JIT
     if (e->op == Event::OperationType::COMPUTE && JIT_BATCH_SIZE > 0) {
-      if (!e->is_locked_for_jit)
-        lock_for_jit(e);
+      if (!e->is_locked_for_jit) lock_for_jit(e);
 
       if (!e->jit_future.valid()) {
         if (operations_.empty())
@@ -204,8 +202,7 @@ bool EventQueue::process_next() {
           ++it;
         }
 
-        if (!e->jit_future.valid())
-          flush_jit_batch();
+        if (!e->jit_future.valid()) flush_jit_batch();
       }
     }
 #endif
@@ -232,8 +229,10 @@ bool EventQueue::process_next() {
         if (s.empty()) continue;
         if (!ops.empty()) ops += ", ";
         ops += s;
-        if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
-        else if (IS_OP_SCALAR_VAR(op)) i += SCALAR_VAR_INDEX_BYTES;
+        if (IS_OP_SCALAR(op))
+          i += sizeof(uint32_t);
+        else if (IS_OP_SCALAR_VAR(op))
+          i += SCALAR_VAR_INDEX_BYTES;
       }
       e->slice_name = e->rpn_ops.size() > 2 ? "Fused: [" + ops + "]" : ops;
     } else {
@@ -262,8 +261,10 @@ bool EventQueue::process_next() {
       (!e->rpn_ops.empty() || e->is_locked_for_jit)) {
     if (!e->is_locked_for_jit) {
       std::string type_name = "int32_t";
-      if (!e->inputs.empty() && e->inputs[0]) type_name = e->inputs[0]->type_name;
-      std::pair<std::vector<uint8_t>, std::string> sig = {e->rpn_ops, type_name};
+      if (!e->inputs.empty() && e->inputs[0])
+        type_name = e->inputs[0]->type_name;
+      std::pair<std::vector<uint8_t>, std::string> sig = {e->rpn_ops,
+                                                          type_name};
       e->jit_binary_path = jit_compile({sig});
       e->jit_sub_kernel_idx = 0;
       e->is_locked_for_jit = true;
@@ -395,8 +396,7 @@ void EventQueue::process_events(size_t wait_for_id) {
     dpu_set_t& dpu_set = runtime.dpu_set();
     CHECK_UPMEM(dpu_sync(dpu_set));
 
-    if (!progress)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (!progress) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 #if ENABLE_DPU_LOGGING >= 1
     static size_t loop_count = 0;
     if (++loop_count % 1000 == 0) {
@@ -445,8 +445,8 @@ void EventQueue::debug_active_events() {
     for (const auto& e : events)
       logger.lock() << "\t\t" << i++ << ". id=" << e->id
                     << " type=" << operationtype_to_string(e->op)
-                    << " started=" << e->started
-                    << " finished=" << e->finished << std::endl;
+                    << " started=" << e->started << " finished=" << e->finished
+                    << std::endl;
   } else {
     logger.lock() << "[EventQueue] No active events." << std::endl;
   }
@@ -459,12 +459,14 @@ size_t EventQueue::count_internal_references(detail::VectorDescRef vec) {
   auto count_in = [&](std::shared_ptr<Event> ev) {
     if (!ev) return;
     if (ev->output == vec) count++;
-    for (const auto& out : ev->extra_outputs) if (out == vec) count++;
-    for (const auto& in  : ev->inputs)       if (in  == vec) count++;
+    for (const auto& out : ev->extra_outputs)
+      if (out == vec) count++;
+    for (const auto& in : ev->inputs)
+      if (in == vec) count++;
   };
   count_in(current_event_);
-  for (auto& ev : operations_)       count_in(ev);
-  for (auto& ev : running_events_)   count_in(ev);
+  for (auto& ev : operations_) count_in(ev);
+  for (auto& ev : running_events_) count_in(ev);
   for (auto& ev : pending_jit_events_) count_in(ev);
   return count;
 }
@@ -472,18 +474,24 @@ size_t EventQueue::count_internal_references(detail::VectorDescRef vec) {
 // Thin dispatcher: classifies the fusion as vertical or horizontal and
 // delegates to the appropriate implementation in vfuse.cc / hfuse.cc.
 bool EventQueue::try_fuse(std::shared_ptr<Event> last,
-                           std::shared_ptr<Event> e) {
+                          std::shared_ptr<Event> e) {
 #if PIPELINE
   if (last->op != Event::OperationType::COMPUTE ||
-      e->op   != Event::OperationType::COMPUTE || last->output == nullptr)
+      e->op != Event::OperationType::COMPUTE || last->output == nullptr)
     return false;
   if (last->is_locked_for_jit || e->is_locked_for_jit) return false;
 
   bool dependent = false;
   for (const auto& in : e->inputs) {
-    if (in == last->output) { dependent = true; break; }
+    if (in == last->output) {
+      dependent = true;
+      break;
+    }
     for (const auto& out : last->extra_outputs)
-      if (in == out) { dependent = true; break; }
+      if (in == out) {
+        dependent = true;
+        break;
+      }
   }
 
   if (dependent) return try_vfuse(last, e);
@@ -495,7 +503,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   std::vector<detail::VectorDescRef> unique = last->inputs;
   for (const auto& in : e->inputs) {
     bool found = false;
-    for (const auto& u : unique) if (in == u) { found = true; break; }
+    for (const auto& u : unique)
+      if (in == u) {
+        found = true;
+        break;
+      }
     if (!found) unique.push_back(in);
   }
   if (unique.size() > MAX_COMBINED_INPUTS) return false;
@@ -586,17 +598,17 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 
 #if PIPELINE
     // Set absorbed_rpn so expand_absorbed_inputs can inline standalone events
-    // (e.g. unary negate) into the first consumer's event, enabling chain growth.
-    if (e->op == Event::OperationType::COMPUTE
-        && (!e->is_scalar || !e->rpn_ops.empty())
-        && !IS_OP_REDUCTION(e->opcode)
-        && e->output && !e->inputs.empty() && e->extra_outputs.empty()) {
+    // (e.g. unary negate) into the first consumer's event, enabling chain
+    // growth.
+    if (e->op == Event::OperationType::COMPUTE &&
+        (!e->is_scalar || !e->rpn_ops.empty()) && !IS_OP_REDUCTION(e->opcode) &&
+        e->output && !e->inputs.empty() && e->extra_outputs.empty()) {
       std::vector<uint8_t> rpn;
       std::vector<uint32_t> scalars;
       build_default_rpn(e, rpn, scalars);
-      e->output->absorbed_rpn           = rpn;
-      e->output->absorbed_scalars       = scalars;
-      e->output->absorbed_inputs        = e->inputs;
+      e->output->absorbed_rpn = rpn;
+      e->output->absorbed_scalars = scalars;
+      e->output->absorbed_inputs = e->inputs;
       e->output->is_shared_intermediate = true;
     }
 #endif

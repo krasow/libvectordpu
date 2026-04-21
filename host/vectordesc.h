@@ -36,7 +36,8 @@ struct VectorDesc {
   // can inline the prefix rather than reading from (unwritten) MRAM.
   std::vector<uint8_t> absorbed_rpn;
   std::vector<uint32_t> absorbed_scalars;
-  std::vector<std::shared_ptr<VectorDesc>> absorbed_inputs; // full input list of absorbed event
+  std::vector<std::shared_ptr<VectorDesc>>
+      absorbed_inputs;  // full input list of absorbed event
 
   // True when this vector is a shared intermediate written by a standalone
   // kernel (e.g. error_shifted consumed by DIM gradient chains).  Prevents

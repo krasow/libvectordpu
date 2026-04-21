@@ -1,5 +1,4 @@
 #include "fusion.h"
-
 #include "runtime.h"
 
 #if PIPELINE
@@ -11,12 +10,14 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   if (e->op != Event::OperationType::COMPUTE || e->inputs.empty()) return;
 
   auto& in_vec = e->inputs[0];
-  if (!in_vec || in_vec->absorbed_rpn.empty() || in_vec->absorbed_inputs.empty())
+  if (!in_vec || in_vec->absorbed_rpn.empty() ||
+      in_vec->absorbed_inputs.empty())
     return;
 
   if (e->rpn_ops.empty()) {
     for (size_t k = 0; k < e->inputs.size(); ++k)
-      e->rpn_ops.push_back(k == 0 ? OP_PUSH_INPUT : OP_PUSH_OPERAND_0 + (k - 1));
+      e->rpn_ops.push_back(k == 0 ? OP_PUSH_INPUT
+                                  : OP_PUSH_OPERAND_0 + (k - 1));
     if (e->is_scalar) {
       e->rpn_ops.push_back(map_to_var_op(e->opcode));
       e->rpn_ops.push_back(0);
@@ -33,7 +34,8 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   std::vector<detail::VectorDescRef> new_inputs;
   new_inputs.reserve(N + e->inputs.size() - 1);
   for (auto& v : ai) new_inputs.push_back(v);
-  for (size_t k = 1; k < e->inputs.size(); ++k) new_inputs.push_back(e->inputs[k]);
+  for (size_t k = 1; k < e->inputs.size(); ++k)
+    new_inputs.push_back(e->inputs[k]);
 
   if (new_inputs.size() > MAX_COMBINED_INPUTS) return;
 
@@ -43,8 +45,8 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
     uint8_t op = e->rpn_ops[k];
     if (op == OP_PUSH_INPUT) {
-      new_rpn.insert(new_rpn.end(),
-                     in_vec->absorbed_rpn.begin(), in_vec->absorbed_rpn.end());
+      new_rpn.insert(new_rpn.end(), in_vec->absorbed_rpn.begin(),
+                     in_vec->absorbed_rpn.end());
     } else if (op >= OP_PUSH_OPERAND_0 &&
                op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       uint8_t X = op - OP_PUSH_OPERAND_0;
@@ -61,9 +63,9 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
 
   // Clear absorbed state — future ops that read this vector get it from MRAM.
   auto absorbed_vec = in_vec;
-  e->inputs   = std::move(new_inputs);
-  e->rpn_ops  = std::move(new_rpn);
-  e->scalars  = std::move(new_scalars);
+  e->inputs = std::move(new_inputs);
+  e->rpn_ops = std::move(new_rpn);
+  e->scalars = std::move(new_scalars);
   e->is_scalar = false;
   absorbed_vec->absorbed_rpn.clear();
   absorbed_vec->absorbed_scalars.clear();
@@ -77,22 +79,25 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   bool other_consumers = false;
   for (const auto& op : operations_)
     for (const auto& inp : op->inputs)
-      if (inp == absorbed_vec) { other_consumers = true; break; }
+      if (inp == absorbed_vec) {
+        other_consumers = true;
+        break;
+      }
 
   if (!other_consumers) {
-    operations_.erase(
-      std::remove_if(operations_.begin(), operations_.end(),
-        [&](const auto& op) {
-          return op->output == absorbed_vec && op->extra_outputs.empty();
-        }),
-      operations_.end());
+    operations_.erase(std::remove_if(operations_.begin(), operations_.end(),
+                                     [&](const auto& op) {
+                                       return op->output == absorbed_vec &&
+                                              op->extra_outputs.empty();
+                                     }),
+                      operations_.end());
   }
 }
 
 // Vertical fusion: e depends on last's output (on-stack value).
 // Merges e's RPN into last so both run in one kernel pass.
 bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
-                            std::shared_ptr<Event> e) {
+                           std::shared_ptr<Event> e) {
   if (!last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back()))
     return false;
 
@@ -108,30 +113,36 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   auto check_safety = [&](detail::VectorDescRef vec) {
     if (!vec) return true;
     size_t internal = 1;
-    for (const auto& in : e->inputs) if (in == vec) internal++;
+    for (const auto& in : e->inputs)
+      if (in == vec) internal++;
     size_t lib = count_internal_references(vec);
-    for (const auto& in : e->inputs) if (in == vec) lib++;
+    for (const auto& in : e->inputs)
+      if (in == vec) lib++;
     return lib <= internal;
   };
   if (!check_safety(on_stack)) return false;
 
   bool e_uses_on_stack = false;
   for (const auto& in : e->inputs)
-    if (in == on_stack) { e_uses_on_stack = true; break; }
+    if (in == on_stack) {
+      e_uses_on_stack = true;
+      break;
+    }
   if (!e_uses_on_stack) return false;
 
   for (const auto& in : e->inputs) {
     if (!in || in == on_stack) continue;
     if (in == last->output) return false;
-    for (const auto& out : last->extra_outputs) if (in == out) return false;
+    for (const auto& out : last->extra_outputs)
+      if (in == out) return false;
   }
 
-  std::vector<uint8_t>  last_rpn;
+  std::vector<uint8_t> last_rpn;
   std::vector<uint32_t> last_scalars;
-  std::vector<uint8_t>  e_rpn;
+  std::vector<uint8_t> e_rpn;
   std::vector<uint32_t> e_scalars;
   build_default_rpn(last, last_rpn, last_scalars);
-  build_default_rpn(e,    e_rpn,    e_scalars);
+  build_default_rpn(e, e_rpn, e_scalars);
 
   std::vector<detail::VectorDescRef> combined = last->inputs;
   auto get_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
@@ -161,12 +172,17 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push = get_push_op(e->inputs[0]);
-      if (push != PUSH_OP_ALREADY_ON_STACK) e_mapped.push_back(push);
-      else primary_on_stack = true;
+      if (push != PUSH_OP_ALREADY_ON_STACK)
+        e_mapped.push_back(push);
+      else
+        primary_on_stack = true;
     } else if (op >= OP_PUSH_OPERAND_0 &&
                op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       size_t idx = op - OP_PUSH_OPERAND_0 + 1;
-      if (idx >= e->inputs.size()) { possible = false; break; }
+      if (idx >= e->inputs.size()) {
+        possible = false;
+        break;
+      }
       uint8_t push = get_push_op(e->inputs[idx]);
       if (push == PUSH_OP_ALREADY_ON_STACK) {
         if (primary_on_stack) e_mapped.push_back(OP_DUP);
@@ -183,7 +199,8 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       if (k + 1 < e_rpn.size())
         e_mapped.push_back(last_scalars.size() + e_rpn[++k]);
     } else {
-      if (secondary_on_stack_no_primary && IS_OP_BINARY(op) && !is_commutative(op))
+      if (secondary_on_stack_no_primary && IS_OP_BINARY(op) &&
+          !is_commutative(op))
         return false;
       secondary_on_stack_no_primary = false;
       e_mapped.push_back(op);
@@ -201,9 +218,9 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
 
   // Record full merged RPN on the absorbed output so future ops can inline it.
   if (last->extra_outputs.empty() && last->output && !last->inputs.empty()) {
-    last->output->absorbed_rpn    = last->rpn_ops;
+    last->output->absorbed_rpn = last->rpn_ops;
     last->output->absorbed_scalars = last->scalars;
-    last->output->absorbed_inputs  = last->inputs;
+    last->output->absorbed_inputs = last->inputs;
   }
 
   if (last->extra_outputs.empty())
@@ -212,12 +229,13 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     last->extra_outputs.back() = e->output;
 
   last->max_id = std::max(last->max_id, e->id);
-  last->kid    = last->pipeline_kid;
+  last->kid = last->pipeline_kid;
   for (const auto& in : e->inputs)
     if (in && in->last_producer_id != 0 && in->last_producer_id != last->id)
       last->dependencies.insert(in->last_producer_id);
   if (e->output) e->output->last_producer_id = last->id;
-  for (auto& out : e->extra_outputs) if (out) out->last_producer_id = last->id;
+  for (auto& out : e->extra_outputs)
+    if (out) out->last_producer_id = last->id;
 
   std::string ops;
   for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
@@ -226,15 +244,17 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     if (s.empty()) continue;
     if (!ops.empty()) ops += ", ";
     ops += s;
-    if (IS_OP_SCALAR(op)) i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op)) i += SCALAR_VAR_INDEX_BYTES;
+    if (IS_OP_SCALAR(op))
+      i += SCALAR_INLINE_BYTES;
+    else if (IS_OP_SCALAR_VAR(op))
+      i += SCALAR_VAR_INDEX_BYTES;
   }
   last->slice_name = "Fused: [" + ops + "]";
 
 #if ENABLE_DPU_LOGGING >= 1
   DpuRuntime::get().get_logger().lock()
-      << "[queue-fuse] fused event id=" << e->id
-      << " into last=" << last->id << std::endl;
+      << "[queue-fuse] fused event id=" << e->id << " into last=" << last->id
+      << std::endl;
 #endif
   trace::event_fused(e, last, "");
   trace::inqueue_end(e);

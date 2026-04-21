@@ -13,21 +13,29 @@
 #if PIPELINE
 inline uint8_t map_to_var_op(uint8_t op) {
   switch (op) {
-    case OP_ADD_SCALAR: return OP_ADD_SCALAR_VAR;
-    case OP_SUB_SCALAR: return OP_SUB_SCALAR_VAR;
-    case OP_MUL_SCALAR: return OP_MUL_SCALAR_VAR;
-    case OP_DIV_SCALAR: return OP_DIV_SCALAR_VAR;
-    case OP_ASR_SCALAR: return OP_ASR_SCALAR_VAR;
-    case OP_EQ_SCALAR:  return OP_EQ_SCALAR_VAR;
-    case OP_LT_SCALAR:  return OP_LT_SCALAR_VAR;
-    default:            return op;
+    case OP_ADD_SCALAR:
+      return OP_ADD_SCALAR_VAR;
+    case OP_SUB_SCALAR:
+      return OP_SUB_SCALAR_VAR;
+    case OP_MUL_SCALAR:
+      return OP_MUL_SCALAR_VAR;
+    case OP_DIV_SCALAR:
+      return OP_DIV_SCALAR_VAR;
+    case OP_ASR_SCALAR:
+      return OP_ASR_SCALAR_VAR;
+    case OP_EQ_SCALAR:
+      return OP_EQ_SCALAR_VAR;
+    case OP_LT_SCALAR:
+      return OP_LT_SCALAR_VAR;
+    default:
+      return op;
   }
 }
 
 // Expand a raw (unfused) event's opcode into its canonical RPN sequence.
 inline void build_default_rpn(const std::shared_ptr<Event>& e,
-                               std::vector<uint8_t>& rpn,
-                               std::vector<uint32_t>& scalars) {
+                              std::vector<uint8_t>& rpn,
+                              std::vector<uint32_t>& scalars) {
   rpn = e->rpn_ops;
   scalars = e->scalars;
   if (!rpn.empty()) return;

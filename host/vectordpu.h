@@ -141,7 +141,8 @@ struct lazy_reduction_result {
   dpu_vector<T> vec;
   KernelID rid = 0;
   lazy_reduction_result() noexcept = default;
-  lazy_reduction_result(dpu_vector<T> v, KernelID r) : vec(std::move(v)), rid(r) {}
+  lazy_reduction_result(dpu_vector<T> v, KernelID r)
+      : vec(std::move(v)), rid(r) {}
   typename dpu_vector<T>::reduction_result_t get();
   operator typename dpu_vector<T>::reduction_result_t() { return get(); }
 #if ENABLE_PROMOTION_REDUCTIONS
@@ -165,7 +166,8 @@ struct pipeline_result {
   operator dpu_vector<T>() { return std::move(vec); }
   dpu_vector<T>* operator->() { return &vec; }
   operator lazy_reduction_result<T>() {
-      return lazy_reduction_result<T>(std::move(vec), vec.data_desc().reduction_rid);
+    return lazy_reduction_result<T>(std::move(vec),
+                                    vec.data_desc().reduction_rid);
   }
 };
 #endif

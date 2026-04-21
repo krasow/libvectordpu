@@ -24,7 +24,7 @@ namespace fs = std::filesystem;
 
 namespace {
 using Signature = std::pair<std::vector<uint8_t>, std::string>;
-using CacheKey  = std::vector<Signature>;
+using CacheKey = std::vector<Signature>;
 // One primary result slot + one per extra horizontal chain.
 static constexpr int MAX_RESULT_SLOTS = MAX_HFUSE_CHAINS + 1;
 std::map<CacheKey, std::string> g_jit_cache;
@@ -46,9 +46,15 @@ extern "C" void vectordpu_jit_dladdr_anchor() {}
 
 // Only valid inside write_kernel_function
 // out, stack_type, res, s1, s2, rhs are in scope.
-#define EMIT_BINOP(sym)     out << s1 << " " #sym " " << s2 << ";\n"; break
-#define EMIT_SCALAROP(sym)  out << s1 << " " #sym " (" << stack_type << ")" << rhs << ";\n"; break
-#define EMIT_SHIFTOP        out << s1 << " >> " << rhs << ";\n"; break
+#define EMIT_BINOP(sym)                     \
+  out << s1 << " " #sym " " << s2 << ";\n"; \
+  break
+#define EMIT_SCALAROP(sym)                                         \
+  out << s1 << " " #sym " (" << stack_type << ")" << rhs << ";\n"; \
+  break
+#define EMIT_SHIFTOP                   \
+  out << s1 << " >> " << rhs << ";\n"; \
+  break
 
 static void write_dpu_main_header(std::ofstream& out) {
   out << R"(#include <alloc.h>
@@ -59,6 +65,7 @@ static void write_dpu_main_header(std::ofstream& out) {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "common.h"
 
 __host DPU_LAUNCH_ARGS args;
@@ -84,6 +91,7 @@ static void write_kernel_function(std::ofstream& out,
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
 #include "common.h"
 extern barrier_t my_barrier;
 extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
@@ -95,11 +103,14 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       << "    uint32_t n = args.num_elements;\n"
       << "    __mram_ptr " << type_name << " *in_ptr = (__mram_ptr "
       << type_name << " *)(args.pipeline.init_offset);\n\n";
-  
+
   // Horizontal fusion result support
-  // Result pointers: [0] = primary output, [1..MAX_HFUSE_CHAINS] = extra chains.
-  out << "    __mram_ptr " << type_name << " *res_ptrs[" << MAX_RESULT_SLOTS << "];\n"
-      << "    res_ptrs[0] = (__mram_ptr " << type_name << " *)(args.pipeline.res_offset);\n";
+  // Result pointers: [0] = primary output, [1..MAX_HFUSE_CHAINS] = extra
+  // chains.
+  out << "    __mram_ptr " << type_name << " *res_ptrs[" << MAX_RESULT_SLOTS
+      << "];\n"
+      << "    res_ptrs[0] = (__mram_ptr " << type_name
+      << " *)(args.pipeline.res_offset);\n";
   for (int i = 0; i < MAX_HFUSE_CHAINS; ++i) {
     out << "    res_ptrs[" << (i + 1) << "] = (__mram_ptr " << type_name
         << " *)(args.pipeline.extra_res_offsets[" << i << "]);\n";
@@ -108,8 +119,10 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   // WRAM workspace layout:
   //   slot 0:                        input_blk
   //   slots 1..MAX_VFUSE_INPUTS: op_blks[0..MAX_VFUSE_INPUTS-1]
-  //   slots MAX_VFUSE_INPUTS+1..+MAX_RESULT_SLOTS: res_blks (reuse scratch slots)
-  out << "\n    " << type_name << " *input_blk = (" << type_name << " *)dpu_workspace[id];\n"
+  //   slots MAX_VFUSE_INPUTS+1..+MAX_RESULT_SLOTS: res_blks (reuse scratch
+  //   slots)
+  out << "\n    " << type_name << " *input_blk = (" << type_name
+      << " *)dpu_workspace[id];\n"
       << "    " << type_name << " *op_blks[MAX_VFUSE_INPUTS];\n"
       << "    for (int k = 0; k < MAX_VFUSE_INPUTS; k++)\n"
       << "        op_blks[k] = (" << type_name
@@ -117,14 +130,16 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       << "    " << type_name << " *res_blks[" << MAX_RESULT_SLOTS << "];\n"
       << "    for (int k = 0; k < " << MAX_RESULT_SLOTS << "; k++)\n"
       << "        res_blks[k] = (" << type_name
-      << " *)&dpu_workspace[id][(1 + MAX_VFUSE_INPUTS + k) * BLOCK_SIZE * MINIMUM_WRITE_SIZE];\n\n";
+      << " *)&dpu_workspace[id][(1 + MAX_VFUSE_INPUTS + k) * BLOCK_SIZE * "
+         "MINIMUM_WRITE_SIZE];\n\n";
 
-  // Scan RPN to find which operand slots are needed and where chain boundaries are.
+  // Scan RPN to find which operand slots are needed and where chain boundaries
+  // are.
   bool uses_input = false;
   bool uses_op[MAX_VFUSE_INPUTS] = {false};
   struct Chain {
     size_t start_op, end_op;
-    bool    is_reduction;
+    bool is_reduction;
     uint8_t reduction_op;
   };
   std::vector<Chain> chains;
@@ -134,27 +149,41 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     Chain c{start, end, false, 0};
     for (size_t i = start; i < end; ++i) {
       uint8_t op = rpn_ops[i];
-      if      (op == OP_PUSH_INPUT) uses_input = true;
-      else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS)
+      if (op == OP_PUSH_INPUT)
+        uses_input = true;
+      else if (op >= OP_PUSH_OPERAND_0 &&
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS)
         uses_op[op - OP_PUSH_OPERAND_0] = true;
-      else if (IS_OP_SCALAR(op))    i += SCALAR_INLINE_BYTES;
-      else if (IS_OP_SCALAR_VAR(op)) i += SCALAR_VAR_INDEX_BYTES;
-      else if (IS_OP_REDUCTION(op)) { c.is_reduction = true; c.reduction_op = op; }
+      else if (IS_OP_SCALAR(op))
+        i += SCALAR_INLINE_BYTES;
+      else if (IS_OP_SCALAR_VAR(op))
+        i += SCALAR_VAR_INDEX_BYTES;
+      else if (IS_OP_REDUCTION(op)) {
+        c.is_reduction = true;
+        c.reduction_op = op;
+      }
     }
     chains.push_back(c);
   };
 
   for (size_t i = 0; i < rpn_ops.size(); ++i) {
     uint8_t op = rpn_ops[i];
-    if      (op == OP_NEXT_CHAIN)    { identify_chain(current_chain_start, i); current_chain_start = i + 1; }
-    else if (IS_OP_SCALAR(op))       i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op))   i += SCALAR_VAR_INDEX_BYTES;
+    if (op == OP_NEXT_CHAIN) {
+      identify_chain(current_chain_start, i);
+      current_chain_start = i + 1;
+    } else if (IS_OP_SCALAR(op))
+      i += SCALAR_INLINE_BYTES;
+    else if (IS_OP_SCALAR_VAR(op))
+      i += SCALAR_VAR_INDEX_BYTES;
   }
   identify_chain(current_chain_start, rpn_ops.size());
 
 #if ENABLE_PROMOTION_REDUCTIONS == 1
   for (const auto& c : chains)
-    if (c.is_reduction && type_name == "int32_t") { stack_type = "int64_t"; break; }
+    if (c.is_reduction && type_name == "int32_t") {
+      stack_type = "int64_t";
+      break;
+    }
 #endif
 
   // Reduction accumulators with identity values.
@@ -163,28 +192,39 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     const bool is_float = (stack_type == "float");
     out << "    " << stack_type << " acc_" << c_idx << " = ";
     switch (chains[c_idx].reduction_op) {
-      case OP_SUM:     out << "0;\n"; break;
-      case OP_PRODUCT: out << "1;\n"; break;
-      case OP_MIN:     out << (is_float ? "3.402823466e+38f" : "INT32_MAX")  << ";\n"; break;
-      case OP_MAX:     out << (is_float ? "-3.402823466e+38f" : "INT32_MIN") << ";\n"; break;
+      case OP_SUM:
+        out << "0;\n";
+        break;
+      case OP_PRODUCT:
+        out << "1;\n";
+        break;
+      case OP_MIN:
+        out << (is_float ? "3.402823466e+38f" : "INT32_MAX") << ";\n";
+        break;
+      case OP_MAX:
+        out << (is_float ? "-3.402823466e+38f" : "INT32_MIN") << ";\n";
+        break;
     }
   }
 
   // Main per-block loop.
   out << "    uint32_t blk, i, b_e, b_b, b_b_aligned;\n"
-      << "    for (blk = id << BLOCK_SIZE_LOG2; blk < n; blk += (NR_TASKLETS << BLOCK_SIZE_LOG2)) {\n"
+      << "    for (blk = id << BLOCK_SIZE_LOG2; blk < n; blk += (NR_TASKLETS "
+         "<< BLOCK_SIZE_LOG2)) {\n"
       << "        b_e = (blk + BLOCK_SIZE >= n) ? (n - blk) : BLOCK_SIZE;\n"
       << "        b_b = b_e * sizeof(" << type_name << ");\n"
       << "        b_b_aligned = (b_b + 7) & ~7;\n\n";
 
   if (uses_input)
-    out << "        mram_read((__mram_ptr void const *)(in_ptr + blk), input_blk, b_b_aligned);\n";
+    out << "        mram_read((__mram_ptr void const *)(in_ptr + blk), "
+           "input_blk, b_b_aligned);\n";
   for (int k = 0; k < MAX_VFUSE_INPUTS; k++) {
     if (!uses_op[k]) continue;
     out << "        {\n"
         << "            __mram_ptr " << type_name << " *p = (__mram_ptr "
         << type_name << " *)(args.pipeline.binary_operands[" << k << "]);\n"
-        << "            if (p) mram_read((__mram_ptr void const *)(p + blk), op_blks["
+        << "            if (p) mram_read((__mram_ptr void const *)(p + blk), "
+           "op_blks["
         << k << "], b_b_aligned);\n"
         << "        }\n";
   }
@@ -207,15 +247,16 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       if (op == OP_PUSH_INPUT) {
         stack.push_back("((" + stack_type + ")input_blk[i])");
 
-      } else if (op >= OP_PUSH_OPERAND_0 && op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
-        stack.push_back("((" + stack_type + ")op_blks["
-                        + std::to_string(op - OP_PUSH_OPERAND_0) + "][i])");
+      } else if (op >= OP_PUSH_OPERAND_0 &&
+                 op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
+        stack.push_back("((" + stack_type + ")op_blks[" +
+                        std::to_string(op - OP_PUSH_OPERAND_0) + "][i])");
 
       } else if (IS_OP_SCALAR(op) || IS_OP_SCALAR_VAR(op)) {
         std::string rhs;
         if (IS_OP_SCALAR(op)) {
-          uint8_t b0 = rpn_ops[op_idx+1], b1 = rpn_ops[op_idx+2],
-                  b2 = rpn_ops[op_idx+3], b3 = rpn_ops[op_idx+4];
+          uint8_t b0 = rpn_ops[op_idx + 1], b1 = rpn_ops[op_idx + 2],
+                  b2 = rpn_ops[op_idx + 3], b3 = rpn_ops[op_idx + 4];
           int32_t val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
           op_idx += SCALAR_INLINE_BYTES;
           rhs = std::to_string(val);
@@ -224,23 +265,36 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
           op_idx += SCALAR_VAR_INDEX_BYTES;
           rhs = "args.pipeline.scalars[" + std::to_string(idx) + "]";
         }
-        std::string s1 = stack.back(); stack.pop_back();
+        std::string s1 = stack.back();
+        stack.pop_back();
         std::string res = get_tmp();
         out << "            " << stack_type << " " << res << " = ";
         // Normalize SCALAR_VAR opcode to the equivalent SCALAR opcode for a
         // unified switch; both forms share the same operator symbol.
-        uint8_t base = IS_OP_SCALAR_VAR(op) ? (op - (OP_ADD_SCALAR_VAR - OP_ADD_SCALAR)) : op;
+        uint8_t base = IS_OP_SCALAR_VAR(op)
+                           ? (op - (OP_ADD_SCALAR_VAR - OP_ADD_SCALAR))
+                           : op;
         switch (base) {
-          case OP_ADD_SCALAR: EMIT_SCALAROP(+);
-          case OP_SUB_SCALAR: EMIT_SCALAROP(-);
-          case OP_MUL_SCALAR: EMIT_SCALAROP(*);
-          case OP_DIV_SCALAR: EMIT_SCALAROP(/);
-          case OP_ASR_SCALAR: EMIT_SHIFTOP;
-          case OP_EQ_SCALAR:  EMIT_SCALAROP(==);
-          case OP_LT_SCALAR:  EMIT_SCALAROP(<);
-          case OP_GT_SCALAR:  EMIT_SCALAROP(>);
-          case OP_GE_SCALAR:  EMIT_SCALAROP(>=);
-          case OP_LE_SCALAR:  EMIT_SCALAROP(<=);
+          case OP_ADD_SCALAR:
+            EMIT_SCALAROP(+);
+          case OP_SUB_SCALAR:
+            EMIT_SCALAROP(-);
+          case OP_MUL_SCALAR:
+            EMIT_SCALAROP(*);
+          case OP_DIV_SCALAR:
+            EMIT_SCALAROP(/);
+          case OP_ASR_SCALAR:
+            EMIT_SHIFTOP;
+          case OP_EQ_SCALAR:
+            EMIT_SCALAROP(==);
+          case OP_LT_SCALAR:
+            EMIT_SCALAROP(<);
+          case OP_GT_SCALAR:
+            EMIT_SCALAROP(>);
+          case OP_GE_SCALAR:
+            EMIT_SCALAROP(>=);
+          case OP_LE_SCALAR:
+            EMIT_SCALAROP(<=);
         }
         stack.push_back(res);
 
@@ -248,63 +302,98 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         stack.push_back(stack.back());
 
       } else if (IS_OP_UNARY(op)) {
-        std::string s1  = stack.back(); stack.pop_back();
+        std::string s1 = stack.back();
+        stack.pop_back();
         std::string res = get_tmp();
         std::string expr;
         switch (op) {
-          case OP_NEGATE: expr = "-" + s1; break;
-          case OP_ABS:    expr = "(" + s1 + " < 0) ? -" + s1 + " : " + s1; break;
+          case OP_NEGATE:
+            expr = "-" + s1;
+            break;
+          case OP_ABS:
+            expr = "(" + s1 + " < 0) ? -" + s1 + " : " + s1;
+            break;
         }
-        out << "            " << stack_type << " " << res << " = " << expr << ";\n";
+        out << "            " << stack_type << " " << res << " = " << expr
+            << ";\n";
         stack.push_back(res);
 
       } else if (IS_OP_BINARY(op)) {
         if (stack.size() < 2) {
-          fprintf(stderr, "[JIT-DBG] STACK UNDERFLOW at binary op %u, stack size=%zu\n",
+          fprintf(stderr,
+                  "[JIT-DBG] STACK UNDERFLOW at binary op %u, stack size=%zu\n",
                   (unsigned)op, stack.size());
           abort();
         }
-        std::string s2 = stack.back(); stack.pop_back();
-        std::string s1 = stack.back(); stack.pop_back();
+        std::string s2 = stack.back();
+        stack.pop_back();
+        std::string s1 = stack.back();
+        stack.pop_back();
         std::string res = get_tmp();
         out << "            " << stack_type << " " << res << " = ";
         switch (op) {
-          case OP_ADD: EMIT_BINOP(+);
-          case OP_SUB: EMIT_BINOP(-);
-          case OP_MUL: EMIT_BINOP(*);
-          case OP_DIV: EMIT_BINOP(/);
-          case OP_ASR: out << s1 << " >> " << s2 << ";\n"; break;
-          case OP_EQ:  EMIT_BINOP(==);
-          case OP_LT:  EMIT_BINOP(<);
-          case OP_GT:  EMIT_BINOP(>);
-          case OP_GE:  EMIT_BINOP(>=);
-          case OP_LE:  EMIT_BINOP(<=);
+          case OP_ADD:
+            EMIT_BINOP(+);
+          case OP_SUB:
+            EMIT_BINOP(-);
+          case OP_MUL:
+            EMIT_BINOP(*);
+          case OP_DIV:
+            EMIT_BINOP(/);
+          case OP_ASR:
+            out << s1 << " >> " << s2 << ";\n";
+            break;
+          case OP_EQ:
+            EMIT_BINOP(==);
+          case OP_LT:
+            EMIT_BINOP(<);
+          case OP_GT:
+            EMIT_BINOP(>);
+          case OP_GE:
+            EMIT_BINOP(>=);
+          case OP_LE:
+            EMIT_BINOP(<=);
         }
         stack.push_back(res);
 
       } else if (IS_OP_TERNARY(op)) {
-        std::string s1 = stack.back(); stack.pop_back();
-        std::string s2 = stack.back(); stack.pop_back();
-        std::string s3 = stack.back(); stack.pop_back();
+        std::string s1 = stack.back();
+        stack.pop_back();
+        std::string s2 = stack.back();
+        stack.pop_back();
+        std::string s3 = stack.back();
+        stack.pop_back();
         std::string res = get_tmp();
         if (op == OP_SELECT)
-          out << "            " << stack_type << " " << res
-              << " = (" << s3 << " != 0) ? " << s2 << " : " << s1 << ";\n";
+          out << "            " << stack_type << " " << res << " = (" << s3
+              << " != 0) ? " << s2 << " : " << s1 << ";\n";
         stack.push_back(res);
 
       } else if (IS_OP_REDUCTION(op)) {
-        std::string s = stack.back(); stack.pop_back();
+        std::string s = stack.back();
+        stack.pop_back();
         switch (op) {
-          case OP_SUM:     out << "            acc_" << c_idx << " += " << s << ";\n"; break;
-          case OP_PRODUCT: out << "            acc_" << c_idx << " *= " << s << ";\n"; break;
-          case OP_MIN:     out << "            if (" << s << " < acc_" << c_idx << ") acc_" << c_idx << " = " << s << ";\n"; break;
-          case OP_MAX:     out << "            if (" << s << " > acc_" << c_idx << ") acc_" << c_idx << " = " << s << ";\n"; break;
+          case OP_SUM:
+            out << "            acc_" << c_idx << " += " << s << ";\n";
+            break;
+          case OP_PRODUCT:
+            out << "            acc_" << c_idx << " *= " << s << ";\n";
+            break;
+          case OP_MIN:
+            out << "            if (" << s << " < acc_" << c_idx << ") acc_"
+                << c_idx << " = " << s << ";\n";
+            break;
+          case OP_MAX:
+            out << "            if (" << s << " > acc_" << c_idx << ") acc_"
+                << c_idx << " = " << s << ";\n";
+            break;
         }
       }
     }  // op_idx
 
     if (!chain.is_reduction && !stack.empty())
-      out << "            res_blks[" << c_idx << "][i] = " << stack.back() << ";\n";
+      out << "            res_blks[" << c_idx << "][i] = " << stack.back()
+          << ";\n";
   }  // c_idx
 
   out << "        }\n";  // end inner element loop
@@ -314,7 +403,8 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     if (chains[c_idx].is_reduction) continue;
     out << "        if (res_ptrs[" << c_idx << "])\n"
         << "            mram_write(res_blks[" << c_idx
-        << "], (__mram_ptr void *)(res_ptrs[" << c_idx << "] + blk), b_b_aligned);\n";
+        << "], (__mram_ptr void *)(res_ptrs[" << c_idx
+        << "] + blk), b_b_aligned);\n";
   }
   out << "    }\n";  // end block loop
 
@@ -325,33 +415,48 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
     const char* merge_op;
     switch (chains[c_idx].reduction_op) {
-      case OP_SUM:     merge_op = "tot += v;";            break;
-      case OP_PRODUCT: merge_op = "tot *= v;";            break;
-      case OP_MIN:     merge_op = "if (v < tot) tot = v;"; break;
-      case OP_MAX:     merge_op = "if (v > tot) tot = v;"; break;
-      default:         merge_op = "";                     break;
+      case OP_SUM:
+        merge_op = "tot += v;";
+        break;
+      case OP_PRODUCT:
+        merge_op = "tot *= v;";
+        break;
+      case OP_MIN:
+        merge_op = "if (v < tot) tot = v;";
+        break;
+      case OP_MAX:
+        merge_op = "if (v > tot) tot = v;";
+        break;
+      default:
+        merge_op = "";
+        break;
     }
-    std::string res_ptr = (c_idx == 0)
-        ? "args.pipeline.res_offset"
-        : "args.pipeline.extra_res_offsets[" + std::to_string(c_idx - 1) + "]";
+    std::string res_ptr = (c_idx == 0) ? "args.pipeline.res_offset"
+                                       : "args.pipeline.extra_res_offsets[" +
+                                             std::to_string(c_idx - 1) + "]";
 
     out << "    {\n"
         << "        uint64_t bf = 0;\n"
-        << "        memcpy(&bf, &acc_" << c_idx << ", sizeof(" << stack_type << "));\n"
-        << "        reduction_scratchpad[" << c_idx << " * NR_TASKLETS + id] = bf;\n"
+        << "        memcpy(&bf, &acc_" << c_idx << ", sizeof(" << stack_type
+        << "));\n"
+        << "        reduction_scratchpad[" << c_idx
+        << " * NR_TASKLETS + id] = bf;\n"
         << "        barrier_wait(&my_barrier);\n"
         << "        if (id == 0) {\n"
-        << "            uint64_t tot_raw = reduction_scratchpad[" << c_idx << " * NR_TASKLETS];\n"
+        << "            uint64_t tot_raw = reduction_scratchpad[" << c_idx
+        << " * NR_TASKLETS];\n"
         << "            " << stack_type << " tot;\n"
         << "            memcpy(&tot, &tot_raw, sizeof(" << stack_type << "));\n"
         << "            for (int k = 1; k < NR_TASKLETS; k++) {\n"
-        << "                uint64_t v_raw = reduction_scratchpad[" << c_idx << " * NR_TASKLETS + k];\n"
+        << "                uint64_t v_raw = reduction_scratchpad[" << c_idx
+        << " * NR_TASKLETS + k];\n"
         << "                " << stack_type << " v;\n"
         << "                memcpy(&v, &v_raw, sizeof(" << stack_type << "));\n"
         << "                " << merge_op << "\n"
         << "            }\n"
         << "            uint64_t bf_final = 0;\n"
-        << "            memcpy(&bf_final, &tot, sizeof(" << stack_type << "));\n"
+        << "            memcpy(&bf_final, &tot, sizeof(" << stack_type
+        << "));\n"
         << "            mram_write(&bf_final, (__mram_ptr void *)" << res_ptr
         << ", " << MINIMUM_WRITE_SIZE << ");\n"
         << "        }\n"
@@ -382,8 +487,7 @@ static std::string get_include_flags() {
       include_dirs.push_back((base / "common").string());
   }
 
-  if (include_dirs.empty())
-    include_dirs.push_back("include/vectordpu");
+  if (include_dirs.empty()) include_dirs.push_back("include/vectordpu");
 
   std::string flags;
   for (const auto& dir : include_dirs) flags += " -I" + dir;
@@ -393,10 +497,10 @@ static std::string get_include_flags() {
 static bool compile_dpu_source(const std::string& filepath,
                                const std::string& binpath, bool is_object,
                                const std::string& include_flags) {
-  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS="
-      + std::to_string(DpuRuntime::get().num_tasklets())
-      + include_flags + " -O3 " + (is_object ? "-c " : "") + "-o "
-      + binpath + " " + filepath;
+  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS=" +
+                    std::to_string(DpuRuntime::get().num_tasklets()) +
+                    include_flags + " -O3 " + (is_object ? "-c " : "") + "-o " +
+                    binpath + " " + filepath;
 
   if (system(cmd.c_str()) != 0) {
     std::cerr << "JIT Compilation failed: " << cmd << std::endl;
@@ -404,8 +508,8 @@ static bool compile_dpu_source(const std::string& filepath,
   }
 #if ENABLE_DPU_LOGGING >= 1
   DpuRuntime::get().get_logger().lock()
-      << "[JIT] Compiled " << (is_object ? "object " : "kernel ")
-      << "to " << binpath << std::endl;
+      << "[JIT] Compiled " << (is_object ? "object " : "kernel ") << "to "
+      << binpath << std::endl;
 #endif
   return true;
 }
@@ -414,9 +518,9 @@ static bool link_dpu_objects(const std::string& main_path,
                              const std::vector<std::string>& objects,
                              const std::string& binpath,
                              const std::string& include_flags) {
-  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS="
-      + std::to_string(DpuRuntime::get().num_tasklets())
-      + include_flags + " -O3 -o " + binpath + " " + main_path;
+  std::string cmd = "dpu-upmem-dpurte-clang -DNR_TASKLETS=" +
+                    std::to_string(DpuRuntime::get().num_tasklets()) +
+                    include_flags + " -O3 -o " + binpath + " " + main_path;
   for (const auto& obj : objects) cmd += " " + obj;
 
   if (system(cmd.c_str()) != 0) {
@@ -438,8 +542,8 @@ std::string jit_compile(
     if (it != g_jit_cache.end()) {
 #if ENABLE_DPU_LOGGING >= 1
       DpuRuntime::get().get_logger().lock()
-          << "[JIT] Cache hit for batched binary with "
-          << kernels.size() << " sub-kernels" << std::endl;
+          << "[JIT] Cache hit for batched binary with " << kernels.size()
+          << " sub-kernels" << std::endl;
 #endif
       return it->second;
     }
@@ -448,7 +552,7 @@ std::string jit_compile(
   trace::jit_compile_begin(kernels);
 
   const std::string include_flags = get_include_flags();
-  const std::string build_dir     = "build/jit";
+  const std::string build_dir = "build/jit";
   fs::create_directories(build_dir);
 
   // Compile each unique kernel to an object file (cached per signature).
@@ -462,9 +566,9 @@ std::string jit_compile(
     }
 
     if (obj_path.empty()) {
-      const std::string hash   = hash_signature(sig);
+      const std::string hash = hash_signature(sig);
       const std::string c_path = build_dir + "/k_" + hash + ".c";
-      obj_path                 = build_dir + "/k_" + hash + ".o";
+      obj_path = build_dir + "/k_" + hash + ".o";
 
       std::ofstream out(c_path);
       write_kernel_function(out, "k_" + hash, sig.first, sig.second);
@@ -484,8 +588,9 @@ std::string jit_compile(
 
   // Generate a main() that dispatches on args.kernel to the right sub-kernel.
   static int binary_counter = 0;
-  const std::string main_c_path = build_dir + "/main_" + std::to_string(binary_counter++) + ".c";
-  const std::string binpath     = main_c_path + ".dpu";
+  const std::string main_c_path =
+      build_dir + "/main_" + std::to_string(binary_counter++) + ".c";
+  const std::string binpath = main_c_path + ".dpu";
 
   {
     std::ofstream out(main_c_path);
@@ -524,12 +629,12 @@ void EventQueue::flush_jit_batch() {
 
 #if ENABLE_DPU_LOGGING >= 1
   DpuRuntime::get().get_logger().lock()
-      << "[queue-jit] Flushing " << batch.size()
-      << " kernels to JIT compiler." << std::endl;
+      << "[queue-jit] Flushing " << batch.size() << " kernels to JIT compiler."
+      << std::endl;
 #endif
 
-  std::shared_future<std::string> future =
-      std::async(std::launch::deferred, [batch]() { return jit_compile(batch); });
+  std::shared_future<std::string> future = std::async(
+      std::launch::deferred, [batch]() { return jit_compile(batch); });
   for (auto& ev : pending_jit_events_) ev->jit_future = future;
 
   pending_jit_events_.clear();
@@ -555,11 +660,16 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   const char* type_name = "int32_t";
   if (e->output && e->output->type_name) {
     std::string tn = e->output->type_name;
-    if      (tn == "i" || tn == "int")      type_name = "int32_t";
-    else if (tn == "j" || tn == "uint32_t") type_name = "uint32_t";
-    else if (tn == "f" || tn == "float")    type_name = "float";
-    else if (tn == "d" || tn == "double")   type_name = "double";
-    else                                    type_name = e->output->type_name;
+    if (tn == "i" || tn == "int")
+      type_name = "int32_t";
+    else if (tn == "j" || tn == "uint32_t")
+      type_name = "uint32_t";
+    else if (tn == "f" || tn == "float")
+      type_name = "float";
+    else if (tn == "d" || tn == "double")
+      type_name = "double";
+    else
+      type_name = e->output->type_name;
   }
 
   Signature sig = {e->rpn_ops, type_name};
@@ -574,8 +684,7 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
     }
   }
 
-  if (pending_unique_kernels_.size() >= JIT_BATCH_SIZE)
-    flush_jit_batch();
+  if (pending_unique_kernels_.size() >= JIT_BATCH_SIZE) flush_jit_batch();
 
   e->jit_sub_kernel_idx = pending_unique_kernels_.size();
   pending_unique_kernels_.push_back(sig);
@@ -590,7 +699,10 @@ void jit_cleanup() {
 #endif
   const std::string build_dir = "build/jit";
   if (fs::exists(build_dir)) {
-    try { fs::remove_all(build_dir); } catch (...) {}
+    try {
+      fs::remove_all(build_dir);
+    } catch (...) {
+    }
   }
 }
 

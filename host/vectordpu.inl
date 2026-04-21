@@ -300,8 +300,8 @@ dpu_vector<T>& dpu_vector<T>::operator+=(T scalar) {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::add_scalar, OpInfo<T>::add_scalar_op,
+                               scalar_bits, OpInfo<T>::add_scalar,
+                               OpInfo<T>::add_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -311,8 +311,8 @@ dpu_vector<T>& dpu_vector<T>::operator-=(T scalar) {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::sub_scalar, OpInfo<T>::sub_scalar_op,
+                               scalar_bits, OpInfo<T>::sub_scalar,
+                               OpInfo<T>::sub_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -322,8 +322,8 @@ dpu_vector<T>& dpu_vector<T>::operator*=(T scalar) {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::mul_scalar, OpInfo<T>::mul_scalar_op,
+                               scalar_bits, OpInfo<T>::mul_scalar,
+                               OpInfo<T>::mul_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -333,8 +333,8 @@ dpu_vector<T>& dpu_vector<T>::operator/=(T scalar) {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::div_scalar, OpInfo<T>::div_scalar_op,
+                               scalar_bits, OpInfo<T>::div_scalar,
+                               OpInfo<T>::div_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -344,8 +344,8 @@ dpu_vector<T>& dpu_vector<T>::operator>>=(T scalar) {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(this->data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::asr_scalar, OpInfo<T>::asr_scalar_op,
+                               scalar_bits, OpInfo<T>::asr_scalar,
+                               OpInfo<T>::asr_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return *this;
 }
@@ -387,8 +387,8 @@ dpu_vector<T> dpu_vector<T>::operator==(T scalar) const {
   uint32_t scalar_bits = 0;
   std::memcpy(&scalar_bits, &scalar, sizeof(T) < 4 ? sizeof(T) : 4);
   detail::launch_binary_scalar(res.data_desc_ref(), this->data_desc_ref(),
-                               scalar_bits,
-                               OpInfo<T>::eq_scalar, OpInfo<T>::eq_scalar_op,
+                               scalar_bits, OpInfo<T>::eq_scalar,
+                               OpInfo<T>::eq_scalar_op,
                                OpInfo<T>::universal_pipeline);
   return res;
 }
@@ -612,21 +612,29 @@ lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
     const std::vector<uint8_t>& ops,
     const std::vector<dpu_vector<T>>& operands) {
   auto& runtime = DpuRuntime::get();
-  
+
   // Identify rid from last op
   assert(!ops.empty());
   uint8_t last_op = ops.back();
   KernelID rid = OpInfo<T>::sum;  // default
   switch (last_op) {
-    case OP_MIN: rid = OpInfo<T>::min; break;
-    case OP_MAX: rid = OpInfo<T>::max; break;
-    case OP_SUM: rid = OpInfo<T>::sum; break;
-    case OP_PRODUCT: rid = OpInfo<T>::product; break;
+    case OP_MIN:
+      rid = OpInfo<T>::min;
+      break;
+    case OP_MAX:
+      rid = OpInfo<T>::max;
+      break;
+    case OP_SUM:
+      rid = OpInfo<T>::sum;
+      break;
+    case OP_PRODUCT:
+      rid = OpInfo<T>::product;
+      break;
   }
 
   // We always allocate 8 bytes per DPU for reduction results to satisfy
   // mram_write minimum alignment and size requirements.
-  size_t elems_per_dpu = (8 + sizeof(T) - 1) / sizeof(T); 
+  size_t elems_per_dpu = (8 + sizeof(T) - 1) / sizeof(T);
 
   dpu_vector<T> res(runtime.num_dpus() * elems_per_dpu,
                     runtime.num_tasklets() * 8, true);
@@ -649,7 +657,8 @@ lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
 template <typename T>
 pipeline_result<T>::operator T() {
   if (vec.data_desc().is_reduction_result) {
-    return (T)lazy_reduction_result<T>(std::move(vec), vec.data_desc().reduction_rid);
+    return (T)lazy_reduction_result<T>(std::move(vec),
+                                       vec.data_desc().reduction_rid);
   }
   // If not a reduction, return first element as a best effort scalar conversion
   return vec.to_cpu()[0];
@@ -741,4 +750,3 @@ lazy_reduction_result<T> max(const dpu_vector<T>& a) {
                            OpInfo<T>::universal_pipeline);
   return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::max);
 }
-

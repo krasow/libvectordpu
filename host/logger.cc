@@ -4,14 +4,16 @@
 #include "kernelids.h"
 #include "queue.h"
 
-// External declaration for KERNEL_COUNT from generated headers if possible, 
+// External declaration for KERNEL_COUNT from generated headers if possible,
 // or use a safe check.
 extern KernelInfo kernel_infos[];
-static const size_t KERNEL_COUNT_VAL = sizeof(kernel_infos) / sizeof(KernelInfo);
+static const size_t KERNEL_COUNT_VAL =
+    sizeof(kernel_infos) / sizeof(KernelInfo);
 
 const char* kernel_id_to_string(KernelID id) {
   if (id >= KERNEL_COUNT_VAL) return "JIT/BATCH";
-  // JIT kernels often use small IDs that collide with standard kernels if treated as global IDs
+  // JIT kernels often use small IDs that collide with standard kernels if
+  // treated as global IDs
   return kernel_infos[id].name;
 }
 
@@ -78,7 +80,9 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
   auto log = logger.lock();
   log << "[task-logger] kernel="
       << kernel_id_to_string(static_cast<KernelID>(args->kernel))
-      << " dpus=" << nr_of_dpus << " type=" << ktype_to_string(static_cast<KernelCategory>(args->ktype)) << std::endl;
+      << " dpus=" << nr_of_dpus
+      << " type=" << ktype_to_string(static_cast<KernelCategory>(args->ktype))
+      << std::endl;
 
 // the following code is gross, but it's just for logging purposes
 // it creates a table of the launch arguments for each DPU
@@ -98,10 +102,10 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
   } else if (a.ktype == KERNEL_UNARY || a.ktype == KERNEL_REDUCTION) {
     // Note: KERNEL_UNARY is sometimes used for the universal pipeline
     if (a.kernel >= KERNEL_COUNT_VAL || a.pipeline.num_ops > 0) {
-        show_pipeline = true;
+      show_pipeline = true;
     } else {
-        show_rhs = true;
-        show_res = true;
+      show_rhs = true;
+      show_res = true;
     }
   } else if (a.ktype == KERNEL_BINARY_SCALAR) {
     show_lhs = true;
@@ -115,7 +119,8 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
   if (show_lhs) log << std::setw(13) << "LHS_OFFSET";
   if (show_src) log << std::setw(13) << "SRC_OFFSET";
   if (show_res) log << std::setw(13) << "RES_OFFSET";
-  if (show_pipeline) log << std::setw(13) << "INIT_OFF" << std::setw(13) << "RES_OFF";
+  if (show_pipeline)
+    log << std::setw(13) << "INIT_OFF" << std::setw(13) << "RES_OFF";
 
   log << "\n" << std::string(38, '-');
   if (a.ktype == KERNEL_BINARY) {
@@ -135,7 +140,12 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
     const auto& a = args[i];
 
     std::ostringstream rhs, lhs, src, res, p_init, p_res;
-    rhs << ""; lhs << ""; src << ""; res << ""; p_init << ""; p_res << "";
+    rhs << "";
+    lhs << "";
+    src << "";
+    res << "";
+    p_init << "";
+    p_res << "";
 
     if (a.ktype == KERNEL_BINARY) {
       rhs << fmt_hex(a.binary.rhs_offset);
@@ -143,11 +153,11 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
       res << fmt_hex(a.binary.res_offset);
     } else if (a.ktype == KERNEL_UNARY) {
       if (a.kernel >= KERNEL_COUNT_VAL || a.pipeline.num_ops > 0) {
-          p_init << fmt_hex(a.pipeline.init_offset);
-          p_res << fmt_hex(a.pipeline.res_offset);
+        p_init << fmt_hex(a.pipeline.init_offset);
+        p_res << fmt_hex(a.pipeline.res_offset);
       } else {
-          rhs << fmt_hex(a.unary.rhs_offset);
-          res << fmt_hex(a.unary.res_offset);
+        rhs << fmt_hex(a.unary.rhs_offset);
+        res << fmt_hex(a.unary.res_offset);
       }
     } else if (a.ktype == KERNEL_REDUCTION) {
       rhs << fmt_hex(a.reduction.rhs_offset);
@@ -157,20 +167,21 @@ void log_dpu_launch_args(Logger& logger, const DPU_LAUNCH_ARGS* args,
       res << fmt_hex(a.binary_scalar.res_offset);
     }
 
-    std::string ktype_str = ktype_to_string(static_cast<KernelCategory>(a.ktype));
+    std::string ktype_str =
+        ktype_to_string(static_cast<KernelCategory>(a.ktype));
     if (a.ktype == KERNEL_UNARY && a.pipeline.num_ops > 0) {
-        ktype_str = "JIT/BATCH";
+      ktype_str = "JIT/BATCH";
     }
 
-    log << "  " << std::left << std::setw(6) << i << std::setw(12)
-        << ktype_str << std::setw(12) << a.num_elements << std::setw(9)
-        << a.size_type;
+    log << "  " << std::left << std::setw(6) << i << std::setw(12) << ktype_str
+        << std::setw(12) << a.num_elements << std::setw(9) << a.size_type;
 
     if (show_rhs) log << std::setw(13) << rhs.str();
     if (show_lhs) log << std::setw(13) << lhs.str();
     if (show_src) log << std::setw(13) << src.str();
     if (show_res) log << std::setw(13) << res.str();
-    if (show_pipeline) log << std::setw(13) << p_init.str() << std::setw(13) << p_res.str();
+    if (show_pipeline)
+      log << std::setw(13) << p_init.str() << std::setw(13) << p_res.str();
 
     log << "\n";
   }

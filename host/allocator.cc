@@ -10,7 +10,8 @@
 allocator::allocator(uint32_t start_addr, std::size_t dpu_mem,
                      std::size_t num_dpus)
     : start_addr_(start_addr), dpu_mem_(dpu_mem), num_dpus_(num_dpus) {
-  // Ensure we don't start at address 0 to avoid NULL pointer confusion in JIT kernels
+  // Ensure we don't start at address 0 to avoid NULL pointer confusion in JIT
+  // kernels
   uint32_t effective_start = (start_addr_ == 0) ? 1024 : start_addr_;
   ptrs_.resize(num_dpus_, effective_start);
   sizes_.resize(num_dpus_, dpu_mem_ - (effective_start - start_addr_));
@@ -75,7 +76,7 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
 void allocator::realize_allocation(detail::VectorDescRef data) {
   if (data->ptr_allocated) return;
   std::lock_guard<std::recursive_mutex> lock(this->lock);
-  if (data->ptr_allocated) return; // double check after lock
+  if (data->ptr_allocated) return;  // double check after lock
 
   if (is_synchronized_) {
     uint32_t addr = raw_allocate(DPU_BROADCAST, data->desc[0].allocated_bytes);
@@ -169,8 +170,7 @@ void allocator::raw_deallocate(int id, uint32_t addr, size_t sz) {
     off -= fl.back().size;
     fl.pop_back();
   }
-  if (id == DPU_BROADCAST)
-    std::fill(offsets_.begin(), offsets_.end(), off);
+  if (id == DPU_BROADCAST) std::fill(offsets_.begin(), offsets_.end(), off);
   total_allocated_bytes_ -= sz * (id == DPU_BROADCAST ? num_dpus_ : 1);
   trace::counter("runtime", "total_bytes", total_allocated_bytes_);
 }

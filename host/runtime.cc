@@ -127,16 +127,19 @@ void DpuRuntime::shutdown() {
     trace::scoped_event trace_scoped("runtime", "DpuRuntime::shutdown");
 
 #if ENABLE_DPU_LOGGING >= 1
-    if (logger_) logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
+    if (logger_)
+      logger_->lock() << "[runtime] Shutting down DPU runtime..." << std::endl;
 #endif
 
     if (event_queue_ && event_queue_->has_pending()) {
-      if (logger_) logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
+      if (logger_)
+        logger_->lock() << "[runtime] Flushing pending events..." << std::endl;
       event_queue_->process_events(UINT64_MAX);
     }
 
-    if (logger_) logger_->lock() << "[runtime] Waiting for active events and callbacks..."
-                    << std::endl;
+    if (logger_)
+      logger_->lock() << "[runtime] Waiting for active events and callbacks..."
+                      << std::endl;
     while (event_queue_) {
       std::list<std::shared_ptr<Event>> active;
       {
@@ -164,7 +167,8 @@ void DpuRuntime::shutdown() {
   TRACE_SHUTDOWN();
 
 #if JIT
-  if (logger_) logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
+  if (logger_)
+    logger_->lock() << "[runtime] Cleaning up JIT files..." << std::endl;
   jit_cleanup();
 #endif
 

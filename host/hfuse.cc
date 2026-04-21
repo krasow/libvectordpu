@@ -1,5 +1,4 @@
 #include "fusion.h"
-
 #include "runtime.h"
 
 #if PIPELINE
@@ -7,15 +6,15 @@
 // Horizontal fusion: last and e are independent chains over equal-length
 // vectors.  Both run in the same kernel pass as separate WRAM chains.
 bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
-                            std::shared_ptr<Event> e) {
+                           std::shared_ptr<Event> e) {
   if (last->extra_outputs.size() >= MAX_HFUSE_CHAINS) return false;
 
-  std::vector<uint8_t>  last_rpn;
+  std::vector<uint8_t> last_rpn;
   std::vector<uint32_t> last_scalars;
-  std::vector<uint8_t>  e_rpn;
+  std::vector<uint8_t> e_rpn;
   std::vector<uint32_t> e_scalars;
   build_default_rpn(last, last_rpn, last_scalars);
-  build_default_rpn(e,    e_rpn,    e_scalars);
+  build_default_rpn(e, e_rpn, e_scalars);
 
   std::vector<detail::VectorDescRef> combined = last->inputs;
   auto get_push_op = [&](detail::VectorDescRef vec) -> uint8_t {
@@ -38,14 +37,23 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push = get_push_op(e->inputs[0]);
-      if (push == PUSH_OP_ALREADY_ON_STACK) { possible = false; break; }
+      if (push == PUSH_OP_ALREADY_ON_STACK) {
+        possible = false;
+        break;
+      }
       e_mapped.push_back(push);
     } else if (op >= OP_PUSH_OPERAND_0 &&
                op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
       size_t idx = op - OP_PUSH_OPERAND_0 + 1;
-      if (idx >= e->inputs.size()) { possible = false; break; }
+      if (idx >= e->inputs.size()) {
+        possible = false;
+        break;
+      }
       uint8_t push = get_push_op(e->inputs[idx]);
-      if (push == PUSH_OP_ALREADY_ON_STACK) { possible = false; break; }
+      if (push == PUSH_OP_ALREADY_ON_STACK) {
+        possible = false;
+        break;
+      }
       e_mapped.push_back(push);
     } else if (IS_OP_SCALAR(op)) {
       e_mapped.push_back(op);
@@ -71,12 +79,13 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
   last->extra_outputs.push_back(e->output);
 
   last->max_id = std::max(last->max_id, e->id);
-  last->kid    = last->pipeline_kid;
+  last->kid = last->pipeline_kid;
   for (const auto& in : e->inputs)
     if (in && in->last_producer_id != 0 && in->last_producer_id != last->id)
       last->dependencies.insert(in->last_producer_id);
   if (e->output) e->output->last_producer_id = last->id;
-  for (auto& out : e->extra_outputs) if (out) out->last_producer_id = last->id;
+  for (auto& out : e->extra_outputs)
+    if (out) out->last_producer_id = last->id;
 
   std::string ops;
   for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
@@ -85,8 +94,10 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     if (s.empty()) continue;
     if (!ops.empty()) ops += ", ";
     ops += s;
-    if (IS_OP_SCALAR(op)) i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op)) i += SCALAR_VAR_INDEX_BYTES;
+    if (IS_OP_SCALAR(op))
+      i += SCALAR_INLINE_BYTES;
+    else if (IS_OP_SCALAR_VAR(op))
+      i += SCALAR_VAR_INDEX_BYTES;
   }
   last->slice_name = "Horiz-Fused: [" + ops + "]";
 
