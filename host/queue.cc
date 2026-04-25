@@ -229,10 +229,7 @@ bool EventQueue::process_next() {
         if (s.empty()) continue;
         if (!ops.empty()) ops += ", ";
         ops += s;
-        if (IS_OP_SCALAR(op))
-          i += sizeof(uint32_t);
-        else if (IS_OP_SCALAR_VAR(op))
-          i += SCALAR_VAR_INDEX_BYTES;
+        if (OP_INLINE_BYTES(op) > 0) i += OP_INLINE_BYTES(op);
       }
       e->slice_name = e->rpn_ops.size() > 2 ? "Fused: [" + ops + "]" : ops;
     } else {
@@ -250,7 +247,7 @@ bool EventQueue::process_next() {
   // 5. Register with running events and start trace
   {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
-    if (running_events_.empty()) trace::execution_begin(e);
+    trace::execution_begin(e);
     running_events_.push_back(e);
     current_event_ = e;
     trace::active_ops_counter(running_events_.size());
@@ -334,7 +331,7 @@ bool EventQueue::process_next() {
                    ? std::vector<detail::VectorDescRef>(e->inputs.begin() + 1,
                                                         e->inputs.end())
                    : std::vector<detail::VectorDescRef>()),
-              dynamic_kid, e->scalars, e->extra_outputs);
+              dynamic_kid, e->scalars, e->extra_scalars, e->extra_outputs);
         } else if (e->cb) {
           e->cb();
         }
@@ -496,6 +493,11 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
 
   if (dependent) return try_vfuse(last, e);
 
+  // If e already inlined last's output via absorbed_rpn, horizontally fusing
+  // last as a separate chain would duplicate that work and shift result slots.
+  if (e->absorbed_producer_ids.find(last->id) != e->absorbed_producer_ids.end())
+    return false;
+
   // Horizontal: independent chains, same element count, operand budget fits.
   if (last->inputs.empty() || e->inputs.empty()) return false;
   if (last->inputs[0]->num_elements != e->inputs[0]->num_elements) return false;
@@ -515,13 +517,13 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   // Don't hfuse a freshly-submitted scalar-op intermediate — it will almost
   // certainly be consumed by an imminent vfuse candidate (e.g. vec*s followed
   // by acc+product).  Hfusing it now would lock it into an extra_output slot,
-  // making the subsequent add unable to vfuse.  Exception: when `last` ends
-  // with a reduction, its stack is empty after the reduce, so no vfuse
-  // candidate can consume `e` on-stack — hfusing is safe and lets repeated
-  // per-dim reduction chains collapse into one kernel.
-  bool last_ends_with_reduction =
-      !last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back());
-  if (e->is_scalar && e->rpn_ops.empty() && !last_ends_with_reduction)
+  // blocking the subsequent add from extending the primary chain (the linreg
+  // `error = error + dx[j]*dw[j]` loop collapses to one deep vfuse chain
+  // only if each per-dim scalar mul stays separate until its accumulator
+  // add arrives and the two can vfuse together.  This also applies after a
+  // reduction: in linreg's gradient fanout, `dx[j] >> shift` must wait for its
+  // multiply/sum consumer so only complete reduction chains are hfused.
+  if (e->is_scalar && e->rpn_ops.empty())
     return false;
 
   // Don't hfuse an event whose output is marked for inline absorption.
@@ -574,8 +576,14 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
 
   if (!fused) {
 #if JIT
-    if (e->op != Event::OperationType::COMPUTE ||
-        (IS_OP_REDUCTION(e->opcode) && !e->is_scalar)) {
+    // Flush the pending JIT batch only on boundaries where the queue cannot
+    // grow the current batch further — a non-COMPUTE event (HOST_TRANSFER /
+    // FENCE) terminates the run of fusable kernels.  Reduction COMPUTE events
+    // are still candidates for hfuse into subsequent reduction chains and
+    // must stay batchable; let process_next's look-ahead absorb them into the
+    // in-flight batch so we don't emit a separate JIT binary for reductions
+    // (which would force a mid-stream binary switch).
+    if (e->op != Event::OperationType::COMPUTE) {
       bool any_locked = false;
       for (auto& op : operations_) {
         if (op->op == Event::OperationType::COMPUTE && !op->is_locked_for_jit) {
@@ -593,6 +601,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
       if (in && in->last_producer_id != 0)
         e->dependencies.insert(in->last_producer_id);
     if (e->output) e->output->last_producer_id = e->id;
+    for (const auto& out : e->extra_outputs)
+      if (out) out->last_producer_id = e->id;
 
     operations_.push_back(e);
 
@@ -601,8 +611,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
     // (e.g. unary negate) into the first consumer's event, enabling chain
     // growth.
     if (e->op == Event::OperationType::COMPUTE &&
-        (!e->is_scalar || !e->rpn_ops.empty()) && !IS_OP_REDUCTION(e->opcode) &&
-        e->output && !e->inputs.empty() && e->extra_outputs.empty()) {
+        !IS_OP_REDUCTION(e->opcode) && e->output && !e->inputs.empty() &&
+        e->extra_outputs.empty()) {
       std::vector<uint8_t> rpn;
       std::vector<uint32_t> scalars;
       build_default_rpn(e, rpn, scalars);

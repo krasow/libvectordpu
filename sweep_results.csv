@@ -1,0 +1,3 @@
+operation,elements_per_dpu,total_elements,dpus,benchmark,time,stddev,scaling,pipeline,logging,jit,promotion,fusion_lookahead,dim,iterations
+linreg,524888,134371328,256,cpu_baseline,7068.87,,weak,0,0,1,0,64,10,1
+linreg,524888,134371328,256,libvectordpu_linreg,1588.031,0.0,weak,0,0,1,0,64,10,1

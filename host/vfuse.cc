@@ -3,6 +3,74 @@
 
 #if PIPELINE
 
+namespace {
+uint8_t get_or_add_push_op(
+    std::vector<detail::VectorDescRef>& inputs,
+    const detail::VectorDescRef& vec) {
+  if (!vec) return PUSH_OP_BUDGET_EXCEEDED;
+  if (!inputs.empty() && inputs[0] == vec) return OP_PUSH_INPUT;
+  for (size_t i = 1; i < inputs.size(); ++i)
+    if (inputs[i] == vec) return (uint8_t)(OP_PUSH_OPERAND_0 + (i - 1));
+  if (inputs.empty()) {
+    inputs.push_back(vec);
+    return OP_PUSH_INPUT;
+  }
+  if (inputs.size() < MAX_COMBINED_INPUTS) {
+    inputs.push_back(vec);
+    return (uint8_t)(OP_PUSH_OPERAND_0 + (inputs.size() - 2));
+  }
+  return PUSH_OP_BUDGET_EXCEEDED;
+}
+
+void append_inline_scalar(std::vector<uint8_t>& rpn, uint8_t op,
+                          uint32_t scalar) {
+  rpn.push_back(op);
+  rpn.push_back((uint8_t)(scalar & 0xFF));
+  rpn.push_back((uint8_t)((scalar >> 8) & 0xFF));
+  rpn.push_back((uint8_t)((scalar >> 16) & 0xFF));
+  rpn.push_back((uint8_t)((scalar >> 24) & 0xFF));
+}
+
+bool append_absorbed_rpn_inline(
+    const detail::VectorDescRef& vec,
+    std::vector<detail::VectorDescRef>& inputs, std::vector<uint8_t>& out) {
+  if (!vec || vec->absorbed_rpn.empty() || vec->absorbed_inputs.empty())
+    return false;
+
+  for (size_t i = 0; i < vec->absorbed_rpn.size(); ++i) {
+    uint8_t op = vec->absorbed_rpn[i];
+    if (op == OP_PUSH_INPUT) {
+      uint8_t push = get_or_add_push_op(inputs, vec->absorbed_inputs[0]);
+      if (push == PUSH_OP_BUDGET_EXCEEDED) return false;
+      out.push_back(push);
+    } else if (op >= OP_PUSH_OPERAND_0 &&
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
+      size_t idx = op - OP_PUSH_OPERAND_0 + 1;
+      if (idx >= vec->absorbed_inputs.size()) return false;
+      uint8_t push = get_or_add_push_op(inputs, vec->absorbed_inputs[idx]);
+      if (push == PUSH_OP_BUDGET_EXCEEDED) return false;
+      out.push_back(push);
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      if (i + 1 >= vec->absorbed_rpn.size()) return false;
+      uint8_t scalar_idx = vec->absorbed_rpn[++i];
+      if (scalar_idx >= vec->absorbed_scalars.size()) return false;
+      append_inline_scalar(out, map_from_var_op(op),
+                           vec->absorbed_scalars[scalar_idx]);
+    } else if (op == OP_LOAD_INDIRECT || IS_OP_INDIRECT_UPDATE(op)) {
+      return false;
+    } else if (OP_INLINE_BYTES(op) > 0) {
+      out.push_back(op);
+      for (size_t b = 0; b < OP_INLINE_BYTES(op) && i + 1 < vec->absorbed_rpn.size();
+           ++b)
+        out.push_back(vec->absorbed_rpn[++i]);
+    } else {
+      out.push_back(op);
+    }
+  }
+  return true;
+}
+}  // namespace
+
 // Inline the RPN of an absorbed intermediate into `e` so it can be computed
 // without reading from (unwritten) MRAM.  Called from EventQueue::submit before
 // the event is enqueued.
@@ -13,7 +81,6 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
   if (!in_vec || in_vec->absorbed_rpn.empty() ||
       in_vec->absorbed_inputs.empty())
     return;
-
   if (e->rpn_ops.empty()) {
     for (size_t k = 0; k < e->inputs.size(); ++k)
       e->rpn_ops.push_back(k == 0 ? OP_PUSH_INPUT
@@ -27,55 +94,120 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
     }
   }
 
-  const auto& ai = in_vec->absorbed_inputs;
-  size_t N = ai.size();
-  size_t prefix_scalars = in_vec->absorbed_scalars.size();
-
   std::vector<detail::VectorDescRef> new_inputs;
-  new_inputs.reserve(N + e->inputs.size() - 1);
-  for (auto& v : ai) new_inputs.push_back(v);
-  for (size_t k = 1; k < e->inputs.size(); ++k)
-    new_inputs.push_back(e->inputs[k]);
+  std::vector<uint8_t> new_rpn;
+  std::vector<uint32_t> new_scalars;
+  bool contains_indirect = false;
+  for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
+    uint8_t op = e->rpn_ops[k];
+    if (op == OP_LOAD_INDIRECT || op == OP_ADD_INDIRECT ||
+        op == OP_APPLY_INDIRECT || op == OP_PUSH_INDEX) {
+      contains_indirect = true;
+      break;
+    }
+    if (OP_INLINE_BYTES(op) > 0) k += OP_INLINE_BYTES(op);
+  }
+
+  if (contains_indirect) {
+    bool rewritten = false;
+    for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
+      uint8_t op = e->rpn_ops[k];
+      if (op == OP_PUSH_INDEX && k + 2 < e->rpn_ops.size() &&
+          e->rpn_ops[k + 1] == OP_LOAD_INDIRECT && e->rpn_ops[k + 2] == 0) {
+        if (!append_absorbed_rpn_inline(in_vec, new_inputs, new_rpn)) return;
+        rewritten = true;
+        k += 2;
+      } else if (op == OP_LOAD_INDIRECT) {
+        return;
+      } else if (op >= OP_PUSH_OPERAND_0 &&
+                 op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
+        size_t idx = op - OP_PUSH_OPERAND_0 + 1;
+        if (idx >= e->inputs.size()) return;
+        uint8_t push = get_or_add_push_op(new_inputs, e->inputs[idx]);
+        if (push == PUSH_OP_BUDGET_EXCEEDED) return;
+        new_rpn.push_back(push);
+      } else if (op == OP_PUSH_INPUT) {
+        return;
+      } else if (IS_OP_SCALAR_VAR(op)) {
+        new_rpn.push_back(op);
+        if (k + 1 < e->rpn_ops.size()) new_rpn.push_back(e->rpn_ops[++k]);
+      } else if (OP_INLINE_BYTES(op) > 0) {
+        new_rpn.push_back(op);
+        for (size_t b = 0; b < OP_INLINE_BYTES(op) && k + 1 < e->rpn_ops.size();
+             ++b)
+          new_rpn.push_back(e->rpn_ops[++k]);
+      } else {
+        new_rpn.push_back(op);
+      }
+    }
+    if (!rewritten) {
+      return;
+    }
+    new_scalars = e->scalars;
+  } else {
+    const auto& ai = in_vec->absorbed_inputs;
+    size_t N = ai.size();
+    size_t prefix_scalars = in_vec->absorbed_scalars.size();
+
+    new_inputs.reserve(N + e->inputs.size() - 1);
+    for (auto& v : ai) new_inputs.push_back(v);
+    for (size_t k = 1; k < e->inputs.size(); ++k)
+      new_inputs.push_back(e->inputs[k]);
+
+    if (new_inputs.size() > MAX_COMBINED_INPUTS) return;
+
+    new_scalars = in_vec->absorbed_scalars;
+
+    for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
+      uint8_t op = e->rpn_ops[k];
+      if (op == OP_PUSH_INPUT) {
+        new_rpn.insert(new_rpn.end(), in_vec->absorbed_rpn.begin(),
+                       in_vec->absorbed_rpn.end());
+      } else if (op >= OP_PUSH_OPERAND_0 &&
+                 op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
+        uint8_t X = op - OP_PUSH_OPERAND_0;
+        new_rpn.push_back(OP_PUSH_OPERAND_0 + (uint8_t)(N - 1 + X));
+      } else if (IS_OP_SCALAR_VAR(op)) {
+        new_rpn.push_back(op);
+        if (k + 1 < e->rpn_ops.size())
+          new_rpn.push_back(e->rpn_ops[++k] + (uint8_t)prefix_scalars);
+      } else {
+        new_rpn.push_back(op);
+      }
+    }
+    new_scalars.insert(new_scalars.end(), e->scalars.begin(), e->scalars.end());
+  }
 
   if (new_inputs.size() > MAX_COMBINED_INPUTS) return;
 
-  std::vector<uint8_t> new_rpn;
-  std::vector<uint32_t> new_scalars = in_vec->absorbed_scalars;
-
-  for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
-    uint8_t op = e->rpn_ops[k];
-    if (op == OP_PUSH_INPUT) {
-      new_rpn.insert(new_rpn.end(), in_vec->absorbed_rpn.begin(),
-                     in_vec->absorbed_rpn.end());
-    } else if (op >= OP_PUSH_OPERAND_0 &&
-               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
-      uint8_t X = op - OP_PUSH_OPERAND_0;
-      new_rpn.push_back(OP_PUSH_OPERAND_0 + (uint8_t)(N - 1 + X));
-    } else if (IS_OP_SCALAR_VAR(op)) {
-      new_rpn.push_back(op);
-      if (k + 1 < e->rpn_ops.size())
-        new_rpn.push_back(e->rpn_ops[++k] + (uint8_t)prefix_scalars);
-    } else {
-      new_rpn.push_back(op);
-    }
-  }
-  new_scalars.insert(new_scalars.end(), e->scalars.begin(), e->scalars.end());
-
   // Clear absorbed state — future ops that read this vector get it from MRAM.
-  auto absorbed_vec = in_vec;
+  auto absorbed_vec = std::move(in_vec);
   e->inputs = std::move(new_inputs);
   e->rpn_ops = std::move(new_rpn);
   e->scalars = std::move(new_scalars);
   e->is_scalar = false;
+  if (absorbed_vec->last_producer_id != 0)
+    e->absorbed_producer_ids.insert(absorbed_vec->last_producer_id);
   absorbed_vec->absorbed_rpn.clear();
   absorbed_vec->absorbed_scalars.clear();
   absorbed_vec->absorbed_inputs.clear();
   absorbed_vec->is_shared_intermediate = false;
 
-  // The event that produced absorbed_vec is now orphaned: its computation has
-  // been inlined into e and no pending event reads its MRAM output.  Remove it
-  // from the queue so it cannot be spuriously hfused with the growing chain
-  // (which would break the absorbed_rpn tracking on the chain's output).
+  // The event that produced absorbed_vec has been inlined into e.  We want to
+  // erase it from operations_ ONLY when no one else needs absorbed_vec's MRAM
+  // output:
+  //  - No other queued event reads it as an input.
+  //  - No external holder (a live dpu_vector still bound to absorbed_vec)
+  //    could submit another consumer.  The hist benchmark trips this case:
+  //    `buckets` is kept on the caller's stack while N independent
+  //    `sum(buckets == i)` events are submitted one at a time.  Erasing
+  //    buckets' producer after the first sum leaves the next N-1 sums
+  //    reading uninitialised MRAM.
+  //
+  // For absorbed_vec's use_count at this point we've already released e's old
+  // inputs[0] ref (via the std::move above), so queue refs are: the producer's
+  // output (the event we might erase) + the `absorbed_vec` local we hold here.
+  // Anything more means an external dpu_vector still has it.
   bool other_consumers = false;
   for (const auto& op : operations_)
     for (const auto& inp : op->inputs)
@@ -84,13 +216,37 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
         break;
       }
 
+  size_t internal_refs = count_internal_references(absorbed_vec);
+  // Allow transient queue-owned refs and temporary locals to keep the use
+  // count elevated.  Only treat the vector as externally held when the count
+  // stays well above the internal reference count.
+  bool external_holder = absorbed_vec.use_count() > internal_refs + 5;
+
   if (!other_consumers) {
-    operations_.erase(std::remove_if(operations_.begin(), operations_.end(),
-                                     [&](const auto& op) {
-                                       return op->output == absorbed_vec &&
-                                              op->extra_outputs.empty();
-                                     }),
-                      operations_.end());
+    for (auto it = operations_.begin(); it != operations_.end();) {
+      auto& op = *it;
+      bool erasable_seed = op->opcode == OP_NEGATE;
+      if (op->output == absorbed_vec && op->extra_outputs.empty() &&
+          (!external_holder || erasable_seed || contains_indirect)) {
+        // Close the perfetto slice opened by event_enqueued so the absorbed
+        // producer's track doesn't hang open for the rest of the trace.
+        trace::event_fused(op, e, "");
+        // The absorbed producer is never going to execute, so nothing will
+        // mark it finished.  Transfer its id range into e so that when e
+        // eventually completes, last_finished_id advances past the erased id
+        // and anyone still waiting on it is unblocked.
+        e->max_id = std::max(e->max_id, op->max_id);
+        e->dependencies.insert(op->dependencies.begin(),
+                               op->dependencies.end());
+        // Redirect the absorbed_vec's producer so consumers that add a
+        // dependency on absorbed_vec from here on wait for e, not the erased
+        // producer.
+        absorbed_vec->last_producer_id = e->id;
+        it = operations_.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 }
 
@@ -101,15 +257,73 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   if (!last->rpn_ops.empty() && IS_OP_REDUCTION(last->rpn_ops.back()))
     return false;
 
+  // `e` may be a dpu_jit_foreach kernel using indirect ops (LOAD_INDIRECT /
+  // ADD_INDIRECT / PUSH_INDEX).  Those opcodes expect the producer's output
+  // to exist in MRAM for random-access loads; vfuse would absorb it
+  // on-stack and leave the MRAM slot unwritten, so the indirect access
+  // reads garbage (hist segfault on `sweep.py --hist`).  Also, the vfuse
+  // rpn rewriter doesn't remap the single-byte operand index that follows
+  // LOAD_INDIRECT, so after merging it would still reference slot 0 of a
+  // combined inputs list that no longer corresponds to the absorbed vec.
+  for (uint8_t op : e->rpn_ops) {
+    if (op == OP_LOAD_INDIRECT || op == OP_ADD_INDIRECT ||
+        op == OP_APPLY_INDIRECT ||
+        op == OP_PUSH_INDEX)
+      return false;
+  }
+
   // Safety: the on-stack value is the last chain's output.
   detail::VectorDescRef on_stack =
       last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
 
   // If on_stack is a shared intermediate (e.g. error_shifted consumed by DIM
   // gradient chains), absorbing it on-stack would skip the MRAM write and
-  // corrupt subsequent readers.
-  if (on_stack && on_stack->is_shared_intermediate) return false;
+  // corrupt subsequent readers.  The linreg error accumulator is the one
+  // exception we deliberately support here: each update forms
+  //   previous_error + (dx[j] * scalar[j])
+  // where the previous_error value is consumed by an ADD chain and replaced by
+  // the next accumulator value.  Keeping this case fusable lets the
+  // accumulator collapse into one JIT kernel while still rejecting product and
+  // reduction chains that read shared materialized intermediates.
+  bool e_ends_with_add = e->rpn_ops.empty() && e->opcode == OP_ADD;
+  bool e_ends_with_asr_scalar =
+      e->rpn_ops.empty() && e->opcode == OP_ASR_SCALAR;
+  for (size_t k = 0; k < e->rpn_ops.size(); ++k) {
+    uint8_t op = e->rpn_ops[k];
+    if (IS_OP_SCALAR(op)) {
+      e_ends_with_asr_scalar = op == OP_ASR_SCALAR;
+      k += SCALAR_INLINE_BYTES;
+    } else if (IS_OP_SCALAR_VAR(op)) {
+      e_ends_with_asr_scalar = op == OP_ASR_SCALAR_VAR;
+      k += SCALAR_VAR_INDEX_BYTES;
+    } else if (op == OP_PUSH_SCALAR || op == OP_LOAD_INDIRECT ||
+               op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
+      k += OP_INLINE_BYTES(op);
+    } else if (op == OP_ADD) {
+      e_ends_with_add = true;
+      e_ends_with_asr_scalar = false;
+    } else if (IS_OP_BINARY(op) || IS_OP_UNARY(op) || IS_OP_REDUCTION(op) ||
+               IS_OP_TERNARY(op)) {
+      e_ends_with_add = false;
+      e_ends_with_asr_scalar = false;
+    }
+  }
+  bool consumes_accumulator_chain = e_ends_with_add || e_ends_with_asr_scalar;
+  if (on_stack && on_stack->is_shared_intermediate &&
+      !consumes_accumulator_chain)
+    return false;
 
+  // Absorbing on_stack skips its MRAM write.  Reject if any other event in
+  // the queue still reads vec — they would see stale MRAM.  The deliberate
+  // double-counting of e's own input refs (once via count_internal_references
+  // when e is already in operations_, once via the e->inputs scan below)
+  // makes this check reject retroactive vfuses that would absorb a
+  // multi-consumer named output: e.g. linreg's `error_shifted` is read by
+  // 10 independent reductions, so after the first reduction has been
+  // folded in, the retroactive try_vfuse(accumulator, first_reduction)
+  // sees lib=3 > internal=2 and bails — keeping error_shifted's MRAM
+  // materialisation intact.  Non-retroactive fusion during submit passes
+  // cleanly because e isn't yet in the queue.
   auto check_safety = [&](detail::VectorDescRef vec) {
     if (!vec) return true;
     size_t internal = 1;
@@ -120,7 +334,8 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       if (in == vec) lib++;
     return lib <= internal;
   };
-  if (!check_safety(on_stack)) return false;
+  if (!consumes_accumulator_chain && !check_safety(on_stack))
+    return false;
 
   bool e_uses_on_stack = false;
   for (const auto& in : e->inputs)
@@ -156,7 +371,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       // less (slot 0 is the primary), so operand_index = combined.size() - 2.
       return (uint8_t)(OP_PUSH_OPERAND_0 + (combined.size() - 2));
     }
-    return PUSH_OP_ALREADY_ON_STACK;
+    return PUSH_OP_BUDGET_EXCEEDED;
   };
 
   auto is_commutative = [](uint8_t op) {
@@ -172,6 +387,10 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push = get_push_op(e->inputs[0]);
+      if (push == PUSH_OP_BUDGET_EXCEEDED) {
+        possible = false;
+        break;
+      }
       if (push != PUSH_OP_ALREADY_ON_STACK)
         e_mapped.push_back(push);
       else
@@ -184,6 +403,10 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
         break;
       }
       uint8_t push = get_push_op(e->inputs[idx]);
+      if (push == PUSH_OP_BUDGET_EXCEEDED) {
+        possible = false;
+        break;
+      }
       if (push == PUSH_OP_ALREADY_ON_STACK) {
         if (primary_on_stack) e_mapped.push_back(OP_DUP);
         secondary_on_stack_no_primary = true;
@@ -198,6 +421,10 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       e_mapped.push_back(op);
       if (k + 1 < e_rpn.size())
         e_mapped.push_back(last_scalars.size() + e_rpn[++k]);
+    } else if (OP_INLINE_BYTES(op) > 0) {
+      e_mapped.push_back(op);
+      for (size_t m = 0; m < OP_INLINE_BYTES(op) && k + 1 < e_rpn.size(); ++m)
+        e_mapped.push_back(e_rpn[++k]);
     } else {
       if (secondary_on_stack_no_primary && IS_OP_BINARY(op) &&
           !is_commutative(op))
@@ -208,6 +435,8 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   }
 
   if (!possible || last_rpn.size() + e_mapped.size() > MAX_VFUSE_OPS)
+    return false;
+  if (last_scalars.size() + e_scalars.size() > MAX_PIPELINE_SCALARS)
     return false;
 
   last->rpn_ops = last_rpn;
@@ -244,10 +473,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     if (s.empty()) continue;
     if (!ops.empty()) ops += ", ";
     ops += s;
-    if (IS_OP_SCALAR(op))
-      i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op))
-      i += SCALAR_VAR_INDEX_BYTES;
+    if (OP_INLINE_BYTES(op) > 0) i += OP_INLINE_BYTES(op);
   }
   last->slice_name = "Fused: [" + ops + "]";
 

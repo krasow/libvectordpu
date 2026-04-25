@@ -35,6 +35,8 @@ class allocator {
                                               std::size_t reserved_mem_per_dpu,
                                               std::size_t size_type,
                                               bool lazy = false);
+  detail::VectorDescRef allocate_local_vector(std::size_t n,
+                                              std::size_t size_type);
   void realize_allocation(detail::VectorDescRef data);
   void deallocate_upmem_vector(detail::VectorDesc* data);
 

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "jit.h"
 #include "kernelids.h"
 #include "opinfo.h"
 #include "runtime.h"
@@ -15,7 +16,6 @@
 
 #if __cplusplus < 202002L
 // Fake source_location for pre-C++20
-// debian upmem machine has outdated compiler that doesn't support C++20 yet
 namespace std {
 struct source_location {
   static source_location current() { return {}; }
@@ -41,6 +41,51 @@ class dpu_vector;
 
 template <typename T>
 struct lazy_reduction_result;
+
+template <typename T>
+class dpu_local_vector;
+
+namespace detail {
+struct jit_recorder {
+  std::vector<uint8_t> rpn;
+  std::vector<detail::VectorDescRef> operands;
+  std::vector<detail::VectorDescRef> locals;
+
+  uint8_t add_operand(detail::VectorDescRef d) {
+    for (size_t i = 0; i < operands.size(); i++)
+      if (operands[i] == d) return (uint8_t)i;
+    operands.push_back(d);
+    return (uint8_t)(operands.size() - 1);
+  }
+  uint8_t add_local(detail::VectorDescRef d) {
+    for (size_t i = 0; i < locals.size(); i++)
+      if (locals[i] == d) return (uint8_t)i;
+    locals.push_back(d);
+    return (uint8_t)(locals.size() - 1);
+  }
+};
+
+struct jit_index_expr {
+  jit_recorder& rec;
+};
+template <typename T>
+struct jit_indirect_load_expr {
+  const dpu_vector<T>& vec;
+  jit_recorder& rec;
+};
+template <typename T>
+struct jit_indirect_ref_expr {
+  dpu_local_vector<T>& vec;
+  jit_recorder& rec;
+
+  void operator++(int);
+  void apply(T value);
+};
+}  // namespace detail
+
+inline detail::jit_index_expr dpu_index(detail::jit_recorder& rec) {
+  return {rec};
+}
 
 #if PIPELINE
 template <typename T>
@@ -133,6 +178,8 @@ class dpu_vector {
   pipeline_result<T> jit(const std::vector<uint8_t>& ops);
   pipeline_result<T> jit(const std::vector<uint8_t>& ops,
                          const std::vector<dpu_vector<T>>& operands);
+
+  detail::jit_indirect_load_expr<T> operator[](detail::jit_index_expr idx) const;
 #endif
 };
 
@@ -146,15 +193,19 @@ struct lazy_reduction_result {
   typename dpu_vector<T>::reduction_result_t get();
   operator typename dpu_vector<T>::reduction_result_t() { return get(); }
 #if ENABLE_PROMOTION_REDUCTIONS
-  // Only needed when reduction_result_t != T (e.g. int32_t → int64_t).
-  // When ENABLE_PROMOTION_REDUCTIONS=0, reduction_result_t == T and this
-  // would create a duplicate overload.
   operator T() { return (T)get(); }
 #endif
 };
 
 template <typename T>
 using dpu_future = lazy_reduction_result<T>;
+
+enum class dpu_local_reduce_op : uint8_t {
+  sum,
+  product,
+  min,
+  max,
+};
 
 #if PIPELINE
 template <typename T>
@@ -180,6 +231,36 @@ template <typename T>
 lazy_reduction_result<T> min(const dpu_vector<T>& a);
 template <typename T>
 lazy_reduction_result<T> max(const dpu_vector<T>& a);
+
+template <typename T>
+class dpu_local_vector {
+ public:
+  dpu_local_vector(uint32_t n, LOGGER_ARGS_WITH_DEFAULTS);
+  dpu_local_vector(uint32_t n,
+                   dpu_local_reduce_op reduce_op,
+                   LOGGER_ARGS_WITH_DEFAULTS);
+  ~dpu_local_vector() = default;
+
+  detail::jit_indirect_ref_expr<T> operator[](
+      const detail::jit_indirect_load_expr<T>& idx);
+
+  vector<T> to_cpu();
+  dpu_local_reduce_op reduce_op() const { return reduce_op_; }
+
+  const detail::VectorDesc& data_desc() const { return *data_; }
+  detail::VectorDescRef data_desc_ref() const { return data_; }
+  uint32_t size() const { return size_; }
+
+ private:
+  detail::VectorDescRef data_;
+  uint32_t size_;
+  dpu_local_reduce_op reduce_op_ = dpu_local_reduce_op::sum;
+};
+
+template <typename T, typename F>
+void dpu_jit_foreach(uint32_t n, F f);
+
+void dpu_fence();
 
 namespace detail {
 void launch_binary(VectorDescRef res, VectorDescRef lhs, VectorDescRef rhs,
@@ -209,7 +290,14 @@ void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
     const std::vector<uint32_t>& scalars,
+    const std::vector<uint32_t>& extra_scalars = {},
     const std::vector<VectorDescRef>& extra_outputs = {});
+
+void internal_launch_jit(const std::string& binary_path, VectorDescRef output,
+                         const std::vector<VectorDescRef>& inputs,
+                         const std::vector<uint8_t>& rpn_ops,
+                         const std::vector<uint32_t>& extra_scalars = {},
+                         const std::vector<VectorDescRef>& extra_outputs = {});
 #endif
 }  // namespace detail
 

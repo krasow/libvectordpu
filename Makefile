@@ -81,7 +81,7 @@ DPU_HEADERS := $(wildcard ${DPU_DIR}/*.inl) $(wildcard ${DPU_DIR}/*.h)
 COMMON_HEADERS := ${COMMON_DIR}/common.h ${COMMON_DIR}/config.h
 
 ifeq ($(DEBUG),1)
-  CXXFLAGS += -g -pg -O0 -DDEBUG -fno-omit-frame-pointer
+  CXXFLAGS += -g -pg -O0 -DDEBUG -fno-omit-frame-pointer -fno-inline
   LDFLAGS  +=
   BUILD_TYPE := debug
 else

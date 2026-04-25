@@ -1,8 +1,10 @@
 #include "jit.h"
 
+
 #if JIT
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -23,7 +25,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-using Signature = std::pair<std::vector<uint8_t>, std::string>;
 using CacheKey = std::vector<Signature>;
 // One primary result slot + one per extra horizontal chain.
 static constexpr int MAX_RESULT_SLOTS = MAX_HFUSE_CHAINS + 1;
@@ -105,8 +106,6 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       << type_name << " *)(args.pipeline.init_offset);\n\n";
 
   // Horizontal fusion result support
-  // Result pointers: [0] = primary output, [1..MAX_HFUSE_CHAINS] = extra
-  // chains.
   out << "    __mram_ptr " << type_name << " *res_ptrs[" << MAX_RESULT_SLOTS
       << "];\n"
       << "    res_ptrs[0] = (__mram_ptr " << type_name
@@ -137,6 +136,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   // are.
   bool uses_input = false;
   bool uses_op[MAX_VFUSE_INPUTS] = {false};
+  bool uses_local[MAX_HFUSE_CHAINS] = {false};
   struct Chain {
     size_t start_op, end_op;
     bool is_reduction;
@@ -154,10 +154,11 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
       else if (op >= OP_PUSH_OPERAND_0 &&
                op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS)
         uses_op[op - OP_PUSH_OPERAND_0] = true;
-      else if (IS_OP_SCALAR(op))
-        i += SCALAR_INLINE_BYTES;
-      else if (IS_OP_SCALAR_VAR(op))
-        i += SCALAR_VAR_INDEX_BYTES;
+      else if (IS_OP_INDIRECT_UPDATE(op)) {
+        if (i + 1 < end) uses_local[rpn_ops[i + 1]] = true;
+        i += OP_INLINE_BYTES(op);
+      } else if (OP_INLINE_BYTES(op) > 0)
+        i += OP_INLINE_BYTES(op);
       else if (IS_OP_REDUCTION(op)) {
         c.is_reduction = true;
         c.reduction_op = op;
@@ -171,12 +172,24 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     if (op == OP_NEXT_CHAIN) {
       identify_chain(current_chain_start, i);
       current_chain_start = i + 1;
-    } else if (IS_OP_SCALAR(op))
-      i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op))
-      i += SCALAR_VAR_INDEX_BYTES;
+    } else if (OP_INLINE_BYTES(op) > 0)
+      i += OP_INLINE_BYTES(op);
   }
   identify_chain(current_chain_start, rpn_ops.size());
+
+  for (int k = 0; k < MAX_HFUSE_CHAINS; ++k) {
+    if (!uses_local[k]) continue;
+    out << "    uint32_t local_size_" << k
+        << " = args.pipeline.local_sizes[" << k << "];\n"
+        << "    " << type_name << " *local_accum_" << k
+        << " = (" << type_name
+        << " *)&dpu_workspace[id][BASE_TASKLET_WORKSPACE_SIZE + " << k
+        << " * LOCAL_VECTOR_WORKSPACE_BYTES];\n";
+  }
+  if (std::any_of(std::begin(uses_local), std::end(uses_local),
+                  [](bool x) { return x; })) {
+    out << "\n";
+  }
 
 #if ENABLE_PROMOTION_REDUCTIONS == 1
   for (const auto& c : chains)
@@ -206,7 +219,37 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         break;
     }
   }
-
+  for (int k = 0; k < MAX_HFUSE_CHAINS; ++k) {
+    if (!uses_local[k]) continue;
+    out << "    if (local_size_" << k << " > MAX_LOCAL_VECTOR_SIZE)\n"
+        << "        return -2;\n"
+        << "    {\n"
+        << "        uint32_t local_init_" << k << " = local_size_" << k
+        << ";\n"
+        << "        switch (args.pipeline.local_reduce_ops[" << k << "]) {\n"
+        << "            case OP_SUM:\n"
+        << "                for (uint32_t j = 0; j < local_init_" << k
+        << "; ++j) local_accum_" << k << "[j] = 0;\n"
+        << "                break;\n"
+        << "            case OP_PRODUCT:\n"
+        << "                for (uint32_t j = 0; j < local_init_" << k
+        << "; ++j) local_accum_" << k << "[j] = 1;\n"
+        << "                break;\n"
+        << "            case OP_MIN:\n"
+        << "                for (uint32_t j = 0; j < local_init_" << k
+        << "; ++j) local_accum_" << k << "[j] = INT32_MAX;\n"
+        << "                break;\n"
+        << "            case OP_MAX:\n"
+        << "                for (uint32_t j = 0; j < local_init_" << k
+        << "; ++j) local_accum_" << k << "[j] = INT32_MIN;\n"
+        << "                break;\n"
+        << "        }\n"
+        << "    }\n";
+  }
+  if (std::any_of(std::begin(uses_local), std::end(uses_local),
+                  [](bool x) { return x; })) {
+    out << "\n";
+  }
   // Main per-block loop.
   out << "    uint32_t blk, i, b_e, b_b, b_b_aligned;\n"
       << "    for (blk = id << BLOCK_SIZE_LOG2; blk < n; blk += (NR_TASKLETS "
@@ -231,6 +274,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
   out << "        for (i = 0; i < b_e; i++) {\n";
 
+  std::vector<bool> chain_has_output(chains.size(), false);
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
     const auto& chain = chains[c_idx];
     out << "            // Chain " << c_idx << "\n";
@@ -388,12 +432,59 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
                 << c_idx << " = " << s << ";\n";
             break;
         }
+      } else if (op == OP_PUSH_INDEX) {
+        stack.push_back("(blk + i)");
+      } else if (op == OP_LOAD_INDIRECT) {
+        uint8_t op_id = rpn_ops[++op_idx];
+        std::string idx = stack.back();
+        stack.pop_back();
+        std::string res = get_tmp();
+        out << "            " << stack_type << " " << res << " = ((__mram_ptr "
+            << type_name << " *)args.pipeline.binary_operands[" << (int)op_id
+            << "])[" << idx << "];\n";
+        stack.push_back(res);
+      } else if (op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
+        uint8_t local_id = rpn_ops[++op_idx];
+        uint8_t reduce_op = (op == OP_ADD_INDIRECT) ? OP_SUM : rpn_ops[++op_idx];
+        std::string val = stack.back();
+        stack.pop_back();
+        std::string idx = stack.back();
+        stack.pop_back();
+        std::string slot =
+            "local_accum_" + std::to_string((int)local_id) + "[" + idx + "]";
+        switch (reduce_op) {
+          case OP_SUM:
+            out << "            " << slot << " += " << val << ";\n";
+            break;
+          case OP_PRODUCT:
+            out << "            " << slot << " *= " << val << ";\n";
+            break;
+          case OP_MIN:
+            out << "            if (" << val << " < " << slot << ") " << slot
+                << " = " << val << ";\n";
+            break;
+          case OP_MAX:
+            out << "            if (" << val << " > " << slot << ") " << slot
+                << " = " << val << ";\n";
+            break;
+          default:
+            out << "            " << slot << " += " << val << ";\n";
+            break;
+        }
+      } else if (op == OP_PUSH_SCALAR) {
+        uint8_t b0 = rpn_ops[op_idx + 1], b1 = rpn_ops[op_idx + 2],
+                b2 = rpn_ops[op_idx + 3], b3 = rpn_ops[op_idx + 4];
+        int32_t val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+        op_idx += SCALAR_INLINE_BYTES;
+        stack.push_back(std::to_string(val));
       }
     }  // op_idx
 
-    if (!chain.is_reduction && !stack.empty())
+    if (!chain.is_reduction && !stack.empty()) {
       out << "            res_blks[" << c_idx << "][i] = " << stack.back()
           << ";\n";
+      chain_has_output[c_idx] = true;
+    }
   }  // c_idx
 
   out << "        }\n";  // end inner element loop
@@ -401,6 +492,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   // Write computed blocks back to MRAM for non-reduction chains.
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
     if (chains[c_idx].is_reduction) continue;
+    if (!chain_has_output[c_idx]) continue;
     out << "        if (res_ptrs[" << c_idx << "])\n"
         << "            mram_write(res_blks[" << c_idx
         << "], (__mram_ptr void *)(res_ptrs[" << c_idx
@@ -408,60 +500,57 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   }
   out << "    }\n";  // end block loop
 
-  // Cross-tasklet reduction: each tasklet writes its partial to the scratchpad,
-  // then tasklet 0 merges all partials and writes the scalar result to MRAM.
+  // Cross-tasklet reduction: tasklet-local shards are merged in WRAM by tasklet 0,
+  // then the combined local vector is written to MRAM once.
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
-    if (!chains[c_idx].is_reduction) continue;
-
-    const char* merge_op;
-    switch (chains[c_idx].reduction_op) {
-      case OP_SUM:
-        merge_op = "tot += v;";
-        break;
-      case OP_PRODUCT:
-        merge_op = "tot *= v;";
-        break;
-      case OP_MIN:
-        merge_op = "if (v < tot) tot = v;";
-        break;
-      case OP_MAX:
-        merge_op = "if (v > tot) tot = v;";
-        break;
-      default:
-        merge_op = "";
-        break;
-    }
-    std::string res_ptr = (c_idx == 0) ? "args.pipeline.res_offset"
-                                       : "args.pipeline.extra_res_offsets[" +
-                                             std::to_string(c_idx - 1) + "]";
-
+    if (!uses_local[c_idx]) continue;
+    std::string local_ptr = "args.pipeline.extra_res_offsets[" + std::to_string(c_idx) + "]";
     out << "    {\n"
-        << "        uint64_t bf = 0;\n"
-        << "        memcpy(&bf, &acc_" << c_idx << ", sizeof(" << stack_type
-        << "));\n"
-        << "        reduction_scratchpad[" << c_idx
-        << " * NR_TASKLETS + id] = bf;\n"
         << "        barrier_wait(&my_barrier);\n"
         << "        if (id == 0) {\n"
-        << "            uint64_t tot_raw = reduction_scratchpad[" << c_idx
-        << " * NR_TASKLETS];\n"
-        << "            " << stack_type << " tot;\n"
-        << "            memcpy(&tot, &tot_raw, sizeof(" << stack_type << "));\n"
-        << "            for (int k = 1; k < NR_TASKLETS; k++) {\n"
-        << "                uint64_t v_raw = reduction_scratchpad[" << c_idx
-        << " * NR_TASKLETS + k];\n"
-        << "                " << stack_type << " v;\n"
-        << "                memcpy(&v, &v_raw, sizeof(" << stack_type << "));\n"
-        << "                " << merge_op << "\n"
+        << "            __mram_ptr " << type_name << " *local_ptr = (__mram_ptr "
+        << type_name << " *)(" << local_ptr << ");\n"
+        << "            if (local_ptr) {\n"
+        << "                for (uint32_t t = 1; t < NR_TASKLETS; ++t) {\n"
+        << "                    " << type_name << " *src = (" << type_name
+        << " *)&dpu_workspace[t][BASE_TASKLET_WORKSPACE_SIZE + " << c_idx
+        << " * LOCAL_VECTOR_WORKSPACE_BYTES];\n"
+        << "                    for (uint32_t j = 0; j < local_size_" << c_idx
+        << "; ++j) {\n"
+        << "                        switch (args.pipeline.local_reduce_ops[" << c_idx
+        << "]) {\n"
+        << "                            case OP_SUM:\n"
+        << "                                local_accum_" << c_idx
+        << "[j] += src[j];\n"
+        << "                                break;\n"
+        << "                            case OP_PRODUCT:\n"
+        << "                                local_accum_" << c_idx
+        << "[j] *= src[j];\n"
+        << "                                break;\n"
+        << "                            case OP_MIN:\n"
+        << "                                if (src[j] < local_accum_" << c_idx
+        << "[j]) local_accum_" << c_idx << "[j] = src[j];\n"
+        << "                                break;\n"
+        << "                            case OP_MAX:\n"
+        << "                                if (src[j] > local_accum_" << c_idx
+        << "[j]) local_accum_" << c_idx << "[j] = src[j];\n"
+        << "                                break;\n"
+        << "                        }\n"
+        << "                    }\n"
+        << "                }\n"
+        << "                uint32_t local_bytes = local_size_" << c_idx
+        << " * sizeof(" << type_name << ");\n"
+        << "                uint32_t local_bytes_aligned = (local_bytes + 7) & ~7;\n"
+        << "                mram_write(local_accum_" << c_idx
+        << ", (__mram_ptr void *)local_ptr, local_bytes_aligned);\n"
         << "            }\n"
-        << "            uint64_t bf_final = 0;\n"
-        << "            memcpy(&bf_final, &tot, sizeof(" << stack_type
-        << "));\n"
-        << "            mram_write(&bf_final, (__mram_ptr void *)" << res_ptr
-        << ", " << MINIMUM_WRITE_SIZE << ");\n"
         << "        }\n"
         << "        barrier_wait(&my_barrier);\n"
         << "    }\n";
+  }
+
+  for (int k = 0; k < MAX_HFUSE_CHAINS; ++k) {
+    if (!uses_local[k]) continue;
   }
 
   out << "    return 0;\n}\n\n";
@@ -558,6 +647,9 @@ std::string jit_compile(
   // Compile each unique kernel to an object file (cached per signature).
   std::vector<std::string> object_files;
   for (const auto& sig : kernels) {
+    fprintf(stderr, "[JIT] Compiling RPN: ");
+    for (uint8_t op : sig.first) fprintf(stderr, "%u ", (unsigned)op);
+    fprintf(stderr, "\n");
     std::string obj_path;
     {
       std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
@@ -690,6 +782,22 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   pending_unique_kernels_.push_back(sig);
   pending_jit_events_.push_back(e);
   if (pending_jit_events_.size() >= JIT_BATCH_SIZE) flush_jit_batch();
+}
+
+bool jit_find_kernel_in_binary(const Signature& sig, const std::string& bin_path,
+                               int& out_idx) {
+  std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
+  for (const auto& [kernels, path] : g_jit_cache) {
+    if (path == bin_path) {
+      for (size_t i = 0; i < kernels.size(); ++i) {
+        if (kernels[i] == sig) {
+          out_idx = (int)i;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 void jit_cleanup() {

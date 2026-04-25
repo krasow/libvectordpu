@@ -44,6 +44,9 @@ struct VectorDesc {
   // try_vfuse from absorbing it on-stack, which would skip the MRAM write.
   bool is_shared_intermediate = false;
 
+  bool is_local_vector = false;
+  uint8_t local_reduce_opcode = OP_SUM;
+
   const char* type_name = nullptr;
   const char* debug_name = nullptr;
   const char* debug_file = nullptr;

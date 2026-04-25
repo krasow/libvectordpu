@@ -3,7 +3,9 @@
 #include <cassert>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <type_traits>
 
 #include "perfetto/trace.h"
@@ -103,6 +105,10 @@ void dpu_vector<T>::add_fence() {
 
   event_queue.submit(e);
   event_queue.process_events(e->id);
+}
+
+inline void dpu_fence() {
+  DpuRuntime::get().get_event_queue().sync();
 }
 
 template <typename T>
@@ -750,3 +756,211 @@ lazy_reduction_result<T> max(const dpu_vector<T>& a) {
                            OpInfo<T>::universal_pipeline);
   return lazy_reduction_result<T>(std::move(buf), OpInfo<T>::max);
 }
+
+namespace detail {
+inline uint8_t local_reduce_opcode(dpu_local_reduce_op op) {
+  switch (op) {
+    case dpu_local_reduce_op::sum:
+      return OP_SUM;
+    case dpu_local_reduce_op::product:
+      return OP_PRODUCT;
+    case dpu_local_reduce_op::min:
+      return OP_MIN;
+    case dpu_local_reduce_op::max:
+      return OP_MAX;
+  }
+  return OP_SUM;
+}
+
+template <typename T>
+T local_reduce_identity(dpu_local_reduce_op op) {
+  switch (op) {
+    case dpu_local_reduce_op::sum:
+      return static_cast<T>(0);
+    case dpu_local_reduce_op::product:
+      return static_cast<T>(1);
+    case dpu_local_reduce_op::min:
+      return std::numeric_limits<T>::max();
+    case dpu_local_reduce_op::max:
+      return std::numeric_limits<T>::lowest();
+  }
+  return static_cast<T>(0);
+}
+
+template <typename T>
+void local_reduce_apply(T& dst, const T& value, dpu_local_reduce_op op) {
+  switch (op) {
+    case dpu_local_reduce_op::sum:
+      dst += value;
+      return;
+    case dpu_local_reduce_op::product:
+      dst *= value;
+      return;
+    case dpu_local_reduce_op::min:
+      if (value < dst) dst = value;
+      return;
+    case dpu_local_reduce_op::max:
+      if (value > dst) dst = value;
+      return;
+  }
+}
+}  // namespace detail
+
+template <typename T>
+dpu_local_vector<T>::dpu_local_vector(uint32_t n, std::string_view name,
+                                      std::source_location loc)
+    : dpu_local_vector(n, dpu_local_reduce_op::sum, name, loc) {}
+
+template <typename T>
+dpu_local_vector<T>::dpu_local_vector(uint32_t n,
+                                      dpu_local_reduce_op reduce_op,
+                                      std::string_view name,
+                                      std::source_location loc)
+    : size_(n), reduce_op_(reduce_op) {
+  auto& runtime = DpuRuntime::get();
+  data_ = runtime.get_allocator().allocate_local_vector(n, sizeof(T));
+  data_->is_local_vector = true;
+  data_->local_reduce_opcode = detail::local_reduce_opcode(reduce_op_);
+  data_->type_name = typeid(T).name();
+  data_->debug_name = name.data();
+  data_->debug_file = loc.file_name();
+  data_->debug_line = loc.line();
+}
+
+template <typename T>
+vector<T> dpu_local_vector<T>::to_cpu() {
+  auto& runtime = DpuRuntime::get();
+  uint32_t nr_dpus = runtime.num_dpus();
+  runtime.get_event_queue().process_events(data_->last_producer_id);
+
+  if (data_->last_producer_id == 0) {
+    return std::vector<T>(size_, detail::local_reduce_identity<T>(reduce_op_));
+  }
+
+  std::vector<T> all_data(size_ * nr_dpus);
+  char* cpu_buffer = reinterpret_cast<char*>(all_data.data());
+  auto bound_cb = std::bind(detail::vec_xfer_from_dpu, cpu_buffer, data_);
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::HOST_TRANSFER, bound_cb);
+  e->inputs = {data_};
+  e->host_ptr = cpu_buffer;
+  e->transfer_size = all_data.size() * sizeof(T);
+
+  event_queue.submit(e);
+  event_queue.process_events(e->id);
+
+  std::vector<T> merged(size_, detail::local_reduce_identity<T>(reduce_op_));
+  for (uint32_t d = 0; d < nr_dpus; d++) {
+    const uint32_t base = d * size_;
+    for (uint32_t i = 0; i < size_; i++) {
+      detail::local_reduce_apply(merged[i], all_data[base + i], reduce_op_);
+    }
+  }
+  return merged;
+}
+
+#if JIT
+template <typename T>
+detail::jit_indirect_load_expr<T> dpu_vector<T>::operator[](
+    detail::jit_index_expr idx) const {
+  uint8_t op_id = idx.rec.add_operand(this->data_desc_ref());
+  idx.rec.rpn.push_back(OP_PUSH_INDEX);
+  idx.rec.rpn.push_back(OP_LOAD_INDIRECT);
+  idx.rec.rpn.push_back(op_id);
+  return {*this, idx.rec};
+}
+#endif
+
+#if JIT
+template <typename T>
+detail::jit_indirect_ref_expr<T> dpu_local_vector<T>::operator[](
+    const detail::jit_indirect_load_expr<T>& idx) {
+  return {*this, idx.rec};
+}
+#endif
+
+namespace detail {
+template <typename T>
+void jit_indirect_ref_expr<T>::operator++(int) {
+  if (vec.reduce_op() != dpu_local_reduce_op::sum) {
+    throw std::logic_error(
+        "dpu_local_vector::operator++ is only valid for sum reducers; use "
+        ".apply() for custom local reductions");
+  }
+  apply(static_cast<T>(1));
+}
+
+template <typename T>
+void jit_indirect_ref_expr<T>::apply(T value) {
+  uint8_t local_id = rec.add_local(vec.data_desc_ref());
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &value, sizeof(T) < 4 ? sizeof(T) : 4);
+  rec.rpn.push_back(OP_PUSH_SCALAR);
+  rec.rpn.push_back((uint8_t)(scalar_bits & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 8) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 16) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 24) & 0xFF));
+  rec.rpn.push_back(OP_APPLY_INDIRECT);
+  rec.rpn.push_back(local_id);
+  rec.rpn.push_back(detail::local_reduce_opcode(vec.reduce_op()));
+}
+}  // namespace detail
+
+#if JIT
+template <typename T, typename F>
+void dpu_jit_foreach(uint32_t n, F f) {
+  detail::jit_recorder rec;
+  detail::jit_index_expr idx{rec};
+
+  // Record the loop body
+  f(idx);
+
+  for (const auto& local : rec.locals) {
+    if (local && local->num_elements > MAX_LOCAL_VECTOR_SIZE) {
+      throw std::logic_error(
+          "dpu_local_vector exceeds MAX_LOCAL_VECTOR_SIZE for WRAM-backed JIT "
+          "lowering");
+    }
+  }
+  if (rec.locals.size() > MAX_LOCAL_SCRATCH_VECTORS) {
+    throw std::logic_error(
+        "too many dpu_local_vector scratch buffers for current JIT lowering");
+  }
+
+  // Submit JIT Kernel
+  auto& runtime = DpuRuntime::get();
+  auto& event_queue = runtime.get_event_queue();
+
+  std::shared_ptr<Event> e =
+      std::make_shared<Event>(Event::OperationType::COMPUTE);
+
+  // Compiler invocation
+  const char* tname = typeid(T).name();
+  if (std::is_same<T, int32_t>::value) tname = "int32_t";
+  if (std::is_same<T, float>::value) tname = "float";
+
+  std::vector<std::pair<std::vector<uint8_t>, std::string>> kernels = {
+      {rec.rpn, tname}};
+  std::string binary_path = jit_compile(kernels);
+
+  e->jit_binary_path = binary_path;
+  e->slice_name = "JIT Indirect Loop";
+  e->rpn_ops = rec.rpn;
+
+  // The generic pipeline launcher treats inputs[0] as the init vector used to
+  // derive per-DPU element counts, and maps inputs[1..] to binary_operands[].
+  // Indirect JIT loops index through rec.operands via OP_LOAD_INDIRECT, so
+  // mirror the first operand into the init slot while keeping the full operand
+  // list available as binary_operands[].
+  if (!rec.operands.empty()) {
+    e->inputs.push_back(rec.operands[0]);
+  }
+  e->inputs.insert(e->inputs.end(), rec.operands.begin(), rec.operands.end());
+  // Local vectors are mapped to extra_res_offsets
+  e->extra_outputs = rec.locals;
+
+  event_queue.submit(e);
+}
+#endif

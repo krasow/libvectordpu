@@ -46,8 +46,6 @@ void vec_xfer_to_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  [[maybe_unused]] size_t logical_size =
-      desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   trace::scoped_event trace_scoped("transfer", "vec_xfer_to_dpu");
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU,
@@ -70,8 +68,6 @@ void vec_xfer_from_dpu(char* cpu, VectorDescRef desc) {
   }
 
   uint32_t mram_location = desc->desc[0].ptr;
-  [[maybe_unused]] size_t logical_size =
-      desc->desc[0].size_bytes - desc->reserved_bytes;
   size_t xfer_size = desc->desc[0].allocated_bytes - desc->reserved_bytes;
   trace::scoped_event trace_scoped("transfer", "vec_xfer_from_dpu");
   CHECK_UPMEM(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU,
@@ -291,9 +287,10 @@ void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,
     const std::vector<VectorDescRef>& operands, KernelID kernel_id,
     const std::vector<uint32_t>& scalars,
+    const std::vector<uint32_t>& extra_scalars,
     const std::vector<VectorDescRef>& extra_outputs) {
   auto& runtime = DpuRuntime::get();
-  runtime.get_allocator().realize_allocation(res);
+  if (res) runtime.get_allocator().realize_allocation(res);
   if (init) runtime.get_allocator().realize_allocation(init);
   for (auto& op : operands) {
     if (op) runtime.get_allocator().realize_allocation(op);
@@ -314,13 +311,18 @@ void internal_launch_universal_pipeline(
         init ? init->element_size : (res ? res->element_size : 4);
 
     args[i].pipeline.init_offset = init ? init->desc[i].ptr : 0;
-    args[i].pipeline.res_offset = res->desc[i].ptr;
+    args[i].pipeline.res_offset = res ? res->desc[i].ptr : 0;
 
     for (size_t j = 0; j < MAX_HFUSE_CHAINS; ++j) {
       if (j < extra_outputs.size()) {
         args[i].pipeline.extra_res_offsets[j] = extra_outputs[j]->desc[i].ptr;
+        args[i].pipeline.local_sizes[j] = extra_outputs[j]->num_elements;
+        args[i].pipeline.local_reduce_ops[j] =
+            extra_outputs[j]->local_reduce_opcode;
       } else {
         args[i].pipeline.extra_res_offsets[j] = 0;
+        args[i].pipeline.local_sizes[j] = 0;
+        args[i].pipeline.local_reduce_ops[j] = OP_SUM;
       }
     }
 
@@ -346,6 +348,15 @@ void internal_launch_universal_pipeline(
         args[i].pipeline.scalars[j] = scalars[j];
       } else {
         args[i].pipeline.scalars[j] = 0;
+      }
+    }
+
+    // Map extra JIT scalars
+    for (size_t j = 0; j < 8; ++j) {
+      if (j < extra_scalars.size()) {
+        args[i].pipeline.extra_scalars[j] = extra_scalars[j];
+      } else {
+        args[i].pipeline.extra_scalars[j] = 0;
       }
     }
   }

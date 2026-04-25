@@ -59,6 +59,23 @@ detail::VectorDescRef allocator::allocate_upmem_vector(std::size_t n,
   return vec;
 }
 
+detail::VectorDescRef allocator::allocate_local_vector(std::size_t n,
+                                                       std::size_t size_type) {
+  std::lock_guard<std::recursive_mutex> lock(this->lock);
+  auto vec = std::make_shared<detail::VectorDesc>();
+  size_t sz = n * size_type;
+  size_t aligned_sz = (sz + 7) & ~7;
+  for (size_t i = 0; i < num_dpus_; i++) {
+    vec->desc.push_back(
+        {raw_allocate(i, aligned_sz), (uint32_t)sz, (uint32_t)aligned_sz});
+  }
+  vec->ptr_allocated = true;
+  vec->reserved_bytes = 0;
+  vec->element_size = size_type;
+  vec->num_elements = n;
+  return vec;
+}
+
 detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
     std::size_t n, std::size_t reserved, std::size_t size_type, bool lazy) {
   size_t sz = std::max((size_t)8, (n / num_dpus_) * size_type) + reserved;
@@ -74,7 +91,7 @@ detail::VectorDescRef allocator::allocate_upmem_vector_broadcast(
 }
 
 void allocator::realize_allocation(detail::VectorDescRef data) {
-  if (data->ptr_allocated) return;
+  if (!data || data->ptr_allocated) return;
   std::lock_guard<std::recursive_mutex> lock(this->lock);
   if (data->ptr_allocated) return;  // double check after lock
 

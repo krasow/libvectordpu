@@ -32,6 +32,33 @@ inline uint8_t map_to_var_op(uint8_t op) {
   }
 }
 
+inline uint8_t map_from_var_op(uint8_t op) {
+  switch (op) {
+    case OP_ADD_SCALAR_VAR:
+      return OP_ADD_SCALAR;
+    case OP_SUB_SCALAR_VAR:
+      return OP_SUB_SCALAR;
+    case OP_MUL_SCALAR_VAR:
+      return OP_MUL_SCALAR;
+    case OP_DIV_SCALAR_VAR:
+      return OP_DIV_SCALAR;
+    case OP_ASR_SCALAR_VAR:
+      return OP_ASR_SCALAR;
+    case OP_EQ_SCALAR_VAR:
+      return OP_EQ_SCALAR;
+    case OP_LT_SCALAR_VAR:
+      return OP_LT_SCALAR;
+    case OP_GT_SCALAR_VAR:
+      return OP_GT_SCALAR;
+    case OP_GE_SCALAR_VAR:
+      return OP_GE_SCALAR;
+    case OP_LE_SCALAR_VAR:
+      return OP_LE_SCALAR;
+    default:
+      return op;
+  }
+}
+
 // Expand a raw (unfused) event's opcode into its canonical RPN sequence.
 inline void build_default_rpn(const std::shared_ptr<Event>& e,
                               std::vector<uint8_t>& rpn,

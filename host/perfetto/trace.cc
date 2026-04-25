@@ -69,6 +69,16 @@ std::string opcode_to_string(uint8_t op) {
       return "SUM";
     case OP_PRODUCT:
       return "PRODUCT";
+    case OP_PUSH_INDEX:
+      return "PUSH_INDEX";
+    case OP_LOAD_INDIRECT:
+      return "LOAD_INDIRECT";
+    case OP_ADD_INDIRECT:
+      return "ADD_INDIRECT";
+    case OP_APPLY_INDIRECT:
+      return "APPLY_INDIRECT";
+    case OP_PUSH_SCALAR:
+      return "PUSH_SCALAR";
     case OP_NEXT_CHAIN:
       return "NEXT_CHAIN";
     case OP_PUSH_INPUT:
@@ -198,6 +208,47 @@ static std::string get_pipeline_breakdown(const Event& e) {
       breakdown += std::to_string(op_idx++) + ". " + res + " = " +
                    opcode_to_string(op) + "(" + s1 + ")\n";
       stack.push_back(res);
+    } else if (op == OP_PUSH_INDEX) {
+      stack.push_back("IDX");
+    } else if (op == OP_PUSH_SCALAR) {
+      if (i + sizeof(uint32_t) >= size) {
+        breakdown += "!!SCALAR_ERR!!\n";
+        break;
+      }
+      uint32_t scalar;
+      memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
+      i += sizeof(uint32_t);
+      stack.push_back(std::to_string(scalar));
+    } else if (op == OP_LOAD_INDIRECT) {
+      if (stack.size() < 1 || i + 1 >= size) {
+        breakdown += "!!INDIRECT_ERR!!\n";
+        break;
+      }
+      uint8_t operand_idx = ops[++i];
+      std::string idx = stack.back();
+      stack.pop_back();
+      std::string res = "st[" + std::to_string(stack.size()) + "]";
+      breakdown += std::to_string(op_idx++) + ". " + res + " = " +
+                   opcode_to_string(op) + "(In[" +
+                   std::to_string(operand_idx + 1) + "], " + idx + ")\n";
+      stack.push_back(res);
+    } else if (op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
+      size_t extra = (op == OP_APPLY_INDIRECT) ? 2 : 1;
+      if (stack.size() < 2 || i + extra >= size) {
+        breakdown += "!!INDIRECT_ERR!!\n";
+        break;
+      }
+      uint8_t local_idx = ops[++i];
+      uint8_t reduce_op = (op == OP_APPLY_INDIRECT) ? ops[++i] : OP_SUM;
+      std::string val = stack.back();
+      stack.pop_back();
+      std::string idx = stack.back();
+      stack.pop_back();
+      breakdown += std::to_string(op_idx++) + ". LOCAL[" +
+                   std::to_string(local_idx) + "][" + idx + "] = " +
+                   opcode_to_string(reduce_op) + "(LOCAL[" +
+                   std::to_string(local_idx) + "][" + idx + "], " + val +
+                   ")\n";
     }
   }
   if (!stack.empty()) breakdown += "Final Output: " + stack.back();
@@ -399,7 +450,7 @@ void execution_begin(std::shared_ptr<Event> e) {
       if (s.empty()) continue;
       if (!ops_str.empty()) ops_str += ", ";
       ops_str += s;
-      if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+      if (OP_INLINE_BYTES(op) > 0) i += OP_INLINE_BYTES(op);
     }
     TRACE_EVENT_BEGIN("events", perfetto::DynamicString(e->slice_name),
                       perfetto::Track(DPU_TRACK_ID), "id", e->id, "fused_ops",
@@ -444,7 +495,7 @@ static std::string rpn_ops_to_string(const std::vector<uint8_t>& rpn_ops) {
     if (s.empty()) continue;
     if (!ops_str.empty()) ops_str += ", ";
     ops_str += s;
-    if (IS_OP_SCALAR(op)) i += sizeof(uint32_t);
+    if (OP_INLINE_BYTES(op) > 0) i += OP_INLINE_BYTES(op);
   }
   return ops_str;
 }

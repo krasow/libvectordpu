@@ -30,10 +30,24 @@ enum KernelCategory {
 #define MAX_VFUSE_INPUTS 10
 #endif
 #ifndef MAX_PIPELINE_STACK_DEPTH
-#define MAX_PIPELINE_STACK_DEPTH 4
+#define MAX_PIPELINE_STACK_DEPTH 3
+#endif
+#ifndef MAX_LOCAL_VECTOR_SIZE
+#define MAX_LOCAL_VECTOR_SIZE 256
+#endif
+#ifndef MAX_LOCAL_SCRATCH_VECTORS
+#define MAX_LOCAL_SCRATCH_VECTORS 1
 #endif
 #ifndef MAX_HFUSE_CHAINS
 #define MAX_HFUSE_CHAINS 3
+#endif
+#ifndef MAX_PIPELINE_SCALARS
+// Large enough to hold scalars across a deeply-vfused accumulator chain — e.g.
+// linreg's DIM=10 loop contributes 10 per-dim weight scalars for the error
+// accumulation and 10 more shift-indices for the reduction phase, plus
+// prefix/suffix scalars.  Keep in sync with the on-DPU `scalars[]` storage
+// in the args struct.
+#define MAX_PIPELINE_SCALARS 64
 #endif
 
 #define MINIMUM_WRITE_SIZE 8
@@ -48,11 +62,21 @@ enum KernelCategory {
 
 // Sentinel: value is already on the WRAM stack — do not emit a push.
 #define PUSH_OP_ALREADY_ON_STACK 0xFF
+// Sentinel: the operand slot budget is full and no mapping could be assigned
+// to `vec`.  Callers must abandon the fusion attempt — treating this like
+// ALREADY_ON_STACK and emitting OP_DUP would silently duplicate whatever
+// happens to be on the stack and produce wrong results (linreg's grad[j] =
+// sum((dx[j]>>6) * error_shifted) became sum((dx[j]>>6)^2) until this was
+// split out).
+#define PUSH_OP_BUDGET_EXCEEDED 0xFE
 
 // Shared WRAM workspace per tasklet:
 //   input(1) + operands(MAX_VFUSE_INPUTS) + stack_buf(MAX_PIPELINE_STACK_DEPTH) + results(MAX_HFUSE_CHAINS)
-#define TASKLET_WORKSPACE_SIZE \
+#define BASE_TASKLET_WORKSPACE_SIZE \
     ((1 + MAX_VFUSE_INPUTS + MAX_PIPELINE_STACK_DEPTH + MAX_HFUSE_CHAINS) * BLOCK_SIZE * MINIMUM_WRITE_SIZE)
+#define LOCAL_VECTOR_WORKSPACE_BYTES (MAX_LOCAL_VECTOR_SIZE * sizeof(int32_t))
+#define TASKLET_WORKSPACE_SIZE \
+    (BASE_TASKLET_WORKSPACE_SIZE + MAX_LOCAL_SCRATCH_VECTORS * LOCAL_VECTOR_WORKSPACE_BYTES)
 
 typedef struct {
     uint32_t kernel;       // 4
@@ -87,8 +111,11 @@ typedef struct {
             uint32_t num_ops;
             uint8_t ops[MAX_VFUSE_OPS];          // Fixed size buffer for opcodes
             uint32_t binary_operands[MAX_VFUSE_INPUTS]; // Offsets for binary operands
-            uint32_t scalars[16]; // Scalar values for scalar operators
+            uint32_t scalars[MAX_PIPELINE_SCALARS]; // Scalar values for scalar operators
             uint32_t extra_res_offsets[MAX_HFUSE_CHAINS];
+            uint32_t local_sizes[MAX_HFUSE_CHAINS];
+            uint32_t local_reduce_ops[MAX_HFUSE_CHAINS];
+            uint32_t extra_scalars[8]; // Extra JIT configuration (e.g. bin counts)
         } pipeline;
     };
 } __attribute__((aligned(8))) DPU_LAUNCH_ARGS;

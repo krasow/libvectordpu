@@ -26,7 +26,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
       combined.push_back(vec);
       return (uint8_t)(OP_PUSH_OPERAND_0 + (combined.size() - 2));
     }
-    return PUSH_OP_ALREADY_ON_STACK;
+    return PUSH_OP_BUDGET_EXCEEDED;
   };
 
   std::vector<uint8_t> e_mapped;
@@ -37,7 +37,8 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push = get_push_op(e->inputs[0]);
-      if (push == PUSH_OP_ALREADY_ON_STACK) {
+      if (push == PUSH_OP_ALREADY_ON_STACK ||
+          push == PUSH_OP_BUDGET_EXCEEDED) {
         possible = false;
         break;
       }
@@ -50,7 +51,8 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
         break;
       }
       uint8_t push = get_push_op(e->inputs[idx]);
-      if (push == PUSH_OP_ALREADY_ON_STACK) {
+      if (push == PUSH_OP_ALREADY_ON_STACK ||
+          push == PUSH_OP_BUDGET_EXCEEDED) {
         possible = false;
         break;
       }
@@ -63,12 +65,18 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
       e_mapped.push_back(op);
       if (k + 1 < e_rpn.size())
         e_mapped.push_back(last_scalars.size() + e_rpn[++k]);
+    } else if (OP_INLINE_BYTES(op) > 0) {
+      e_mapped.push_back(op);
+      for (size_t m = 0; m < OP_INLINE_BYTES(op) && k + 1 < e_rpn.size(); ++m)
+        e_mapped.push_back(e_rpn[++k]);
     } else {
       e_mapped.push_back(op);
     }
   }
 
   if (!possible || last_rpn.size() + e_mapped.size() > MAX_VFUSE_OPS)
+    return false;
+  if (last_scalars.size() + e_scalars.size() > MAX_PIPELINE_SCALARS)
     return false;
 
   last->rpn_ops = last_rpn;
@@ -94,10 +102,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     if (s.empty()) continue;
     if (!ops.empty()) ops += ", ";
     ops += s;
-    if (IS_OP_SCALAR(op))
-      i += SCALAR_INLINE_BYTES;
-    else if (IS_OP_SCALAR_VAR(op))
-      i += SCALAR_VAR_INDEX_BYTES;
+    if (OP_INLINE_BYTES(op) > 0) i += OP_INLINE_BYTES(op);
   }
   last->slice_name = "Horiz-Fused: [" + ops + "]";
 
