@@ -32,11 +32,18 @@
     /* Pre-scan for operands and reductions */                                 \
     bool uses_input = false;                                                   \
     bool uses_op[MAX_VFUSE_INPUTS] = {false};                                  \
+    bool uses_scalar[MAX_PIPELINE_SCALARS] = {false};                          \
     oi = 0;                                                                    \
     while (oi < n_ops) {                                                       \
       uint8_t op = args.pipeline.ops[oi];                                      \
       if (IS_OP_SCALAR(op)) {                                                  \
         oi += 5; /* Opcode + 4 bytes scalar */                                 \
+        continue;                                                              \
+      }                                                                        \
+      if (op == OP_PUSH_SCALAR_VAR) {                                          \
+        if (oi + 1 < n_ops)                                                    \
+          uses_scalar[args.pipeline.ops[oi + 1]] = true;                       \
+        oi += 2; /* Opcode + 1 byte scalar index */                             \
         continue;                                                              \
       }                                                                        \
       if (op == OP_PUSH_INPUT)                                                 \
@@ -68,6 +75,12 @@
           acc = (TYPE)-1e30;                                                   \
           break;                                                               \
       }                                                                        \
+    }                                                                          \
+                                                                               \
+    TYPE scalar_vars[MAX_PIPELINE_SCALARS] = {0};                              \
+    for (int k = 0; k < MAX_PIPELINE_SCALARS; k++) {                           \
+      if (uses_scalar[k])                                                      \
+        scalar_vars[k] = (TYPE)args.pipeline.scalars[k];                       \
     }                                                                          \
                                                                                \
     for (blk = id << BLOCK_SIZE_LOG2; blk < n;                                 \
@@ -176,6 +189,15 @@
             }                                                                  \
           }                                                                    \
           oi += 5;                                                             \
+          continue;                                                            \
+        }                                                                      \
+        if (op == OP_PUSH_SCALAR_VAR) {                                        \
+          uint8_t idx = args.pipeline.ops[oi + 1];                              \
+          st_ptr[sp] = scratch_blks[sp];                                        \
+          st_is_temp[sp] = true;                                               \
+          for (i = 0; i < b_e; i++) st_ptr[sp][i] = scalar_vars[idx];          \
+          sp++;                                                                \
+          oi += 2;                                                             \
           continue;                                                            \
         }                                                                      \
         if (op == OP_DUP) {                                                    \

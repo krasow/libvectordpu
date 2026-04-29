@@ -343,7 +343,7 @@ void internal_launch_universal_pipeline(
     }
 
     // Map scalar arguments
-    for (size_t j = 0; j < 16; ++j) {
+    for (size_t j = 0; j < MAX_PIPELINE_SCALARS; ++j) {
       if (j < scalars.size()) {
         args[i].pipeline.scalars[j] = scalars[j];
       } else {
@@ -417,7 +417,8 @@ void launch_unary(VectorDescRef res, VectorDescRef rhs, KernelID kernel_id,
 void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
                                const std::vector<uint8_t>& ops,
                                const std::vector<VectorDescRef>& operands,
-                               KernelID kernel_id) {
+                               KernelID kernel_id,
+                               const std::vector<uint32_t>& scalars) {
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
 
@@ -431,6 +432,7 @@ void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
   e->output = res;
   e->rpn_ops = ops;
   e->kid = kernel_id;
+  e->scalars = scalars;
 
   // Detect reduction and flag result descriptor synchronously
   for (uint8_t op : ops) {

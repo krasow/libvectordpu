@@ -45,6 +45,14 @@ struct lazy_reduction_result;
 template <typename T>
 class dpu_local_vector;
 
+#if PIPELINE
+template <typename T>
+class dpu_pipeline_expr;
+
+template <typename T>
+using dpu_expr = dpu_pipeline_expr<T>;
+#endif
+
 namespace detail {
 struct jit_recorder {
   std::vector<uint8_t> rpn;
@@ -72,6 +80,10 @@ template <typename T>
 struct jit_indirect_load_expr {
   const dpu_vector<T>& vec;
   jit_recorder& rec;
+
+  jit_indirect_load_expr operator*(T rhs) const;
+  jit_indirect_load_expr operator+(T rhs) const;
+  jit_indirect_load_expr operator-(T rhs) const;
 };
 template <typename T>
 struct jit_indirect_ref_expr {
@@ -80,6 +92,7 @@ struct jit_indirect_ref_expr {
 
   void operator++(int);
   void apply(T value);
+  void apply(const jit_indirect_load_expr<T>& value);
 };
 }  // namespace detail
 
@@ -166,18 +179,29 @@ class dpu_vector {
  public:
   using reduction_result_t = typename reduction_result<T>::type;
 
-#if PIPELINE
+  #if PIPELINE
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops);
   pipeline_result<T> pipeline(const std::vector<uint8_t>& ops,
-                              const std::vector<dpu_vector<T>>& operands);
+                              const std::vector<dpu_vector<T>>& operands,
+                              const std::vector<uint32_t>& scalars = {});
   lazy_reduction_result<T> pipeline_reduce(
       const std::vector<uint8_t>& ops,
-      const std::vector<dpu_vector<T>>& operands = {});
+      const std::vector<dpu_vector<T>>& operands = {},
+      const std::vector<uint32_t>& scalars = {});
+  lazy_reduction_result<T> pipeline_reduce(
+      const dpu_pipeline_expr<T>& expr,
+      const std::vector<dpu_vector<T>>& operands = {},
+      const std::vector<uint32_t>& scalars = {});
+  template <typename F>
+  lazy_reduction_result<T> transform_reduce(
+      F&& build, const std::vector<dpu_vector<T>>& operands = {},
+      const std::vector<uint32_t>& scalars = {});
 #endif
-#if JIT
+  #if JIT
   pipeline_result<T> jit(const std::vector<uint8_t>& ops);
   pipeline_result<T> jit(const std::vector<uint8_t>& ops,
-                         const std::vector<dpu_vector<T>>& operands);
+                         const std::vector<dpu_vector<T>>& operands,
+                         const std::vector<uint32_t>& scalars = {});
 
   detail::jit_indirect_load_expr<T> operator[](detail::jit_index_expr idx) const;
 #endif
@@ -206,6 +230,106 @@ enum class dpu_local_reduce_op : uint8_t {
   min,
   max,
 };
+
+#if PIPELINE
+template <typename T>
+class dpu_pipeline_expr {
+ public:
+  dpu_pipeline_expr() = default;
+  explicit dpu_pipeline_expr(std::vector<uint8_t> ops) : ops_(std::move(ops)) {}
+
+  static dpu_pipeline_expr input() {
+    return dpu_pipeline_expr({(uint8_t)OP_PUSH_INPUT});
+  }
+
+  static dpu_pipeline_expr operand(uint8_t idx) {
+    return dpu_pipeline_expr({(uint8_t)(OP_PUSH_OPERAND_0 + idx)});
+  }
+
+  static dpu_pipeline_expr scalar(T value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(T) < 4 ? sizeof(T) : 4);
+    return dpu_pipeline_expr({
+        (uint8_t)OP_PUSH_SCALAR,
+        (uint8_t)(bits & 0xFF),
+        (uint8_t)((bits >> 8) & 0xFF),
+        (uint8_t)((bits >> 16) & 0xFF),
+        (uint8_t)((bits >> 24) & 0xFF),
+    });
+  }
+
+  static dpu_pipeline_expr scalar_var(uint8_t idx) {
+    return dpu_pipeline_expr({
+        (uint8_t)OP_PUSH_SCALAR_VAR,
+        idx,
+    });
+  }
+
+  dpu_pipeline_expr dup() const { return append(OP_DUP); }
+  dpu_pipeline_expr sqr() const { return dup().append(OP_MUL); }
+  dpu_pipeline_expr min() const { return append(OP_MIN); }
+  dpu_pipeline_expr max() const { return append(OP_MAX); }
+  dpu_pipeline_expr sum() const { return append(OP_SUM); }
+  dpu_pipeline_expr product() const { return append(OP_PRODUCT); }
+
+  dpu_pipeline_expr operator+(T rhs) const { return combine(scalar(rhs), OP_ADD); }
+  dpu_pipeline_expr operator-(T rhs) const { return combine(scalar(rhs), OP_SUB); }
+  dpu_pipeline_expr operator*(T rhs) const { return combine(scalar(rhs), OP_MUL); }
+  dpu_pipeline_expr operator/(T rhs) const { return combine(scalar(rhs), OP_DIV); }
+
+  const std::vector<uint8_t>& ops() const { return ops_; }
+
+  dpu_pipeline_expr operator+(const dpu_pipeline_expr& rhs) const {
+    return combine(rhs, OP_ADD);
+  }
+  dpu_pipeline_expr operator-(const dpu_pipeline_expr& rhs) const {
+    return combine(rhs, OP_SUB);
+  }
+  dpu_pipeline_expr operator<(const dpu_pipeline_expr& rhs) const {
+    return combine(rhs, OP_LT);
+  }
+  dpu_pipeline_expr operator*(const dpu_pipeline_expr& rhs) const {
+    return combine(rhs, OP_MUL);
+  }
+  dpu_pipeline_expr operator/(const dpu_pipeline_expr& rhs) const {
+    return combine(rhs, OP_DIV);
+  }
+
+  dpu_pipeline_expr select(const dpu_pipeline_expr& then_expr,
+                           const dpu_pipeline_expr& else_expr) const {
+    dpu_pipeline_expr out;
+    out.ops_.reserve(ops_.size() + then_expr.ops_.size() + else_expr.ops_.size() +
+                     1);
+    out.ops_.insert(out.ops_.end(), ops_.begin(), ops_.end());
+    out.ops_.insert(out.ops_.end(), then_expr.ops_.begin(), then_expr.ops_.end());
+    out.ops_.insert(out.ops_.end(), else_expr.ops_.begin(), else_expr.ops_.end());
+    out.ops_.push_back(OP_SELECT);
+    return out;
+  }
+
+ private:
+  std::vector<uint8_t> ops_;
+
+  dpu_pipeline_expr append(uint8_t op) const {
+    auto out = *this;
+    out.ops_.push_back(op);
+    return out;
+  }
+
+  dpu_pipeline_expr combine(const dpu_pipeline_expr& rhs, uint8_t op) const {
+    dpu_pipeline_expr out;
+    out.ops_.reserve(ops_.size() + rhs.ops_.size() + 1);
+    out.ops_.insert(out.ops_.end(), ops_.begin(), ops_.end());
+    out.ops_.insert(out.ops_.end(), rhs.ops_.begin(), rhs.ops_.end());
+    out.ops_.push_back(op);
+    return out;
+  }
+};
+
+template <typename T>
+lazy_reduction_result<T> min_squared_distance(std::vector<dpu_vector<T>>& cols,
+                                              const std::vector<T>& query);
+#endif
 
 #if PIPELINE
 template <typename T>
@@ -284,7 +408,8 @@ void internal_launch_reduction(VectorDescRef res, VectorDescRef rhs,
 void launch_universal_pipeline(VectorDescRef res, VectorDescRef init,
                                const std::vector<uint8_t>& ops,
                                const std::vector<VectorDescRef>& operands,
-                               KernelID kernel_id);
+                               KernelID kernel_id,
+                               const std::vector<uint32_t>& scalars = {});
 
 void internal_launch_universal_pipeline(
     VectorDescRef res, VectorDescRef init, const std::vector<uint8_t>& ops,

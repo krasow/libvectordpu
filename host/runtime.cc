@@ -83,11 +83,11 @@ void DpuRuntime::init(uint32_t num_dpus) {
                   << " DPUs..." << std::endl;
 #endif
 
-  // Allocate DPU set
-  dpu_set_ = new dpu_set_t();
-
   std::string backend_str = "backend=";
   backend_str += BACKEND;
+
+  // Allocate DPU set
+  dpu_set_ = new dpu_set_t();
 
   DPU_ASSERT(dpu_alloc(num_dpus_, backend_str.c_str(), dpu_set_));
 

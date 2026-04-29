@@ -79,6 +79,8 @@ std::string opcode_to_string(uint8_t op) {
       return "APPLY_INDIRECT";
     case OP_PUSH_SCALAR:
       return "PUSH_SCALAR";
+    case OP_PUSH_SCALAR_VAR:
+      return "PUSH_SCALAR_VAR";
     case OP_NEXT_CHAIN:
       return "NEXT_CHAIN";
     case OP_PUSH_INPUT:
@@ -210,7 +212,15 @@ static std::string get_pipeline_breakdown(const Event& e) {
       stack.push_back(res);
     } else if (op == OP_PUSH_INDEX) {
       stack.push_back("IDX");
-    } else if (op == OP_PUSH_SCALAR) {
+    } else if (op == OP_PUSH_SCALAR || op == OP_PUSH_SCALAR_VAR) {
+      if (op == OP_PUSH_SCALAR_VAR) {
+        if (i + 1 >= size) {
+          breakdown += "!!SCALAR_VAR_ERR!!\n";
+          break;
+        }
+        uint8_t idx = ops[++i];
+        stack.push_back("SCALAR[" + std::to_string(idx) + "]");
+      } else {
       if (i + sizeof(uint32_t) >= size) {
         breakdown += "!!SCALAR_ERR!!\n";
         break;
@@ -219,6 +229,7 @@ static std::string get_pipeline_breakdown(const Event& e) {
       memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
       i += sizeof(uint32_t);
       stack.push_back(std::to_string(scalar));
+      }
     } else if (op == OP_LOAD_INDIRECT) {
       if (stack.size() < 1 || i + 1 >= size) {
         breakdown += "!!INDIRECT_ERR!!\n";

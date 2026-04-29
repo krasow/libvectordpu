@@ -20,7 +20,7 @@ MAX_HFUSE_CHAINS ?= 10
 # vertical fusion: max RPN opcodes per chain (caps how deep chains can be fused)
 MAX_VFUSE_OPS ?= 128
 # vertical fusion: max distinct input vectors referenced per kernel
-MAX_VFUSE_INPUTS ?= 10
+MAX_VFUSE_INPUTS ?= 11
 
 ENABLE_OOM_RECOVERY ?= 1
 

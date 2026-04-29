@@ -7,7 +7,7 @@
 // vectors.  Both run in the same kernel pass as separate WRAM chains.
 bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
                            std::shared_ptr<Event> e) {
-  if (last->extra_outputs.size() >= MAX_HFUSE_CHAINS) return false;
+  if (last->extra_outputs.size() >= MAX_HFUSE_CHAINS - 1) return false;
 
   std::vector<uint8_t> last_rpn;
   std::vector<uint32_t> last_scalars;

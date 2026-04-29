@@ -144,6 +144,14 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
       return;
     }
     new_scalars = e->scalars;
+#if ENABLE_DPU_LOGGING >= 1
+    DpuRuntime::get().get_logger().lock()
+        << "[vfuse] inlined absorbed input into indirect consumer id="
+        << e->id << std::endl;
+#else
+    fprintf(stderr, "[vfuse] inlined absorbed input into indirect consumer id=%zu\n",
+            e->id);
+#endif
   } else {
     const auto& ai = in_vec->absorbed_inputs;
     size_t N = ai.size();
@@ -243,6 +251,14 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
         // producer.
         absorbed_vec->last_producer_id = e->id;
         it = operations_.erase(it);
+#if ENABLE_DPU_LOGGING >= 1
+        DpuRuntime::get().get_logger().lock()
+            << "[vfuse] erased absorbed producer id=" << op->id
+            << " for consumer id=" << e->id << std::endl;
+#else
+        fprintf(stderr, "[vfuse] erased absorbed producer id=%zu for consumer id=%zu\n",
+                op->id, e->id);
+#endif
       } else {
         ++it;
       }
@@ -296,7 +312,8 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
     } else if (IS_OP_SCALAR_VAR(op)) {
       e_ends_with_asr_scalar = op == OP_ASR_SCALAR_VAR;
       k += SCALAR_VAR_INDEX_BYTES;
-    } else if (op == OP_PUSH_SCALAR || op == OP_LOAD_INDIRECT ||
+    } else if (op == OP_PUSH_SCALAR || op == OP_PUSH_SCALAR_VAR ||
+               op == OP_LOAD_INDIRECT ||
                op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
       k += OP_INLINE_BYTES(op);
     } else if (op == OP_ADD) {

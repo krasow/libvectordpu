@@ -137,6 +137,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
   bool uses_input = false;
   bool uses_op[MAX_VFUSE_INPUTS] = {false};
   bool uses_local[MAX_HFUSE_CHAINS] = {false};
+  bool uses_scalar[MAX_PIPELINE_SCALARS] = {false};
   struct Chain {
     size_t start_op, end_op;
     bool is_reduction;
@@ -156,6 +157,9 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         uses_op[op - OP_PUSH_OPERAND_0] = true;
       else if (IS_OP_INDIRECT_UPDATE(op)) {
         if (i + 1 < end) uses_local[rpn_ops[i + 1]] = true;
+        i += OP_INLINE_BYTES(op);
+      } else if (op == OP_PUSH_SCALAR_VAR) {
+        if (i + 1 < end) uses_scalar[rpn_ops[i + 1]] = true;
         i += OP_INLINE_BYTES(op);
       } else if (OP_INLINE_BYTES(op) > 0)
         i += OP_INLINE_BYTES(op);
@@ -219,6 +223,14 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         break;
     }
   }
+
+  out << "    " << stack_type << " scalar_vars[MAX_PIPELINE_SCALARS] = {0};\n";
+  for (int k = 0; k < MAX_PIPELINE_SCALARS; ++k) {
+    if (!uses_scalar[k]) continue;
+    out << "    scalar_vars[" << k << "] = (" << stack_type
+        << ")args.pipeline.scalars[" << k << "];\n";
+  }
+  out << "\n";
   for (int k = 0; k < MAX_HFUSE_CHAINS; ++k) {
     if (!uses_local[k]) continue;
     out << "    if (local_size_" << k << " > MAX_LOCAL_VECTOR_SIZE)\n"
@@ -287,7 +299,6 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
     for (size_t op_idx = chain.start_op; op_idx < chain.end_op; ++op_idx) {
       uint8_t op = rpn_ops[op_idx];
-
       if (op == OP_PUSH_INPUT) {
         stack.push_back("((" + stack_type + ")input_blk[i])");
 
@@ -471,12 +482,19 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
             out << "            " << slot << " += " << val << ";\n";
             break;
         }
-      } else if (op == OP_PUSH_SCALAR) {
-        uint8_t b0 = rpn_ops[op_idx + 1], b1 = rpn_ops[op_idx + 2],
-                b2 = rpn_ops[op_idx + 3], b3 = rpn_ops[op_idx + 4];
-        int32_t val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
-        op_idx += SCALAR_INLINE_BYTES;
-        stack.push_back(std::to_string(val));
+      } else if (op == OP_PUSH_SCALAR || op == OP_PUSH_SCALAR_VAR) {
+        if (op == OP_PUSH_SCALAR_VAR) {
+          uint8_t idx = rpn_ops[op_idx + 1];
+          op_idx += SCALAR_VAR_INDEX_BYTES;
+          stack.push_back("scalar_vars[" + std::to_string((uint32_t)idx) +
+                          "]");
+        } else {
+          uint8_t b0 = rpn_ops[op_idx + 1], b1 = rpn_ops[op_idx + 2],
+                  b2 = rpn_ops[op_idx + 3], b3 = rpn_ops[op_idx + 4];
+          int32_t val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+          op_idx += SCALAR_INLINE_BYTES;
+          stack.push_back(std::to_string(val));
+        }
       }
     }  // op_idx
 
@@ -499,6 +517,69 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         << "] + blk), b_b_aligned);\n";
   }
   out << "    }\n";  // end block loop
+
+  // Cross-tasklet reduction for scalar reduction chains: each tasklet writes
+  // its local accumulator to scratchpad, tasklet 0 merges the per-tasklet
+  // partials, and then writes one per-DPU result back to MRAM.
+  bool has_reduction_chain = false;
+  for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
+    if (!chains[c_idx].is_reduction) continue;
+    has_reduction_chain = true;
+    out << "    {\n"
+        << "        uint64_t bf_scratch_" << c_idx << " = 0;\n"
+        << "        memcpy(&bf_scratch_" << c_idx << ", &acc_" << c_idx
+        << ", sizeof(" << stack_type << "));\n"
+        << "        reduction_scratchpad[id * 16 + " << c_idx
+        << "] = bf_scratch_" << c_idx << ";\n"
+        << "    }\n";
+  }
+  if (has_reduction_chain) {
+    out << "    barrier_wait(&my_barrier);\n"
+        << "    if (id == 0) {\n";
+    for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
+      if (!chains[c_idx].is_reduction) continue;
+      out << "        if (res_ptrs[" << c_idx << "]) {\n"
+          << "            " << stack_type << " tot_" << c_idx
+          << ";\n"
+          << "            memcpy(&tot_" << c_idx
+          << ", &reduction_scratchpad[" << c_idx
+          << "], sizeof(" << stack_type << "));\n"
+          << "            for (uint32_t t = 1; t < NR_TASKLETS; ++t) {\n"
+          << "                " << stack_type << " v_" << c_idx
+          << ";\n"
+          << "                memcpy(&v_" << c_idx
+          << ", &reduction_scratchpad[t * 16 + " << c_idx
+          << "], sizeof(" << stack_type << "));\n";
+      switch (chains[c_idx].reduction_op) {
+        case OP_SUM:
+          out << "                tot_" << c_idx << " += v_" << c_idx
+              << ";\n";
+          break;
+        case OP_PRODUCT:
+          out << "                tot_" << c_idx << " *= v_" << c_idx
+              << ";\n";
+          break;
+        case OP_MIN:
+          out << "                if (v_" << c_idx << " < tot_" << c_idx
+              << ") tot_" << c_idx << " = v_" << c_idx << ";\n";
+          break;
+        case OP_MAX:
+          out << "                if (v_" << c_idx << " > tot_" << c_idx
+              << ") tot_" << c_idx << " = v_" << c_idx << ";\n";
+          break;
+      }
+      out << "            }\n"
+          << "            uint64_t bf_final_" << c_idx << " = 0;\n"
+          << "            memcpy(&bf_final_" << c_idx << ", &tot_" << c_idx
+          << ", sizeof(" << stack_type << "));\n"
+          << "            mram_write(&bf_final_" << c_idx
+          << ", (__mram_ptr void *)res_ptrs[" << c_idx << "], "
+          << "MINIMUM_WRITE_SIZE);\n"
+          << "        }\n";
+    }
+    out << "    }\n"
+        << "    barrier_wait(&my_barrier);\n";
+  }
 
   // Cross-tasklet reduction: tasklet-local shards are merged in WRAM by tasklet 0,
   // then the combined local vector is written to MRAM once.
@@ -647,9 +728,11 @@ std::string jit_compile(
   // Compile each unique kernel to an object file (cached per signature).
   std::vector<std::string> object_files;
   for (const auto& sig : kernels) {
-    fprintf(stderr, "[JIT] Compiling RPN: ");
-    for (uint8_t op : sig.first) fprintf(stderr, "%u ", (unsigned)op);
-    fprintf(stderr, "\n");
+#if ENABLE_DPU_LOGGING >= 1
+    DpuRuntime::get().get_logger().lock() << "[JIT] Compiling RPN: ";
+    for (uint8_t op : sig.first) std::cerr << (unsigned)op << " ";
+    std::cerr << std::endl;
+#endif
     std::string obj_path;
     {
       std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
@@ -662,14 +745,26 @@ std::string jit_compile(
       const std::string c_path = build_dir + "/k_" + hash + ".c";
       obj_path = build_dir + "/k_" + hash + ".o";
 
+#if ENABLE_DPU_LOGGING >= 1
+      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] write " << c_path
+                                            << std::endl;
+#endif
       std::ofstream out(c_path);
       write_kernel_function(out, "k_" + hash, sig.first, sig.second);
       out.close();
+#if ENABLE_DPU_LOGGING >= 1
+      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] wrote " << c_path
+                                            << std::endl;
+#endif
 
       if (!compile_dpu_source(c_path, obj_path, true, include_flags)) {
         trace::jit_compile_end();
         throw std::runtime_error("JIT Compilation failed for " + c_path);
       }
+#if ENABLE_DPU_LOGGING >= 1
+      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] compiled "
+                                            << obj_path << std::endl;
+#endif
       {
         std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
         g_kernel_obj_cache[sig] = obj_path;
@@ -704,6 +799,10 @@ std::string jit_compile(
     trace::jit_compile_end();
     throw std::runtime_error("JIT Linking failed for " + binpath);
   }
+#if ENABLE_DPU_LOGGING >= 1
+  DpuRuntime::get().get_logger().lock() << "[JIT-DBG] linked " << binpath
+                                        << std::endl;
+#endif
 
   {
     std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);

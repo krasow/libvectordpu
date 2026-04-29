@@ -171,17 +171,27 @@ vector<T> dpu_vector<T>::to_cpu() {
   e->host_ptr = cpu_buffer;
   e->transfer_size = cpu_vec.size() * sizeof(T);
 
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[VECTOR-TO-CPU] submit size=" << cpu_vec.size()
+                << " bytes=" << e->transfer_size << " id=" << e->id << std::endl;
+#endif
   event_queue.submit(e);
 
 #if ENABLE_DPU_LOGGING >= 2
-  Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[queue-append] type=HOST_TRANSFER size=" << cpu_vec.size()
                 << std::endl;
 #endif
 
 // Auto-fence after DPU->HOST transfer if enabled
 #if ENABLE_AUTO_FENCING == 1
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[VECTOR-TO-CPU] wait id=" << e->id << std::endl;
+#endif
   event_queue.process_events(e->id);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[VECTOR-TO-CPU] done id=" << e->id << std::endl;
+#endif
 // need the event to be completed before reading printf output
 #if ENABLE_DPU_PRINTING == 1
   // read and print DPU logs to host stdout
@@ -526,22 +536,32 @@ std::vector<uint8_t> dpu_vector<T>::prepare_rpn(
 template <typename T>
 pipeline_result<T> dpu_vector<T>::pipeline(
     const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands) {
+    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint32_t>& scalars) {
   dpu_vector<T> res(this->size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
   res.data_desc_ref()->debug_name = "pipeline_intermediate";
   res.data_desc_ref()->debug_file = __FILE__;
   res.data_desc_ref()->debug_line = __LINE__;
   std::vector<uint8_t> rpn_ops = prepare_rpn(ops);
-
   std::vector<detail::VectorDescRef> operand_refs;
+  std::vector<detail::VectorDescRef> absorbed_inputs;
+  absorbed_inputs.push_back(this->data_desc_ref());
   for (const auto& op : operands) {
     operand_refs.push_back(op.data_desc_ref());
+    absorbed_inputs.push_back(op.data_desc_ref());
   }
 
+  // Mark the JIT-produced vector as an absorbable intermediate so a later
+  // consumer can inline it instead of forcing an MRAM round-trip.
+  res.data_desc_ref()->absorbed_rpn = rpn_ops;
+  res.data_desc_ref()->absorbed_scalars = scalars;
+  res.data_desc_ref()->absorbed_inputs = absorbed_inputs;
+  res.data_desc_ref()->is_shared_intermediate = true;
+
   detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
-                                    rpn_ops, operand_refs,
-                                    OpInfo<T>::universal_pipeline);
+                                     rpn_ops, operand_refs,
+                                     OpInfo<T>::universal_pipeline, scalars);
   return res;
 }
 #endif
@@ -557,7 +577,8 @@ pipeline_result<T> dpu_vector<T>::jit(const std::vector<uint8_t>& ops) {
 template <typename T>
 pipeline_result<T> dpu_vector<T>::jit(
     const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands) {
+    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint32_t>& scalars) {
   dpu_vector<T> res(this->size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
   res.data_desc_ref()->debug_name = "jit_result";
@@ -565,6 +586,20 @@ pipeline_result<T> dpu_vector<T>::jit(
   res.data_desc_ref()->debug_line = __LINE__;
 
   std::vector<uint8_t> rpn_ops = prepare_rpn(ops);
+  std::vector<detail::VectorDescRef> operand_refs;
+  std::vector<detail::VectorDescRef> absorbed_inputs;
+  absorbed_inputs.push_back(this->data_desc_ref());
+  for (const auto& op : operands) {
+    operand_refs.push_back(op.data_desc_ref());
+    absorbed_inputs.push_back(op.data_desc_ref());
+  }
+
+  // Allow later consumers to inline this JIT result rather than materializing
+  // it in MRAM if the queue can absorb it.
+  res.data_desc_ref()->absorbed_rpn = rpn_ops;
+  res.data_desc_ref()->absorbed_scalars = scalars;
+  res.data_desc_ref()->absorbed_inputs = absorbed_inputs;
+  res.data_desc_ref()->is_shared_intermediate = true;
 
   // Compiler invocation
   const char* tname;
@@ -578,10 +613,6 @@ pipeline_result<T> dpu_vector<T>::jit(
   std::vector<std::pair<std::vector<uint8_t>, std::string>> kernels = {
       {rpn_ops, tname}};
   std::string binary_path = jit_compile(kernels);
-  std::vector<detail::VectorDescRef> operand_refs;
-  for (const auto& op : operands) {
-    operand_refs.push_back(op.data_desc_ref());
-  }
 
   auto& runtime = DpuRuntime::get();
   auto& event_queue = runtime.get_event_queue();
@@ -597,6 +628,7 @@ pipeline_result<T> dpu_vector<T>::jit(
   e->inputs.push_back(this->data_desc_ref());
   e->inputs.insert(e->inputs.end(), operand_refs.begin(), operand_refs.end());
   e->rpn_ops = rpn_ops;
+  e->scalars = scalars;
   e->kid = 0;  // JIT kernel doesn't use standard IDs
   e->pipeline_kid = 0;
 
@@ -616,7 +648,8 @@ typename dpu_vector<T>::reduction_result_t lazy_reduction_result<T>::get() {
 template <typename T>
 lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
     const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands) {
+    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint32_t>& scalars) {
   auto& runtime = DpuRuntime::get();
 
   // Identify rid from last op
@@ -653,9 +686,33 @@ lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
 
   detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
                                     ops, operand_descs,
-                                    OpInfo<T>::universal_pipeline);
+                                    OpInfo<T>::universal_pipeline, scalars);
 
   return lazy_reduction_result<T>(std::move(res), rid);
+}
+
+template <typename T>
+lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
+    const dpu_pipeline_expr<T>& expr,
+    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint32_t>& scalars) {
+  return pipeline_reduce(expr.ops(), operands, scalars);
+}
+
+template <typename T>
+template <typename F>
+lazy_reduction_result<T> dpu_vector<T>::transform_reduce(
+    F&& build, const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint32_t>& scalars) {
+  std::vector<dpu_expr<T>> vars;
+  vars.reserve(operands.size() + 1);
+  vars.push_back(dpu_expr<T>::input());
+  for (size_t i = 0; i < operands.size(); ++i) {
+    vars.push_back(dpu_expr<T>::operand((uint8_t)i));
+  }
+
+  dpu_expr<T> expr = build(vars);
+  return pipeline_reduce(expr, operands, scalars);
 }
 #endif
 
@@ -831,7 +888,17 @@ template <typename T>
 vector<T> dpu_local_vector<T>::to_cpu() {
   auto& runtime = DpuRuntime::get();
   uint32_t nr_dpus = runtime.num_dpus();
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = runtime.get_logger();
+  logger.lock() << "[LOCAL-TO-CPU] wait compute last_producer_id="
+                << data_->last_producer_id << " size=" << size_
+                << " dpus=" << nr_dpus << std::endl;
+#endif
   runtime.get_event_queue().process_events(data_->last_producer_id);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[LOCAL-TO-CPU] compute complete last_producer_id="
+                << data_->last_producer_id << std::endl;
+#endif
 
   if (data_->last_producer_id == 0) {
     return std::vector<T>(size_, detail::local_reduce_identity<T>(reduce_op_));
@@ -848,8 +915,19 @@ vector<T> dpu_local_vector<T>::to_cpu() {
   e->host_ptr = cpu_buffer;
   e->transfer_size = all_data.size() * sizeof(T);
 
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[LOCAL-TO-CPU] host transfer submit bytes="
+                << e->transfer_size << std::endl;
+#endif
   event_queue.submit(e);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[LOCAL-TO-CPU] host transfer wait id=" << e->id << std::endl;
+#endif
   event_queue.process_events(e->id);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[LOCAL-TO-CPU] host transfer complete id=" << e->id
+                << std::endl;
+#endif
 
   std::vector<T> merged(size_, detail::local_reduce_identity<T>(reduce_op_));
   for (uint32_t d = 0; d < nr_dpus; d++) {
@@ -870,6 +948,50 @@ detail::jit_indirect_load_expr<T> dpu_vector<T>::operator[](
   idx.rec.rpn.push_back(OP_LOAD_INDIRECT);
   idx.rec.rpn.push_back(op_id);
   return {*this, idx.rec};
+}
+#endif
+
+#if JIT
+template <typename T>
+detail::jit_indirect_load_expr<T> detail::jit_indirect_load_expr<T>::operator*(
+    T rhs) const {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &rhs, sizeof(T) < 4 ? sizeof(T) : 4);
+  rec.rpn.push_back(OP_PUSH_SCALAR);
+  rec.rpn.push_back((uint8_t)(scalar_bits & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 8) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 16) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 24) & 0xFF));
+  rec.rpn.push_back(OP_MUL);
+  return {*this};
+}
+
+template <typename T>
+detail::jit_indirect_load_expr<T> detail::jit_indirect_load_expr<T>::operator+(
+    T rhs) const {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &rhs, sizeof(T) < 4 ? sizeof(T) : 4);
+  rec.rpn.push_back(OP_PUSH_SCALAR);
+  rec.rpn.push_back((uint8_t)(scalar_bits & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 8) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 16) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 24) & 0xFF));
+  rec.rpn.push_back(OP_ADD);
+  return {*this};
+}
+
+template <typename T>
+detail::jit_indirect_load_expr<T> detail::jit_indirect_load_expr<T>::operator-(
+    T rhs) const {
+  uint32_t scalar_bits = 0;
+  std::memcpy(&scalar_bits, &rhs, sizeof(T) < 4 ? sizeof(T) : 4);
+  rec.rpn.push_back(OP_PUSH_SCALAR);
+  rec.rpn.push_back((uint8_t)(scalar_bits & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 8) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 16) & 0xFF));
+  rec.rpn.push_back((uint8_t)((scalar_bits >> 24) & 0xFF));
+  rec.rpn.push_back(OP_SUB);
+  return {*this};
 }
 #endif
 
@@ -902,6 +1024,16 @@ void jit_indirect_ref_expr<T>::apply(T value) {
   rec.rpn.push_back((uint8_t)((scalar_bits >> 8) & 0xFF));
   rec.rpn.push_back((uint8_t)((scalar_bits >> 16) & 0xFF));
   rec.rpn.push_back((uint8_t)((scalar_bits >> 24) & 0xFF));
+  rec.rpn.push_back(OP_APPLY_INDIRECT);
+  rec.rpn.push_back(local_id);
+  rec.rpn.push_back(detail::local_reduce_opcode(vec.reduce_op()));
+}
+
+template <typename T>
+void jit_indirect_ref_expr<T>::apply(
+    const detail::jit_indirect_load_expr<T>& value) {
+  (void)value;
+  uint8_t local_id = rec.add_local(vec.data_desc_ref());
   rec.rpn.push_back(OP_APPLY_INDIRECT);
   rec.rpn.push_back(local_id);
   rec.rpn.push_back(detail::local_reduce_opcode(vec.reduce_op()));
@@ -943,7 +1075,16 @@ void dpu_jit_foreach(uint32_t n, F f) {
 
   std::vector<std::pair<std::vector<uint8_t>, std::string>> kernels = {
       {rec.rpn, tname}};
+#if ENABLE_DPU_LOGGING >= 2
+  Logger& logger = runtime.get_logger();
+  logger.lock() << "[JIT-FOREACH] compile start rpn=" << rec.rpn.size()
+                << " locals=" << rec.locals.size()
+                << " operands=" << rec.operands.size() << std::endl;
+#endif
   std::string binary_path = jit_compile(kernels);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[JIT-FOREACH] compile end" << std::endl;
+#endif
 
   e->jit_binary_path = binary_path;
   e->slice_name = "JIT Indirect Loop";
@@ -961,6 +1102,12 @@ void dpu_jit_foreach(uint32_t n, F f) {
   // Local vectors are mapped to extra_res_offsets
   e->extra_outputs = rec.locals;
 
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[JIT-FOREACH] submit start" << std::endl;
+#endif
   event_queue.submit(e);
+#if ENABLE_DPU_LOGGING >= 2
+  logger.lock() << "[JIT-FOREACH] submit end" << std::endl;
+#endif
 }
 #endif

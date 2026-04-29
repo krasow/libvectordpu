@@ -7,7 +7,7 @@
 #include <stdint.h>
 #endif
 
-#define BLOCK_SIZE_LOG2 4              // 16 elements per block (reduced for 10-operand WRAM budget)
+#define BLOCK_SIZE_LOG2 4              // 16 elements per block (reduced for the fused-input WRAM budget)
 #define BLOCK_SIZE (1U << BLOCK_SIZE_LOG2)
 
 typedef uint32_t KernelID;
@@ -27,10 +27,10 @@ enum KernelCategory {
 #define MAX_VFUSE_OPS 64
 #endif
 #ifndef MAX_VFUSE_INPUTS
-#define MAX_VFUSE_INPUTS 10
+#define MAX_VFUSE_INPUTS 11
 #endif
 #ifndef MAX_PIPELINE_STACK_DEPTH
-#define MAX_PIPELINE_STACK_DEPTH 3
+#define MAX_PIPELINE_STACK_DEPTH 2
 #endif
 #ifndef MAX_LOCAL_VECTOR_SIZE
 #define MAX_LOCAL_VECTOR_SIZE 256
@@ -39,15 +39,16 @@ enum KernelCategory {
 #define MAX_LOCAL_SCRATCH_VECTORS 1
 #endif
 #ifndef MAX_HFUSE_CHAINS
-#define MAX_HFUSE_CHAINS 3
+#define MAX_HFUSE_CHAINS 10
 #endif
 #ifndef MAX_PIPELINE_SCALARS
 // Large enough to hold scalars across a deeply-vfused accumulator chain — e.g.
 // linreg's DIM=10 loop contributes 10 per-dim weight scalars for the error
 // accumulation and 10 more shift-indices for the reduction phase, plus
-// prefix/suffix scalars.  Keep in sync with the on-DPU `scalars[]` storage
-// in the args struct.
-#define MAX_PIPELINE_SCALARS 64
+// prefix/suffix scalars.  Kmeans can also consume a larger scalar table for
+// centroid placeholders. Keep in sync with the on-DPU `scalars[]` storage in
+// the args struct.
+#define MAX_PIPELINE_SCALARS 128
 #endif
 
 #define MINIMUM_WRITE_SIZE 8

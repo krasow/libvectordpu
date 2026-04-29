@@ -209,6 +209,7 @@ pipeline_ops = [
     ('add_indirect', 'ADD_INDIRECT'),
     ('apply_indirect', 'APPLY_INDIRECT'),
     ('push_scalar', 'PUSH_SCALAR'),
+    ('push_scalar_var', 'PUSH_SCALAR_VAR'),
 ]
 
 with open("common/opcodes.h", "w") as out:
@@ -232,9 +233,10 @@ with open("common/opcodes.h", "w") as out:
     out.write('#define OP_INLINE_BYTES(op) \\\n')
     out.write('    (IS_OP_SCALAR(op) ? 4 : \\\n')
     out.write('     (IS_OP_SCALAR_VAR(op) ? 1 : \\\n')
-    out.write('      ((op) == OP_PUSH_SCALAR ? 4 : \\\n')
+    out.write('      (((op) == OP_PUSH_SCALAR) ? 4 : \\\n')
+    out.write('       ((op) == OP_PUSH_SCALAR_VAR ? 1 : \\\n')
     out.write('       (((op) == OP_LOAD_INDIRECT || (op) == OP_ADD_INDIRECT) ? 1 : \\\n')
-    out.write('        ((op) == OP_APPLY_INDIRECT ? 2 : 0)))))\n\n')
+    out.write('        ((op) == OP_APPLY_INDIRECT ? 2 : 0))))))\n\n')
 
     out.write('#endif // OPCODES_H\n')
 

@@ -19,6 +19,19 @@
 #define CHECK_UPMEM(x) DPU_ASSERT(x)
 #endif
 
+namespace {
+[[maybe_unused]]
+const char* canonical_jit_type_name(const char* raw_type_name) {
+  if (!raw_type_name) return "int32_t";
+  std::string tn = raw_type_name;
+  if (tn == "i" || tn == "int" || tn == "int32_t") return "int32_t";
+  if (tn == "j" || tn == "uint32_t") return "uint32_t";
+  if (tn == "f" || tn == "float") return "float";
+  if (tn == "d" || tn == "double") return "double";
+  return raw_type_name;
+}
+}  // namespace
+
 /*static*/ dpu_error_t upmem_callback([[maybe_unused]] struct dpu_set_t stream,
                                       [[maybe_unused]] uint32_t rank_id,
                                       void* data) {
@@ -121,8 +134,12 @@ bool EventQueue::process_next() {
     operations_.pop_front();
   }
 
-#if ENABLE_DPU_LOGGING >= 1
+  #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[QUEUE-NEXT] id=" << e->id << " type=" << (int)e->op
+                << " deps=" << e->dependencies.size()
+                << " started=" << (int)e->started
+                << " finished=" << (int)e->finished.load() << std::endl;
 #endif
 
 #if ENABLE_DPU_LOGGING >= 1
@@ -257,9 +274,12 @@ bool EventQueue::process_next() {
   if (e->op == Event::OperationType::COMPUTE &&
       (!e->rpn_ops.empty() || e->is_locked_for_jit)) {
     if (!e->is_locked_for_jit) {
-      std::string type_name = "int32_t";
-      if (!e->inputs.empty() && e->inputs[0])
-        type_name = e->inputs[0]->type_name;
+      const char* raw_type_name = nullptr;
+      if (e->output && e->output->type_name)
+        raw_type_name = e->output->type_name;
+      else if (!e->inputs.empty() && e->inputs[0])
+        raw_type_name = e->inputs[0]->type_name;
+      std::string type_name = canonical_jit_type_name(raw_type_name);
       std::pair<std::vector<uint8_t>, std::string> sig = {e->rpn_ops,
                                                           type_name};
       e->jit_binary_path = jit_compile({sig});
@@ -312,6 +332,10 @@ bool EventQueue::process_next() {
 
   // 7. Dispatch
   try {
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[QUEUE-DISPATCH] id=" << e->id << " type=" << (int)e->op
+                  << " begin" << std::endl;
+#endif
     switch (e->op) {
       case Event::OperationType::FENCE:
         this->add_fence(e);
@@ -353,23 +377,43 @@ bool EventQueue::process_next() {
       default:
         assert(false && "Unknown event type");
     }
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[QUEUE-DISPATCH] id=" << e->id << " type=" << (int)e->op
+                  << " end" << std::endl;
+#endif
   } catch (const DpuOOMException& ex) {
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[OOM] caught for event id=" << e->id
+                  << " started=" << e->started
+                  << " retries=" << e->oom_retries << std::endl;
+#endif
     if (++e->oom_retries > 2)
       throw DpuOOMException("DPU OOM: event id=" + std::to_string(e->id) +
                             " failed after 2 retries");
     e->started = false;
-    {
-      auto& alloc = DpuRuntime::get().get_allocator();
-      if (e->output) alloc.deallocate_upmem_vector(e->output.get());
-      for (auto& out : e->extra_outputs)
-        if (out) alloc.deallocate_upmem_vector(out.get());
-    }
+    std::vector<detail::VectorDescRef> outputs_to_free;
+    if (e->output) outputs_to_free.push_back(e->output);
+    for (auto& out : e->extra_outputs)
+      if (out) outputs_to_free.push_back(out);
     {
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       running_events_.remove(e);
+      if (current_event_ == e) current_event_ = nullptr;
+    }
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[OOM] freed failed outputs for event id=" << e->id
+                  << ", requeueing" << std::endl;
+#endif
+    auto& alloc = DpuRuntime::get().get_allocator();
+    for (auto& out : outputs_to_free) alloc.deallocate_upmem_vector(out.get());
+    {
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
       operations_.push_front(e);
       if (current_event_ == e) current_event_ = nullptr;
     }
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[OOM] event id=" << e->id << " requeued" << std::endl;
+#endif
     return NO_PROGRESS;
   }
 
@@ -379,6 +423,10 @@ bool EventQueue::process_next() {
 }
 
 void EventQueue::process_events(size_t wait_for_id) {
+#if ENABLE_DPU_LOGGING >= 1
+  Logger& logger = DpuRuntime::get().get_logger();
+  logger.lock() << "[QUEUE-WAIT] begin wait_for_id=" << wait_for_id << std::endl;
+#endif
   while (true) {
     bool progress = this->process_next();
 
@@ -391,13 +439,20 @@ void EventQueue::process_events(size_t wait_for_id) {
 
     auto& runtime = DpuRuntime::get();
     dpu_set_t& dpu_set = runtime.dpu_set();
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[QUEUE-WAIT] dpu_sync wait_for_id=" << wait_for_id
+                  << " last_finished=" << this->get_last_finished_id() << std::endl;
+#endif
     CHECK_UPMEM(dpu_sync(dpu_set));
+#if ENABLE_DPU_LOGGING >= 1
+    logger.lock() << "[QUEUE-WAIT] dpu_sync done wait_for_id=" << wait_for_id
+                  << " last_finished=" << this->get_last_finished_id() << std::endl;
+#endif
 
     if (!progress) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 #if ENABLE_DPU_LOGGING >= 1
     static size_t loop_count = 0;
     if (++loop_count % 1000 == 0) {
-      Logger& logger = DpuRuntime::get().get_logger();
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       logger.lock() << "[queue-heartbeat] process_events waiting for "
                     << wait_for_id
@@ -408,6 +463,10 @@ void EventQueue::process_events(size_t wait_for_id) {
     }
 #endif
   }
+#if ENABLE_DPU_LOGGING >= 1
+  logger.lock() << "[QUEUE-WAIT] end wait_for_id=" << wait_for_id
+                << " last_finished=" << this->get_last_finished_id() << std::endl;
+#endif
 }
 
 void EventQueue::debug_print_queue() {
