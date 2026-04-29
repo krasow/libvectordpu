@@ -1,6 +1,5 @@
 #include "jit.h"
 
-
 #if JIT
 #include <dlfcn.h>
 
@@ -183,10 +182,9 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
 
   for (int k = 0; k < MAX_HFUSE_CHAINS; ++k) {
     if (!uses_local[k]) continue;
-    out << "    uint32_t local_size_" << k
-        << " = args.pipeline.local_sizes[" << k << "];\n"
-        << "    " << type_name << " *local_accum_" << k
-        << " = (" << type_name
+    out << "    uint32_t local_size_" << k << " = args.pipeline.local_sizes["
+        << k << "];\n"
+        << "    " << type_name << " *local_accum_" << k << " = (" << type_name
         << " *)&dpu_workspace[id][BASE_TASKLET_WORKSPACE_SIZE + " << k
         << " * LOCAL_VECTOR_WORKSPACE_BYTES];\n";
   }
@@ -236,8 +234,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     out << "    if (local_size_" << k << " > MAX_LOCAL_VECTOR_SIZE)\n"
         << "        return -2;\n"
         << "    {\n"
-        << "        uint32_t local_init_" << k << " = local_size_" << k
-        << ";\n"
+        << "        uint32_t local_init_" << k << " = local_size_" << k << ";\n"
         << "        switch (args.pipeline.local_reduce_ops[" << k << "]) {\n"
         << "            case OP_SUM:\n"
         << "                for (uint32_t j = 0; j < local_init_" << k
@@ -456,7 +453,8 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         stack.push_back(res);
       } else if (op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
         uint8_t local_id = rpn_ops[++op_idx];
-        uint8_t reduce_op = (op == OP_ADD_INDIRECT) ? OP_SUM : rpn_ops[++op_idx];
+        uint8_t reduce_op =
+            (op == OP_ADD_INDIRECT) ? OP_SUM : rpn_ops[++op_idx];
         std::string val = stack.back();
         stack.pop_back();
         std::string idx = stack.back();
@@ -486,8 +484,7 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         if (op == OP_PUSH_SCALAR_VAR) {
           uint8_t idx = rpn_ops[op_idx + 1];
           op_idx += SCALAR_VAR_INDEX_BYTES;
-          stack.push_back("scalar_vars[" + std::to_string((uint32_t)idx) +
-                          "]");
+          stack.push_back("scalar_vars[" + std::to_string((uint32_t)idx) + "]");
         } else {
           uint8_t b0 = rpn_ops[op_idx + 1], b1 = rpn_ops[op_idx + 2],
                   b2 = rpn_ops[op_idx + 3], b3 = rpn_ops[op_idx + 4];
@@ -539,25 +536,20 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
     for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
       if (!chains[c_idx].is_reduction) continue;
       out << "        if (res_ptrs[" << c_idx << "]) {\n"
-          << "            " << stack_type << " tot_" << c_idx
-          << ";\n"
-          << "            memcpy(&tot_" << c_idx
-          << ", &reduction_scratchpad[" << c_idx
-          << "], sizeof(" << stack_type << "));\n"
+          << "            " << stack_type << " tot_" << c_idx << ";\n"
+          << "            memcpy(&tot_" << c_idx << ", &reduction_scratchpad["
+          << c_idx << "], sizeof(" << stack_type << "));\n"
           << "            for (uint32_t t = 1; t < NR_TASKLETS; ++t) {\n"
-          << "                " << stack_type << " v_" << c_idx
-          << ";\n"
+          << "                " << stack_type << " v_" << c_idx << ";\n"
           << "                memcpy(&v_" << c_idx
-          << ", &reduction_scratchpad[t * 16 + " << c_idx
-          << "], sizeof(" << stack_type << "));\n";
+          << ", &reduction_scratchpad[t * 16 + " << c_idx << "], sizeof("
+          << stack_type << "));\n";
       switch (chains[c_idx].reduction_op) {
         case OP_SUM:
-          out << "                tot_" << c_idx << " += v_" << c_idx
-              << ";\n";
+          out << "                tot_" << c_idx << " += v_" << c_idx << ";\n";
           break;
         case OP_PRODUCT:
-          out << "                tot_" << c_idx << " *= v_" << c_idx
-              << ";\n";
+          out << "                tot_" << c_idx << " *= v_" << c_idx << ";\n";
           break;
         case OP_MIN:
           out << "                if (v_" << c_idx << " < tot_" << c_idx
@@ -581,16 +573,18 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         << "    barrier_wait(&my_barrier);\n";
   }
 
-  // Cross-tasklet reduction: tasklet-local shards are merged in WRAM by tasklet 0,
-  // then the combined local vector is written to MRAM once.
+  // Cross-tasklet reduction: tasklet-local shards are merged in WRAM by tasklet
+  // 0, then the combined local vector is written to MRAM once.
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
     if (!uses_local[c_idx]) continue;
-    std::string local_ptr = "args.pipeline.extra_res_offsets[" + std::to_string(c_idx) + "]";
+    std::string local_ptr =
+        "args.pipeline.extra_res_offsets[" + std::to_string(c_idx) + "]";
     out << "    {\n"
         << "        barrier_wait(&my_barrier);\n"
         << "        if (id == 0) {\n"
-        << "            __mram_ptr " << type_name << " *local_ptr = (__mram_ptr "
-        << type_name << " *)(" << local_ptr << ");\n"
+        << "            __mram_ptr " << type_name
+        << " *local_ptr = (__mram_ptr " << type_name << " *)(" << local_ptr
+        << ");\n"
         << "            if (local_ptr) {\n"
         << "                for (uint32_t t = 1; t < NR_TASKLETS; ++t) {\n"
         << "                    " << type_name << " *src = (" << type_name
@@ -598,8 +592,8 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         << " * LOCAL_VECTOR_WORKSPACE_BYTES];\n"
         << "                    for (uint32_t j = 0; j < local_size_" << c_idx
         << "; ++j) {\n"
-        << "                        switch (args.pipeline.local_reduce_ops[" << c_idx
-        << "]) {\n"
+        << "                        switch (args.pipeline.local_reduce_ops["
+        << c_idx << "]) {\n"
         << "                            case OP_SUM:\n"
         << "                                local_accum_" << c_idx
         << "[j] += src[j];\n"
@@ -621,7 +615,8 @@ extern uint64_t reduction_scratchpad[NR_TASKLETS * 16];
         << "                }\n"
         << "                uint32_t local_bytes = local_size_" << c_idx
         << " * sizeof(" << type_name << ");\n"
-        << "                uint32_t local_bytes_aligned = (local_bytes + 7) & ~7;\n"
+        << "                uint32_t local_bytes_aligned = (local_bytes + 7) & "
+           "~7;\n"
         << "                mram_write(local_accum_" << c_idx
         << ", (__mram_ptr void *)local_ptr, local_bytes_aligned);\n"
         << "            }\n"
@@ -746,15 +741,15 @@ std::string jit_compile(
       obj_path = build_dir + "/k_" + hash + ".o";
 
 #if ENABLE_DPU_LOGGING >= 1
-      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] write " << c_path
-                                            << std::endl;
+      DpuRuntime::get().get_logger().lock()
+          << "[JIT-DBG] write " << c_path << std::endl;
 #endif
       std::ofstream out(c_path);
       write_kernel_function(out, "k_" + hash, sig.first, sig.second);
       out.close();
 #if ENABLE_DPU_LOGGING >= 1
-      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] wrote " << c_path
-                                            << std::endl;
+      DpuRuntime::get().get_logger().lock()
+          << "[JIT-DBG] wrote " << c_path << std::endl;
 #endif
 
       if (!compile_dpu_source(c_path, obj_path, true, include_flags)) {
@@ -762,8 +757,8 @@ std::string jit_compile(
         throw std::runtime_error("JIT Compilation failed for " + c_path);
       }
 #if ENABLE_DPU_LOGGING >= 1
-      DpuRuntime::get().get_logger().lock() << "[JIT-DBG] compiled "
-                                            << obj_path << std::endl;
+      DpuRuntime::get().get_logger().lock()
+          << "[JIT-DBG] compiled " << obj_path << std::endl;
 #endif
       {
         std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
@@ -800,8 +795,8 @@ std::string jit_compile(
     throw std::runtime_error("JIT Linking failed for " + binpath);
   }
 #if ENABLE_DPU_LOGGING >= 1
-  DpuRuntime::get().get_logger().lock() << "[JIT-DBG] linked " << binpath
-                                        << std::endl;
+  DpuRuntime::get().get_logger().lock()
+      << "[JIT-DBG] linked " << binpath << std::endl;
 #endif
 
   {
@@ -883,8 +878,8 @@ void EventQueue::lock_for_jit(std::shared_ptr<Event> e) {
   if (pending_jit_events_.size() >= JIT_BATCH_SIZE) flush_jit_batch();
 }
 
-bool jit_find_kernel_in_binary(const Signature& sig, const std::string& bin_path,
-                               int& out_idx) {
+bool jit_find_kernel_in_binary(const Signature& sig,
+                               const std::string& bin_path, int& out_idx) {
   std::lock_guard<std::recursive_mutex> lock(g_jit_cache_mutex);
   for (const auto& [kernels, path] : g_jit_cache) {
     if (path == bin_path) {

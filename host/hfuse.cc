@@ -37,8 +37,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
     uint8_t op = e_rpn[k];
     if (op == OP_PUSH_INPUT) {
       uint8_t push = get_push_op(e->inputs[0]);
-      if (push == PUSH_OP_ALREADY_ON_STACK ||
-          push == PUSH_OP_BUDGET_EXCEEDED) {
+      if (push == PUSH_OP_ALREADY_ON_STACK || push == PUSH_OP_BUDGET_EXCEEDED) {
         possible = false;
         break;
       }
@@ -51,8 +50,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
         break;
       }
       uint8_t push = get_push_op(e->inputs[idx]);
-      if (push == PUSH_OP_ALREADY_ON_STACK ||
-          push == PUSH_OP_BUDGET_EXCEEDED) {
+      if (push == PUSH_OP_ALREADY_ON_STACK || push == PUSH_OP_BUDGET_EXCEEDED) {
         possible = false;
         break;
       }

@@ -107,9 +107,7 @@ void dpu_vector<T>::add_fence() {
   event_queue.process_events(e->id);
 }
 
-inline void dpu_fence() {
-  DpuRuntime::get().get_event_queue().sync();
-}
+inline void dpu_fence() { DpuRuntime::get().get_event_queue().sync(); }
 
 template <typename T>
 dpu_vector<T> dpu_vector<T>::from_cpu(std::vector<T>& cpu_vec,
@@ -174,7 +172,8 @@ vector<T> dpu_vector<T>::to_cpu() {
 #if ENABLE_DPU_LOGGING >= 2
   Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[VECTOR-TO-CPU] submit size=" << cpu_vec.size()
-                << " bytes=" << e->transfer_size << " id=" << e->id << std::endl;
+                << " bytes=" << e->transfer_size << " id=" << e->id
+                << std::endl;
 #endif
   event_queue.submit(e);
 
@@ -535,8 +534,7 @@ std::vector<uint8_t> dpu_vector<T>::prepare_rpn(
 #if PIPELINE
 template <typename T>
 pipeline_result<T> dpu_vector<T>::pipeline(
-    const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint8_t>& ops, const std::vector<dpu_vector<T>>& operands,
     const std::vector<uint32_t>& scalars) {
   dpu_vector<T> res(this->size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
@@ -560,8 +558,8 @@ pipeline_result<T> dpu_vector<T>::pipeline(
   res.data_desc_ref()->is_shared_intermediate = true;
 
   detail::launch_universal_pipeline(res.data_desc_ref(), this->data_desc_ref(),
-                                     rpn_ops, operand_refs,
-                                     OpInfo<T>::universal_pipeline, scalars);
+                                    rpn_ops, operand_refs,
+                                    OpInfo<T>::universal_pipeline, scalars);
   return res;
 }
 #endif
@@ -576,8 +574,7 @@ pipeline_result<T> dpu_vector<T>::jit(const std::vector<uint8_t>& ops) {
 
 template <typename T>
 pipeline_result<T> dpu_vector<T>::jit(
-    const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint8_t>& ops, const std::vector<dpu_vector<T>>& operands,
     const std::vector<uint32_t>& scalars) {
   dpu_vector<T> res(this->size(), 0, true);
   res.data_desc_ref()->type_name = typeid(T).name();
@@ -647,8 +644,7 @@ typename dpu_vector<T>::reduction_result_t lazy_reduction_result<T>::get() {
 #if PIPELINE
 template <typename T>
 lazy_reduction_result<T> dpu_vector<T>::pipeline_reduce(
-    const std::vector<uint8_t>& ops,
-    const std::vector<dpu_vector<T>>& operands,
+    const std::vector<uint8_t>& ops, const std::vector<dpu_vector<T>>& operands,
     const std::vector<uint32_t>& scalars) {
   auto& runtime = DpuRuntime::get();
 
@@ -869,8 +865,7 @@ dpu_local_vector<T>::dpu_local_vector(uint32_t n, std::string_view name,
     : dpu_local_vector(n, dpu_local_reduce_op::sum, name, loc) {}
 
 template <typename T>
-dpu_local_vector<T>::dpu_local_vector(uint32_t n,
-                                      dpu_local_reduce_op reduce_op,
+dpu_local_vector<T>::dpu_local_vector(uint32_t n, dpu_local_reduce_op reduce_op,
                                       std::string_view name,
                                       std::source_location loc)
     : size_(n), reduce_op_(reduce_op) {
@@ -921,7 +916,8 @@ vector<T> dpu_local_vector<T>::to_cpu() {
 #endif
   event_queue.submit(e);
 #if ENABLE_DPU_LOGGING >= 2
-  logger.lock() << "[LOCAL-TO-CPU] host transfer wait id=" << e->id << std::endl;
+  logger.lock() << "[LOCAL-TO-CPU] host transfer wait id=" << e->id
+                << std::endl;
 #endif
   event_queue.process_events(e->id);
 #if ENABLE_DPU_LOGGING >= 2

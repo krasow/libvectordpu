@@ -4,9 +4,8 @@
 #if PIPELINE
 
 namespace {
-uint8_t get_or_add_push_op(
-    std::vector<detail::VectorDescRef>& inputs,
-    const detail::VectorDescRef& vec) {
+uint8_t get_or_add_push_op(std::vector<detail::VectorDescRef>& inputs,
+                           const detail::VectorDescRef& vec) {
   if (!vec) return PUSH_OP_BUDGET_EXCEEDED;
   if (!inputs.empty() && inputs[0] == vec) return OP_PUSH_INPUT;
   for (size_t i = 1; i < inputs.size(); ++i)
@@ -31,9 +30,9 @@ void append_inline_scalar(std::vector<uint8_t>& rpn, uint8_t op,
   rpn.push_back((uint8_t)((scalar >> 24) & 0xFF));
 }
 
-bool append_absorbed_rpn_inline(
-    const detail::VectorDescRef& vec,
-    std::vector<detail::VectorDescRef>& inputs, std::vector<uint8_t>& out) {
+bool append_absorbed_rpn_inline(const detail::VectorDescRef& vec,
+                                std::vector<detail::VectorDescRef>& inputs,
+                                std::vector<uint8_t>& out) {
   if (!vec || vec->absorbed_rpn.empty() || vec->absorbed_inputs.empty())
     return false;
 
@@ -60,8 +59,8 @@ bool append_absorbed_rpn_inline(
       return false;
     } else if (OP_INLINE_BYTES(op) > 0) {
       out.push_back(op);
-      for (size_t b = 0; b < OP_INLINE_BYTES(op) && i + 1 < vec->absorbed_rpn.size();
-           ++b)
+      for (size_t b = 0;
+           b < OP_INLINE_BYTES(op) && i + 1 < vec->absorbed_rpn.size(); ++b)
         out.push_back(vec->absorbed_rpn[++i]);
     } else {
       out.push_back(op);
@@ -146,10 +145,11 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
     new_scalars = e->scalars;
 #if ENABLE_DPU_LOGGING >= 1
     DpuRuntime::get().get_logger().lock()
-        << "[vfuse] inlined absorbed input into indirect consumer id="
-        << e->id << std::endl;
+        << "[vfuse] inlined absorbed input into indirect consumer id=" << e->id
+        << std::endl;
 #else
-    fprintf(stderr, "[vfuse] inlined absorbed input into indirect consumer id=%zu\n",
+    fprintf(stderr,
+            "[vfuse] inlined absorbed input into indirect consumer id=%zu\n",
             e->id);
 #endif
   } else {
@@ -256,7 +256,8 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
             << "[vfuse] erased absorbed producer id=" << op->id
             << " for consumer id=" << e->id << std::endl;
 #else
-        fprintf(stderr, "[vfuse] erased absorbed producer id=%zu for consumer id=%zu\n",
+        fprintf(stderr,
+                "[vfuse] erased absorbed producer id=%zu for consumer id=%zu\n",
                 op->id, e->id);
 #endif
       } else {
@@ -283,8 +284,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   // combined inputs list that no longer corresponds to the absorbed vec.
   for (uint8_t op : e->rpn_ops) {
     if (op == OP_LOAD_INDIRECT || op == OP_ADD_INDIRECT ||
-        op == OP_APPLY_INDIRECT ||
-        op == OP_PUSH_INDEX)
+        op == OP_APPLY_INDIRECT || op == OP_PUSH_INDEX)
       return false;
   }
 
@@ -313,8 +313,8 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       e_ends_with_asr_scalar = op == OP_ASR_SCALAR_VAR;
       k += SCALAR_VAR_INDEX_BYTES;
     } else if (op == OP_PUSH_SCALAR || op == OP_PUSH_SCALAR_VAR ||
-               op == OP_LOAD_INDIRECT ||
-               op == OP_ADD_INDIRECT || op == OP_APPLY_INDIRECT) {
+               op == OP_LOAD_INDIRECT || op == OP_ADD_INDIRECT ||
+               op == OP_APPLY_INDIRECT) {
       k += OP_INLINE_BYTES(op);
     } else if (op == OP_ADD) {
       e_ends_with_add = true;
@@ -351,8 +351,7 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
       if (in == vec) lib++;
     return lib <= internal;
   };
-  if (!consumes_accumulator_chain && !check_safety(on_stack))
-    return false;
+  if (!consumes_accumulator_chain && !check_safety(on_stack)) return false;
 
   bool e_uses_on_stack = false;
   for (const auto& in : e->inputs)

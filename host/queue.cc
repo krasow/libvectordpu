@@ -20,8 +20,8 @@
 #endif
 
 namespace {
-[[maybe_unused]]
-const char* canonical_jit_type_name(const char* raw_type_name) {
+[[maybe_unused]] const char* canonical_jit_type_name(
+    const char* raw_type_name) {
   if (!raw_type_name) return "int32_t";
   std::string tn = raw_type_name;
   if (tn == "i" || tn == "int" || tn == "int32_t") return "int32_t";
@@ -134,7 +134,7 @@ bool EventQueue::process_next() {
     operations_.pop_front();
   }
 
-  #if ENABLE_DPU_LOGGING >= 1
+#if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
   logger.lock() << "[QUEUE-NEXT] id=" << e->id << " type=" << (int)e->op
                 << " deps=" << e->dependencies.size()
@@ -384,8 +384,8 @@ bool EventQueue::process_next() {
   } catch (const DpuOOMException& ex) {
 #if ENABLE_DPU_LOGGING >= 1
     logger.lock() << "[OOM] caught for event id=" << e->id
-                  << " started=" << e->started
-                  << " retries=" << e->oom_retries << std::endl;
+                  << " started=" << e->started << " retries=" << e->oom_retries
+                  << std::endl;
 #endif
     if (++e->oom_retries > 2)
       throw DpuOOMException("DPU OOM: event id=" + std::to_string(e->id) +
@@ -425,7 +425,8 @@ bool EventQueue::process_next() {
 void EventQueue::process_events(size_t wait_for_id) {
 #if ENABLE_DPU_LOGGING >= 1
   Logger& logger = DpuRuntime::get().get_logger();
-  logger.lock() << "[QUEUE-WAIT] begin wait_for_id=" << wait_for_id << std::endl;
+  logger.lock() << "[QUEUE-WAIT] begin wait_for_id=" << wait_for_id
+                << std::endl;
 #endif
   while (true) {
     bool progress = this->process_next();
@@ -441,12 +442,14 @@ void EventQueue::process_events(size_t wait_for_id) {
     dpu_set_t& dpu_set = runtime.dpu_set();
 #if ENABLE_DPU_LOGGING >= 1
     logger.lock() << "[QUEUE-WAIT] dpu_sync wait_for_id=" << wait_for_id
-                  << " last_finished=" << this->get_last_finished_id() << std::endl;
+                  << " last_finished=" << this->get_last_finished_id()
+                  << std::endl;
 #endif
     CHECK_UPMEM(dpu_sync(dpu_set));
 #if ENABLE_DPU_LOGGING >= 1
     logger.lock() << "[QUEUE-WAIT] dpu_sync done wait_for_id=" << wait_for_id
-                  << " last_finished=" << this->get_last_finished_id() << std::endl;
+                  << " last_finished=" << this->get_last_finished_id()
+                  << std::endl;
 #endif
 
     if (!progress) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -465,7 +468,8 @@ void EventQueue::process_events(size_t wait_for_id) {
   }
 #if ENABLE_DPU_LOGGING >= 1
   logger.lock() << "[QUEUE-WAIT] end wait_for_id=" << wait_for_id
-                << " last_finished=" << this->get_last_finished_id() << std::endl;
+                << " last_finished=" << this->get_last_finished_id()
+                << std::endl;
 #endif
 }
 
@@ -582,8 +586,7 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   // add arrives and the two can vfuse together.  This also applies after a
   // reduction: in linreg's gradient fanout, `dx[j] >> shift` must wait for its
   // multiply/sum consumer so only complete reduction chains are hfused.
-  if (e->is_scalar && e->rpn_ops.empty())
-    return false;
+  if (e->is_scalar && e->rpn_ops.empty()) return false;
 
   // Don't hfuse an event whose output is marked for inline absorption.
   // The next consumer will expand it via absorbed_rpn; hfusing it now just
@@ -669,9 +672,8 @@ void EventQueue::submit(std::shared_ptr<Event> e) {
     // Set absorbed_rpn so expand_absorbed_inputs can inline standalone events
     // (e.g. unary negate) into the first consumer's event, enabling chain
     // growth.
-    if (e->op == Event::OperationType::COMPUTE &&
-        !IS_OP_REDUCTION(e->opcode) && e->output && !e->inputs.empty() &&
-        e->extra_outputs.empty()) {
+    if (e->op == Event::OperationType::COMPUTE && !IS_OP_REDUCTION(e->opcode) &&
+        e->output && !e->inputs.empty() && e->extra_outputs.empty()) {
       std::vector<uint8_t> rpn;
       std::vector<uint32_t> scalars;
       build_default_rpn(e, rpn, scalars);

@@ -41,9 +41,8 @@
         continue;                                                              \
       }                                                                        \
       if (op == OP_PUSH_SCALAR_VAR) {                                          \
-        if (oi + 1 < n_ops)                                                    \
-          uses_scalar[args.pipeline.ops[oi + 1]] = true;                       \
-        oi += 2; /* Opcode + 1 byte scalar index */                             \
+        if (oi + 1 < n_ops) uses_scalar[args.pipeline.ops[oi + 1]] = true;     \
+        oi += 2; /* Opcode + 1 byte scalar index */                            \
         continue;                                                              \
       }                                                                        \
       if (op == OP_PUSH_INPUT)                                                 \
@@ -79,8 +78,7 @@
                                                                                \
     TYPE scalar_vars[MAX_PIPELINE_SCALARS] = {0};                              \
     for (int k = 0; k < MAX_PIPELINE_SCALARS; k++) {                           \
-      if (uses_scalar[k])                                                      \
-        scalar_vars[k] = (TYPE)args.pipeline.scalars[k];                       \
+      if (uses_scalar[k]) scalar_vars[k] = (TYPE)args.pipeline.scalars[k];     \
     }                                                                          \
                                                                                \
     for (blk = id << BLOCK_SIZE_LOG2; blk < n;                                 \
@@ -192,8 +190,8 @@
           continue;                                                            \
         }                                                                      \
         if (op == OP_PUSH_SCALAR_VAR) {                                        \
-          uint8_t idx = args.pipeline.ops[oi + 1];                              \
-          st_ptr[sp] = scratch_blks[sp];                                        \
+          uint8_t idx = args.pipeline.ops[oi + 1];                             \
+          st_ptr[sp] = scratch_blks[sp];                                       \
           st_is_temp[sp] = true;                                               \
           for (i = 0; i < b_e; i++) st_ptr[sp][i] = scalar_vars[idx];          \
           sp++;                                                                \

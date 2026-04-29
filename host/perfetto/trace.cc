@@ -221,14 +221,14 @@ static std::string get_pipeline_breakdown(const Event& e) {
         uint8_t idx = ops[++i];
         stack.push_back("SCALAR[" + std::to_string(idx) + "]");
       } else {
-      if (i + sizeof(uint32_t) >= size) {
-        breakdown += "!!SCALAR_ERR!!\n";
-        break;
-      }
-      uint32_t scalar;
-      memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
-      i += sizeof(uint32_t);
-      stack.push_back(std::to_string(scalar));
+        if (i + sizeof(uint32_t) >= size) {
+          breakdown += "!!SCALAR_ERR!!\n";
+          break;
+        }
+        uint32_t scalar;
+        memcpy(&scalar, &ops[i + 1], sizeof(uint32_t));
+        i += sizeof(uint32_t);
+        stack.push_back(std::to_string(scalar));
       }
     } else if (op == OP_LOAD_INDIRECT) {
       if (stack.size() < 1 || i + 1 >= size) {
@@ -256,10 +256,9 @@ static std::string get_pipeline_breakdown(const Event& e) {
       std::string idx = stack.back();
       stack.pop_back();
       breakdown += std::to_string(op_idx++) + ". LOCAL[" +
-                   std::to_string(local_idx) + "][" + idx + "] = " +
-                   opcode_to_string(reduce_op) + "(LOCAL[" +
-                   std::to_string(local_idx) + "][" + idx + "], " + val +
-                   ")\n";
+                   std::to_string(local_idx) + "][" + idx +
+                   "] = " + opcode_to_string(reduce_op) + "(LOCAL[" +
+                   std::to_string(local_idx) + "][" + idx + "], " + val + ")\n";
     }
   }
   if (!stack.empty()) breakdown += "Final Output: " + stack.back();
