@@ -1,4 +1,5 @@
 #include <barrier.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +41,11 @@
         oi += 5; /* Opcode + 4 bytes scalar */                                 \
         continue;                                                              \
       }                                                                        \
+      if (IS_OP_SCALAR_VAR(op)) {                                              \
+        if (oi + 1 < n_ops) uses_scalar[args.pipeline.ops[oi + 1]] = true;     \
+        oi += 2; /* Opcode + 1 byte scalar index */                            \
+        continue;                                                              \
+      }                                                                        \
       if (op == OP_PUSH_SCALAR_VAR) {                                          \
         if (oi + 1 < n_ops) uses_scalar[args.pipeline.ops[oi + 1]] = true;     \
         oi += 2; /* Opcode + 1 byte scalar index */                            \
@@ -68,10 +74,10 @@
           acc = (TYPE)1;                                                       \
           break;                                                               \
         case OP_MIN:                                                           \
-          acc = (TYPE)1e30; /* Rough infinity for now */                       \
+          acc = (TYPE)INT32_MAX;                                               \
           break;                                                               \
         case OP_MAX:                                                           \
-          acc = (TYPE)-1e30;                                                   \
+          acc = (TYPE)INT32_MIN;                                               \
           break;                                                               \
       }                                                                        \
     }                                                                          \
@@ -157,6 +163,15 @@
               case OP_LT_SCALAR:                                               \
                 for (i = 0; i < b_e; i++) dest[i] = (s1[i] < scalar);          \
                 break;                                                         \
+              case OP_GT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] > scalar);          \
+                break;                                                         \
+              case OP_GE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] >= scalar);         \
+                break;                                                         \
+              case OP_LE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] <= scalar);         \
+                break;                                                         \
             }                                                                  \
             st_ptr[sp - 1] = dest;                                             \
             st_is_temp[sp - 1] = true;                                         \
@@ -184,8 +199,113 @@
               case OP_LT_SCALAR:                                               \
                 for (i = 0; i < b_e; i++) s1[i] = (s1[i] < scalar);            \
                 break;                                                         \
+              case OP_GT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] > scalar);            \
+                break;                                                         \
+              case OP_GE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] >= scalar);           \
+                break;                                                         \
+              case OP_LE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] <= scalar);           \
+                break;                                                         \
             }                                                                  \
           }                                                                    \
+          oi += 5;                                                             \
+          continue;                                                            \
+        }                                                                      \
+        if (IS_OP_SCALAR_VAR(op)) {                                            \
+          TYPE *s1 = st_ptr[sp - 1];                                           \
+          uint8_t idx = args.pipeline.ops[oi + 1];                             \
+          TYPE scalar = scalar_vars[idx];                                      \
+          uint8_t base =                                                       \
+              op - (OP_ADD_SCALAR_VAR - OP_ADD_SCALAR);                        \
+                                                                               \
+          if (!st_is_temp[sp - 1]) {                                           \
+            TYPE *dest = scratch_blks[sp - 1];                                 \
+            switch (base) {                                                    \
+              case OP_ADD_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] + scalar;            \
+                break;                                                         \
+              case OP_SUB_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] - scalar;            \
+                break;                                                         \
+              case OP_MUL_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] * scalar;            \
+                break;                                                         \
+              case OP_DIV_SCALAR:                                              \
+                for (i = 0; i < b_e; i++)                                      \
+                  dest[i] = (scalar != (TYPE)0) ? s1[i] / scalar : (TYPE)0;    \
+                break;                                                         \
+              case OP_ASR_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) dest[i] = s1[i] >> scalar;           \
+                break;                                                         \
+              case OP_EQ_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] == scalar);         \
+                break;                                                         \
+              case OP_LT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] < scalar);          \
+                break;                                                         \
+              case OP_GT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] > scalar);          \
+                break;                                                         \
+              case OP_GE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] >= scalar);         \
+                break;                                                         \
+              case OP_LE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) dest[i] = (s1[i] <= scalar);         \
+                break;                                                         \
+            }                                                                  \
+            st_ptr[sp - 1] = dest;                                             \
+            st_is_temp[sp - 1] = true;                                         \
+          } else {                                                             \
+            switch (base) {                                                    \
+              case OP_ADD_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] += scalar;                     \
+                break;                                                         \
+              case OP_SUB_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] -= scalar;                     \
+                break;                                                         \
+              case OP_MUL_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] *= scalar;                     \
+                break;                                                         \
+              case OP_DIV_SCALAR:                                              \
+                for (i = 0; i < b_e; i++)                                      \
+                  if (scalar != (TYPE)0) s1[i] /= scalar;                      \
+                break;                                                         \
+              case OP_ASR_SCALAR:                                              \
+                for (i = 0; i < b_e; i++) s1[i] >>= scalar;                    \
+                break;                                                         \
+              case OP_EQ_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] == scalar);           \
+                break;                                                         \
+              case OP_LT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] < scalar);            \
+                break;                                                         \
+              case OP_GT_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] > scalar);            \
+                break;                                                         \
+              case OP_GE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] >= scalar);           \
+                break;                                                         \
+              case OP_LE_SCALAR:                                               \
+                for (i = 0; i < b_e; i++) s1[i] = (s1[i] <= scalar);           \
+                break;                                                         \
+            }                                                                  \
+          }                                                                    \
+          oi += 2;                                                             \
+          continue;                                                            \
+        }                                                                      \
+        if (op == OP_PUSH_SCALAR) {                                            \
+          int32_t val;                                                         \
+          uint8_t b0 = args.pipeline.ops[oi + 1];                              \
+          uint8_t b1 = args.pipeline.ops[oi + 2];                              \
+          uint8_t b2 = args.pipeline.ops[oi + 3];                              \
+          uint8_t b3 = args.pipeline.ops[oi + 4];                              \
+          val = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));           \
+          st_ptr[sp] = scratch_blks[sp];                                       \
+          st_is_temp[sp] = true;                                               \
+          for (i = 0; i < b_e; i++) st_ptr[sp][i] = (TYPE)val;                 \
+          sp++;                                                                \
           oi += 5;                                                             \
           continue;                                                            \
         }                                                                      \
@@ -254,6 +374,15 @@
               case OP_LT:                                                      \
                 for (i = 0; i < b_e; i++) dest[i] = (s2[i] < s1[i]);           \
                 break;                                                         \
+              case OP_GT:                                                      \
+                for (i = 0; i < b_e; i++) dest[i] = (s2[i] > s1[i]);           \
+                break;                                                         \
+              case OP_GE:                                                      \
+                for (i = 0; i < b_e; i++) dest[i] = (s2[i] >= s1[i]);          \
+                break;                                                         \
+              case OP_LE:                                                      \
+                for (i = 0; i < b_e; i++) dest[i] = (s2[i] <= s1[i]);          \
+                break;                                                         \
             }                                                                  \
             st_ptr[sp - 1] = dest;                                             \
             st_is_temp[sp - 1] = true;                                         \
@@ -280,6 +409,15 @@
                 break;                                                         \
               case OP_LT:                                                      \
                 for (i = 0; i < b_e; i++) s2[i] = (s2[i] < s1[i]);             \
+                break;                                                         \
+              case OP_GT:                                                      \
+                for (i = 0; i < b_e; i++) s2[i] = (s2[i] > s1[i]);             \
+                break;                                                         \
+              case OP_GE:                                                      \
+                for (i = 0; i < b_e; i++) s2[i] = (s2[i] >= s1[i]);            \
+                break;                                                         \
+              case OP_LE:                                                      \
+                for (i = 0; i < b_e; i++) s2[i] = (s2[i] <= s1[i]);            \
                 break;                                                         \
             }                                                                  \
           }                                                                    \

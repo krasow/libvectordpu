@@ -7,6 +7,11 @@
 // vectors.  Both run in the same kernel pass as separate WRAM chains.
 bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
                            std::shared_ptr<Event> e) {
+#if !JIT
+  (void)last;
+  (void)e;
+  return false;
+#else
   if (last->extra_outputs.size() >= MAX_HFUSE_CHAINS - 1) return false;
 
   std::vector<uint8_t> last_rpn;
@@ -112,6 +117,7 @@ bool EventQueue::try_hfuse(std::shared_ptr<Event> last,
   trace::event_fused(e, last, "");
   trace::inqueue_end(e);
   return true;
+#endif
 }
 
 #endif  // PIPELINE

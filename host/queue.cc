@@ -347,7 +347,7 @@ bool EventQueue::process_next() {
           KernelID dynamic_kid =
               e->is_locked_for_jit
                   ? (KernelID)(JIT_STATIC_KERNEL_COUNT + e->jit_sub_kernel_idx)
-                  : e->kid;
+                  : e->pipeline_kid;
           detail::internal_launch_universal_pipeline(
               e->output, (e->inputs.empty() ? nullptr : e->inputs[0]),
               e->rpn_ops,
@@ -555,6 +555,12 @@ bool EventQueue::try_fuse(std::shared_ptr<Event> last,
   }
 
   if (dependent) return try_vfuse(last, e);
+
+#if !JIT
+  // The non-JIT universal pipeline backend does not implement multi-chain
+  // NEXT_CHAIN execution. Keep its fusion model to vertical-only composition.
+  return false;
+#endif
 
   // If e already inlined last's output via absorbed_rpn, horizontally fusing
   // last as a separate chain would duplicate that work and shift result slots.

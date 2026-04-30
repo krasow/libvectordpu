@@ -212,7 +212,7 @@ void internal_launch_unary(VectorDescRef res, VectorDescRef rhs,
 
   for (uint32_t i = 0; i < nr_of_dpus; i++) {
     args[i].kernel = static_cast<uint32_t>(kernel_id);
-    args[i].ktype = static_cast<uint8_t>(KERNEL_UNARY);
+    args[i].ktype = static_cast<uint8_t>(KERNEL_PIPELINE);
     args[i].num_elements = rhs->desc[i].size_bytes / rhs->element_size;
     args[i].size_type = rhs->element_size;
     args[i].unary.rhs_offset = (rhs->desc[i].ptr);

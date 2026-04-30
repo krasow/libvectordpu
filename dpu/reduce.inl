@@ -1,5 +1,7 @@
 #include <assert.h>
+#include <limits.h>
 #include <mram.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "stdio.h"
@@ -42,12 +44,22 @@ void print_args(DPU_LAUNCH_ARGS args) {
     const char op_name[] = XSTR(OP);                                           \
     bool is_sum = (op_name[0] == 's' || op_name[0] == 'S');                    \
     bool is_product = (op_name[0] == 'p' || op_name[0] == 'P');                \
+    bool is_min = ((op_name[0] == 'm' || op_name[0] == 'M') &&                 \
+                   (op_name[1] == 'i' || op_name[1] == 'I'));                  \
     bool is_promotable = (is_sum || is_product);                               \
     bool is_sum32 =                                                            \
         (sizeof(TYPE) == 4 && is_promotable && ENABLE_PROMOTION_REDUCTIONS);   \
                                                                                \
     int64_t local_red_64 = is_sum ? 0 : 1;                                     \
-    TYPE local_red = is_sum ? (TYPE)0 : (TYPE)1;                               \
+    TYPE local_red;                                                            \
+    if (is_sum)                                                                \
+      local_red = (TYPE)0;                                                     \
+    else if (is_product)                                                       \
+      local_red = (TYPE)1;                                                     \
+    else if (is_min)                                                           \
+      local_red = (TYPE)INT32_MAX;                                             \
+    else                                                                       \
+      local_red = (TYPE)INT32_MIN;                                             \
     for (uint32_t block_loc = tasklet_id << BLOCK_SIZE_LOG2;                   \
          block_loc < num_elems;                                                \
          block_loc += (NR_TASKLETS << BLOCK_SIZE_LOG2)) {                      \

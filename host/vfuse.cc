@@ -461,17 +461,21 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   last->scalars.insert(last->scalars.end(), e_scalars.begin(), e_scalars.end());
   last->inputs = combined;
 
-  // Record full merged RPN on the absorbed output so future ops can inline it.
-  if (last->extra_outputs.empty() && last->output && !last->inputs.empty()) {
-    last->output->absorbed_rpn = last->rpn_ops;
-    last->output->absorbed_scalars = last->scalars;
-    last->output->absorbed_inputs = last->inputs;
-  }
-
   if (last->extra_outputs.empty())
     last->output = e->output;
   else
     last->extra_outputs.back() = e->output;
+
+  // Record full merged RPN on the current chain output so future consumers can
+  // inline the latest fused producer instead of waiting on the pre-fused
+  // intermediate id.
+  detail::VectorDescRef fused_output =
+      last->extra_outputs.empty() ? last->output : last->extra_outputs.back();
+  if (fused_output && !last->inputs.empty()) {
+    fused_output->absorbed_rpn = last->rpn_ops;
+    fused_output->absorbed_scalars = last->scalars;
+    fused_output->absorbed_inputs = last->inputs;
+  }
 
   last->max_id = std::max(last->max_id, e->id);
   last->kid = last->pipeline_kid;
@@ -494,8 +498,32 @@ bool EventQueue::try_vfuse(std::shared_ptr<Event> last,
   last->slice_name = "Fused: [" + ops + "]";
 
 #if ENABLE_DPU_LOGGING >= 1
+  std::string rpn_dbg;
+  for (size_t i = 0; i < last->rpn_ops.size(); ++i) {
+    uint8_t op = last->rpn_ops[i];
+    if (!rpn_dbg.empty()) rpn_dbg += " ";
+    if (op == OP_PUSH_INPUT) {
+      rpn_dbg += "PUSH_INPUT";
+    } else if (op >= OP_PUSH_OPERAND_0 &&
+               op < OP_PUSH_OPERAND_0 + MAX_VFUSE_INPUTS) {
+      rpn_dbg += "PUSH_OPERAND_" + std::to_string(op - OP_PUSH_OPERAND_0);
+    } else {
+      std::string s = opcode_to_string(op);
+      if (s.empty())
+        rpn_dbg += "OP(" + std::to_string(op) + ")";
+      else
+        rpn_dbg += s;
+      if (OP_INLINE_BYTES(op) > 0) {
+        for (size_t j = 0; j < OP_INLINE_BYTES(op) && i + 1 < last->rpn_ops.size();
+             ++j) {
+          rpn_dbg += " " + std::to_string(last->rpn_ops[++i]);
+        }
+      }
+    }
+  }
   DpuRuntime::get().get_logger().lock()
       << "[queue-fuse] fused event id=" << e->id << " into last=" << last->id
+      << " rpn=\"" << rpn_dbg << "\""
       << std::endl;
 #endif
   trace::event_fused(e, last, "");

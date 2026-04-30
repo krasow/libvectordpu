@@ -274,16 +274,16 @@ class dpu_pipeline_expr {
   dpu_pipeline_expr product() const { return append(OP_PRODUCT); }
 
   dpu_pipeline_expr operator+(T rhs) const {
-    return combine(scalar(rhs), OP_ADD);
+    return append_scalar_op(OP_ADD_SCALAR, rhs);
   }
   dpu_pipeline_expr operator-(T rhs) const {
-    return combine(scalar(rhs), OP_SUB);
+    return append_scalar_op(OP_SUB_SCALAR, rhs);
   }
   dpu_pipeline_expr operator*(T rhs) const {
-    return combine(scalar(rhs), OP_MUL);
+    return append_scalar_op(OP_MUL_SCALAR, rhs);
   }
   dpu_pipeline_expr operator/(T rhs) const {
-    return combine(scalar(rhs), OP_DIV);
+    return append_scalar_op(OP_DIV_SCALAR, rhs);
   }
 
   const std::vector<uint8_t>& ops() const { return ops_; }
@@ -324,6 +324,18 @@ class dpu_pipeline_expr {
   dpu_pipeline_expr append(uint8_t op) const {
     auto out = *this;
     out.ops_.push_back(op);
+    return out;
+  }
+
+  dpu_pipeline_expr append_scalar_op(uint8_t op, T value) const {
+    auto out = *this;
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(T) < 4 ? sizeof(T) : 4);
+    out.ops_.push_back(op);
+    out.ops_.push_back((uint8_t)(bits & 0xFF));
+    out.ops_.push_back((uint8_t)((bits >> 8) & 0xFF));
+    out.ops_.push_back((uint8_t)((bits >> 16) & 0xFF));
+    out.ops_.push_back((uint8_t)((bits >> 24) & 0xFF));
     return out;
   }
 
