@@ -22,8 +22,6 @@ MAX_VFUSE_OPS ?= 128
 # vertical fusion: max distinct input vectors referenced per kernel
 MAX_VFUSE_INPUTS ?= 11
 
-ENABLE_OOM_RECOVERY ?= 1
-
 # this option enables fencing after dpu-to-host transfers automatically
 # you can disable it to manually control fencing in your code with add_fence() calls
 ENABLE_AUTO_FENCING ?= 1
@@ -145,7 +143,7 @@ reconfigure:
 	@echo "DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)" >> $(CONFIG_STAMP)
 	@echo "ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)" >> $(CONFIG_STAMP)
 	@echo "FUSION_LOOKAHEAD=$(FUSION_LOOKAHEAD)" >> $(CONFIG_STAMP)
-	@echo "ENABLE_OOM_RECOVERY=$(ENABLE_OOM_RECOVERY)" >> $(CONFIG_STAMP)
+	@echo "ENABLE_OOM_RECOVERY=1" >> $(CONFIG_STAMP)
 	@echo "MAX_HFUSE_CHAINS=$(MAX_HFUSE_CHAINS)" >> $(CONFIG_STAMP)
 	@echo "MAX_VFUSE_OPS=$(MAX_VFUSE_OPS)" >> $(CONFIG_STAMP)
 	@echo "MAX_VFUSE_INPUTS=$(MAX_VFUSE_INPUTS)" >> $(CONFIG_STAMP)

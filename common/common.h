@@ -41,6 +41,9 @@ enum KernelCategory {
 #ifndef MAX_HFUSE_CHAINS
 #define MAX_HFUSE_CHAINS 10
 #endif
+#ifndef OOM_RECOVERY_RETRIES
+#define OOM_RECOVERY_RETRIES 2
+#endif
 #ifndef MAX_PIPELINE_SCALARS
 // Large enough to hold scalars across a deeply-vfused accumulator chain — e.g.
 // linreg's DIM=10 loop contributes 10 per-dim weight scalars for the error

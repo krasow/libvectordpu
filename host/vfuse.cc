@@ -255,10 +255,6 @@ void EventQueue::expand_absorbed_inputs(std::shared_ptr<Event> e) {
         DpuRuntime::get().get_logger().lock()
             << "[vfuse] erased absorbed producer id=" << op->id
             << " for consumer id=" << e->id << std::endl;
-#else
-        fprintf(stderr,
-                "[vfuse] erased absorbed producer id=%zu for consumer id=%zu\n",
-                op->id, e->id);
 #endif
       } else {
         ++it;

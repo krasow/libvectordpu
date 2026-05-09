@@ -387,9 +387,13 @@ bool EventQueue::process_next() {
                   << " started=" << e->started << " retries=" << e->oom_retries
                   << std::endl;
 #endif
-    if (++e->oom_retries > 2)
+#if !ENABLE_OOM_RECOVERY
+    throw DpuOOMException("DPU OOM: event id=" + std::to_string(e->id));
+#else
+    if (++e->oom_retries > OOM_RECOVERY_RETRIES)
       throw DpuOOMException("DPU OOM: event id=" + std::to_string(e->id) +
-                            " failed after 2 retries");
+                            " failed after " +
+                            std::to_string(OOM_RECOVERY_RETRIES) + " retries");
     e->started = false;
     std::vector<detail::VectorDescRef> outputs_to_free;
     if (e->output) outputs_to_free.push_back(e->output);
@@ -415,6 +419,7 @@ bool EventQueue::process_next() {
     logger.lock() << "[OOM] event id=" << e->id << " requeued" << std::endl;
 #endif
     return NO_PROGRESS;
+#endif
   }
 
   debug_active_events();
